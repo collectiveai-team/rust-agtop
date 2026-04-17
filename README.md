@@ -50,6 +50,10 @@ agtop --json
 
 # Multiple provider filters
 agtop --list --provider claude --provider codex
+
+# Refresh the table every 5 seconds (Ctrl-C to exit). Useful for CI/ops-
+# style monitoring until the interactive TUI lands. Not valid with --json.
+agtop --list --watch --delay 5
 ```
 
 ### Plans

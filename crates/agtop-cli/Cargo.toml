@@ -22,3 +22,9 @@ chrono.workspace = true
 dirs.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+# Used by `--watch` for cross-platform screen clearing; also pre-positions
+# for the ratatui-based interactive TUI planned in v0.2.
+crossterm = "0.28"
+# Clean Ctrl-C handling in the `--watch` loop so we can restore the cursor
+# before exiting. Zero transitive deps.
+ctrlc = "3"

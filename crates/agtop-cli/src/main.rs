@@ -38,6 +38,15 @@ struct Cli {
     #[arg(long = "provider", value_name = "KIND")]
     providers: Vec<String>,
 
+    /// Re-render the `--list` table every `--delay` seconds until Ctrl-C.
+    /// Ignored in `--json` mode.
+    #[arg(short = 'w', long)]
+    watch: bool,
+
+    /// Seconds between refreshes in `--watch` mode (default: 2).
+    #[arg(short = 'd', long, default_value_t = 2u64, value_name = "SECS")]
+    delay: u64,
+
     /// Verbose logging to stderr (sets RUST_LOG=info if unset).
     #[arg(short, long)]
     verbose: bool,
@@ -68,6 +77,9 @@ fn main() -> Result<()> {
     }
 
     if cli.json {
+        if cli.watch {
+            anyhow::bail!("--watch is not supported with --json (JSON is a one-shot dump)");
+        }
         let analyses = analyze_all(&providers, plan);
         let out = JsonOutput {
             plan: cli.plan.clone(),
@@ -81,7 +93,9 @@ fn main() -> Result<()> {
 
     // Default + --list both print the table. (Interactive TUI is TODO; for
     // now --list is the only mode.)
-    if cli.list || !cli.json {
+    if cli.watch {
+        run_watch(&providers, plan, cli.delay.max(1))?;
+    } else if cli.list || !cli.json {
         let analyses = analyze_all(&providers, plan);
         let summaries = discover_all(&providers);
         render_table(&summaries, &analyses);
@@ -93,6 +107,71 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Non-TUI refresh loop: clears the screen, re-renders the table, sleeps.
+/// Runs until Ctrl-C (SIGINT). Intended for CI-ish use (`--list --watch`).
+fn run_watch(
+    providers: &[std::sync::Arc<dyn agtop_core::Provider>],
+    plan: Plan,
+    delay_secs: u64,
+) -> Result<()> {
+    use crossterm::{cursor, execute, terminal};
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let running = Arc::new(AtomicBool::new(true));
+    {
+        let running = running.clone();
+        // Best-effort Ctrl-C handler: flip the flag so the loop exits, the
+        // cursor gets restored, and the shell prompt isn't left mangled.
+        // If installation fails (handler already set by a parent process),
+        // fall back to default SIGINT behavior — the cursor may not be
+        // restored in that edge case, but `reset` fixes it.
+        let _ = ctrlc::set_handler(move || {
+            running.store(false, Ordering::SeqCst);
+        });
+    }
+
+    let mut stdout = std::io::stdout();
+    // Hide the cursor while redrawing to avoid flicker.
+    let _ = execute!(stdout, cursor::Hide);
+    let result = (|| -> Result<()> {
+        while running.load(Ordering::SeqCst) {
+            // Clear screen + move to top-left before each render.
+            execute!(
+                stdout,
+                terminal::Clear(terminal::ClearType::All),
+                cursor::MoveTo(0, 0)
+            )
+            .context("clear screen")?;
+
+            let analyses = analyze_all(providers, plan);
+            let summaries = discover_all(providers);
+            render_table(&summaries, &analyses);
+            writeln!(
+                stdout,
+                "\n(watch: refreshing every {}s — Ctrl-C to exit)",
+                delay_secs
+            )?;
+            stdout.flush().ok();
+
+            // Sleep in short chunks so Ctrl-C feels responsive even with
+            // a large --delay.
+            let mut remaining = delay_secs;
+            while remaining > 0 && running.load(Ordering::SeqCst) {
+                let chunk = remaining.min(1);
+                std::thread::sleep(std::time::Duration::from_secs(chunk));
+                remaining -= chunk;
+            }
+        }
+        Ok(())
+    })();
+
+    // Restore the cursor regardless of how the loop exited.
+    let _ = execute!(stdout, cursor::Show);
+    result
 }
 
 fn init_logging(verbose: bool) {
