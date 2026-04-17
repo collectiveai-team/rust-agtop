@@ -47,6 +47,18 @@ struct Cli {
     #[arg(short = 'd', long, default_value_t = 2u64, value_name = "SECS")]
     delay: u64,
 
+    /// Force a synchronous fetch of the LiteLLM pricing table before
+    /// analyzing sessions. Network required; errors are logged and the
+    /// built-in tables are used as a fallback.
+    #[arg(long)]
+    refresh_pricing: bool,
+
+    /// Skip the on-disk pricing cache entirely and never touch the
+    /// network. Useful in air-gapped environments. Takes precedence
+    /// over `--refresh-pricing`.
+    #[arg(long)]
+    no_pricing_refresh: bool,
+
     /// Verbose logging to stderr (sets RUST_LOG=info if unset).
     #[arg(short, long)]
     verbose: bool,
@@ -59,6 +71,8 @@ fn main() -> Result<()> {
 
     let plan = Plan::parse(&cli.plan)
         .with_context(|| format!("unknown plan '{}'; try retail|max|included", cli.plan))?;
+
+    setup_pricing(cli.refresh_pricing, cli.no_pricing_refresh);
 
     let mut providers = default_providers();
     if !cli.providers.is_empty() {
@@ -172,6 +186,62 @@ fn run_watch(
     // Restore the cursor regardless of how the loop exited.
     let _ = execute!(stdout, cursor::Show);
     result
+}
+
+/// Prime the LiteLLM pricing index. The first lookup will auto-load
+/// from the on-disk cache regardless; this function only handles the
+/// explicit-refresh and no-network paths:
+///
+/// - `--no-pricing-refresh`: install an empty index so `lookup` never
+///   reads the cache file. The built-in tables alone apply.
+/// - `--refresh-pricing`: fetch from upstream and swap in the fresh
+///   index. On failure, log and fall through to the on-disk cache.
+/// - Otherwise (default): if the cache is missing *or* stale, do a
+///   synchronous refresh once at startup. The stale-but-present case is
+///   tolerated silently: we'd rather start fast than block users behind
+///   GitHub.
+fn setup_pricing(refresh: bool, disable: bool) {
+    use agtop_core::litellm;
+
+    if disable {
+        // Install an empty index so auto-load never fires. The built-in
+        // tables stay in charge.
+        agtop_core::pricing::set_pricing_index(litellm::PricingIndex::default());
+        return;
+    }
+
+    let cache = litellm::cache_path();
+    let have_fresh_cache = cache
+        .as_deref()
+        .map(litellm::is_cache_fresh)
+        .unwrap_or(false);
+    let have_any_cache = cache.as_deref().map(|p| p.exists()).unwrap_or(false);
+
+    // Explicit refresh, or: no cache at all and we're online-permissive.
+    let should_fetch = refresh || !have_any_cache;
+    if should_fetch {
+        match litellm::refresh_cache() {
+            Ok(idx) => {
+                tracing::info!(entries = idx.len(), "installed fresh LiteLLM pricing index");
+                agtop_core::pricing::set_pricing_index(idx);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "LiteLLM refresh failed; falling back to on-disk cache (if any) + built-ins"
+                );
+            }
+        }
+    } else if !have_fresh_cache {
+        // Cache exists but is stale. Do a quiet background-ish refresh
+        // (synchronous, but bounded by FETCH_TIMEOUT in litellm.rs).
+        // Failure is silent: the stale cache still loads via autoload.
+        if let Ok(idx) = litellm::refresh_cache() {
+            agtop_core::pricing::set_pricing_index(idx);
+        }
+    }
+    // Otherwise cache is fresh — let `pricing::lookup`'s autoload
+    // handle the on-disk read at first use.
 }
 
 fn init_logging(verbose: bool) {

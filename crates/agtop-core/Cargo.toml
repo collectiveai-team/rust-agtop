@@ -17,3 +17,4 @@ dirs.workspace = true
 chrono.workspace = true
 walkdir.workspace = true
 tracing.workspace = true
+ureq.workspace = true

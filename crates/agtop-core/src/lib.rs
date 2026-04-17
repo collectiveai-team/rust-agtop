@@ -12,6 +12,7 @@
 //! every registered provider and return aggregated results.
 
 pub mod error;
+pub mod litellm;
 pub mod pricing;
 pub mod provider;
 pub mod providers;

@@ -85,18 +85,36 @@ a background refresh thread.
 ## Testing
 
 ```sh
-cargo test           # 9 unit tests (pricing lookup + parsing)
+cargo test           # unit tests (pricing lookup + LiteLLM cache + parsing)
 cargo clippy -- -D warnings
 ```
+
+## Pricing data
+
+agtop uses two sources, consulted in order:
+
+1. **LiteLLM cache** — on first run (or when the cache is stale) agtop
+   downloads [`model_prices_and_context_window.json`][litellm] to
+   `~/.cache/agtop/litellm-pricing.json` with a 24 h TTL. Covers almost
+   every model you're likely to see.
+2. **Built-in fallback tables** in `agtop-core/src/pricing.rs`. Used for
+   any model LiteLLM doesn't know about, and whenever agtop can't reach
+   the network.
+
+Control flags:
+
+```sh
+agtop --list --refresh-pricing      # force an immediate fetch
+agtop --list --no-pricing-refresh   # stay fully offline (built-in tables only)
+```
+
+[litellm]: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
 
 ## Caveats
 
 - Cost figures are **estimates** based on public API prices. Many subscription
   plans (Claude Max/Pro, ChatGPT Plus/Pro, etc.) charge flat rates or bundle
   tokens differently. Treat `$` as a resource-consumption proxy, not a bill.
-- Pricing tables are hard-coded. The original JS tool fetches LiteLLM's JSON
-  and caches it for 24h; that is not yet ported. Unknown models return
-  "unknown pricing" and the session is listed with no cost data.
 - OpenCode's on-disk format is undocumented and may change. The provider is
   conservative and degrades gracefully when fields are missing.
 - Subagent sidechain files (`<uuid>/subagents/*.jsonl`) in Claude Code are

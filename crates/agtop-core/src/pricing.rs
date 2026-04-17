@@ -1,9 +1,18 @@
 //! Pricing tables + billing-plan logic.
 //!
-//! Rates are USD per million tokens. Kept intentionally small and hard-coded:
-//! in the MVP we do not fetch LiteLLM's JSON (the original does). Future work
-//! can plug in a cache loader behind this API.
+//! Rates are USD per million tokens. Two data sources are consulted in
+//! order:
+//!
+//! 1. A live [`crate::litellm::PricingIndex`] installed via
+//!    [`set_pricing_index`] (built from the cached LiteLLM JSON, which
+//!    covers far more models and tracks upstream price changes).
+//! 2. The hard-coded tables in this file as a last-resort fallback so
+//!    agtop works offline and keeps producing sensible cost figures when
+//!    LiteLLM drops a model we care about.
 
+use std::sync::{OnceLock, RwLock};
+
+use crate::litellm::PricingIndex;
 use crate::session::{CostBreakdown, ProviderKind, TokenTotals};
 
 /// Billing plan selector. `Plan` decides whether sessions are priced at
@@ -89,9 +98,67 @@ impl Rates {
     }
 }
 
-/// Look up rates for `(provider, model)`. Matches by exact model first, then
-/// by loose prefix (e.g. `claude-sonnet-4-5-20250929` → `claude-sonnet-4-5`).
+/// Storage for a process-wide LiteLLM pricing index. Wrapped in an
+/// `RwLock` because we allow the CLI to swap it out post-startup (after
+/// an explicit `--refresh-pricing`). Initialized lazily on first lookup.
+static PRICING_INDEX: OnceLock<RwLock<Option<PricingIndex>>> = OnceLock::new();
+
+fn pricing_slot() -> &'static RwLock<Option<PricingIndex>> {
+    PRICING_INDEX.get_or_init(|| RwLock::new(None))
+}
+
+/// Install a pricing index — typically built from the on-disk cache or a
+/// fresh network fetch. Subsequent [`lookup`] calls will consult it before
+/// the built-in tables.
+pub fn set_pricing_index(index: PricingIndex) {
+    if let Ok(mut slot) = pricing_slot().write() {
+        *slot = Some(index);
+    }
+}
+
+/// Best-effort auto-initialization: if no index has been installed yet
+/// but a parseable cache file exists on disk, load it. Never fetches,
+/// never blocks. Idempotent.
+fn autoload_index() {
+    if pricing_slot()
+        .read()
+        .ok()
+        .map(|s| s.is_some())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    if let Some(idx) = crate::litellm::load_from_cache() {
+        set_pricing_index(idx);
+    }
+}
+
+/// Look up rates for `(provider, model)`. Tries in order:
+/// 1. The live LiteLLM index (covers the full upstream catalog).
+/// 2. The built-in tables below.
+///
+/// Uses exact match first, then strips `-YYYYMMDD` date suffixes, then
+/// tries provider-prefix variants (`anthropic.foo`, `openai/foo`), and
+/// finally falls back to the longest prefix match. OpenCode's
+/// `provider/model` style is handled by retrying with the suffix.
 pub fn lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
+    autoload_index();
+
+    // 1) LiteLLM cache.
+    if let Ok(slot) = pricing_slot().read() {
+        if let Some(idx) = slot.as_ref() {
+            if let Some(r) = idx.lookup(provider, model) {
+                return Some(r);
+            }
+        }
+    }
+
+    // 2) Built-in fallback.
+    builtin_lookup(provider, model)
+}
+
+/// Built-in (hard-coded) lookup. Exposed so tests can bypass the cache.
+pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     let table: &[(&str, Rates)] = match provider {
         ProviderKind::Codex => CODEX_RATES,
         ProviderKind::Claude | ProviderKind::OpenCode => CLAUDE_RATES,
@@ -118,7 +185,7 @@ pub fn lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     // OpenCode frequently reports `provider/model`; retry with the suffix.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
-            return lookup(provider, suffix);
+            return builtin_lookup(provider, suffix);
         }
     }
     None
@@ -166,10 +233,30 @@ pub fn compute_cost(totals: &TokenTotals, rates: &Rates, included: bool) -> Cost
 // ---------------------------------------------------------------------------
 
 const CODEX_RATES: &[(&str, Rates)] = &[
+    // Values mirror the LiteLLM `model_prices_and_context_window.json` as
+    // of April 2026. Kept in sync manually; the LiteLLM cache (see
+    // `litellm::refresh_cache`) is preferred when it's available.
+    //
+    // Naming: OpenAI's "Codex" models are variants of the gpt-5 family.
+    // Input is $ USD per M tokens; cached-input is cache_read; output is
+    // typically 8× input for the chat models.
+    ("gpt-5-codex", Rates::codex(1.25, 0.125, 10.0)),
+    ("gpt-5.1-codex", Rates::codex(1.25, 0.125, 10.0)),
+    ("gpt-5.1-codex-max", Rates::codex(1.25, 0.125, 10.0)),
+    ("gpt-5.1-codex-mini", Rates::codex(0.25, 0.025, 2.0)),
+    ("gpt-5.2-codex", Rates::codex(1.75, 0.175, 14.0)),
     ("gpt-5.3-codex", Rates::codex(1.75, 0.175, 14.0)),
+    // `gpt-5.4` and friends (seen in live transcripts as of April 2026).
+    ("gpt-5.4", Rates::codex(2.50, 0.25, 15.0)),
+    ("gpt-5.4-mini", Rates::codex(0.75, 0.075, 4.5)),
+    ("gpt-5.4-nano", Rates::codex(0.20, 0.02, 1.25)),
+    // Non-codex variants agtop sometimes encounters via OpenCode sessions.
+    ("gpt-5", Rates::codex(1.25, 0.125, 10.0)),
+    ("gpt-5.1", Rates::codex(1.25, 0.125, 10.0)),
+    ("gpt-5.2", Rates::codex(1.75, 0.175, 14.0)),
+    ("gpt-5-mini", Rates::codex(0.25, 0.025, 2.0)),
+    ("gpt-5-nano", Rates::codex(0.05, 0.005, 0.4)),
     ("codex-mini-latest", Rates::codex(1.50, 0.375, 6.0)),
-    // Forward-compat aliases observed in real transcripts.
-    ("gpt-5-codex", Rates::codex(1.75, 0.175, 14.0)),
 ];
 
 const CLAUDE_RATES: &[(&str, Rates)] = &[
