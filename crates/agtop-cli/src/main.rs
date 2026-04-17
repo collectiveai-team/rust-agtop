@@ -285,10 +285,7 @@ fn init_logging(verbose: bool, tui_mode: bool) {
             {
                 // std::fs::File implements MakeWriter (each call clones the fd).
                 let filter = EnvFilter::new("info");
-                let _ = fmt()
-                    .with_env_filter(filter)
-                    .with_writer(file)
-                    .try_init();
+                let _ = fmt().with_env_filter(filter).with_writer(file).try_init();
                 return;
             }
         }
@@ -523,6 +520,9 @@ struct JsonSession {
     /// `tokens` / `cost`. Zero for non-Claude providers and for Claude
     /// sessions without subagents.
     subagent_file_count: usize,
+    tool_call_count: Option<u64>,
+    duration_secs: Option<u64>,
+    context_used_pct: Option<f64>,
     data_path: String,
 }
 
@@ -539,6 +539,9 @@ impl From<&SessionAnalysis> for JsonSession {
             tokens: a.tokens.clone(),
             cost: a.cost.clone(),
             subagent_file_count: a.subagent_file_count,
+            tool_call_count: a.tool_call_count,
+            duration_secs: a.duration_secs,
+            context_used_pct: a.context_used_pct,
             data_path: a.summary.data_path.display().to_string(),
         }
     }

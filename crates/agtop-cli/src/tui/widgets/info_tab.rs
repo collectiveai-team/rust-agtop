@@ -38,10 +38,37 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_line("session_id", s.session_id.clone()),
                 kv_line("started", fmt_dt(s.started_at)),
                 kv_line("last_active", fmt_dt(s.last_active)),
+                kv_line(
+                    "duration",
+                    a.duration_secs
+                        .map(format_duration_secs)
+                        .or_else(|| {
+                            s.started_at.zip(s.last_active).and_then(|(start, end)| {
+                                if end >= start {
+                                    Some(format_duration_secs((end - start).num_seconds() as u64))
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
                 kv_line("model", s.model.clone().unwrap_or_else(|| "?".into())),
                 kv_line(
                     "effective_model",
                     a.effective_model.clone().unwrap_or_else(|| "-".into()),
+                ),
+                kv_line(
+                    "tool_calls",
+                    a.tool_call_count
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                kv_line(
+                    "context_used",
+                    a.context_used_pct
+                        .map(|p| format!("{p:.1}%"))
+                        .unwrap_or_else(|| "-".to_string()),
                 ),
                 kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
                 kv_line("data_path", s.data_path.display().to_string()),
@@ -85,4 +112,17 @@ fn kv_line(key: &'static str, value: String) -> Line<'static> {
         Span::raw("  "),
         Span::raw(value),
     ])
+}
+
+fn format_duration_secs(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 {
+        format!("{h}h {m}m {s}s")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
 }

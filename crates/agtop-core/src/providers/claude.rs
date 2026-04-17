@@ -430,6 +430,18 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         cost,
         effective_model,
         subagent_file_count,
+        tool_call_count: None,
+        duration_secs: summary
+            .started_at
+            .zip(summary.last_active)
+            .and_then(|(start, end)| {
+                if end >= start {
+                    Some((end - start).num_seconds() as u64)
+                } else {
+                    None
+                }
+            }),
+        context_used_pct: None,
     })
 }
 

@@ -437,10 +437,37 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
     let mut totals = TokenTotals::default();
     let mut saw_usage = false;
     let mut effective_model = summary.model.clone();
+    let mut tool_call_count: u64 = 0;
+    let mut first_ts = summary.started_at;
+    let mut last_ts = summary.last_active;
+    let mut context_used_pct: Option<f64> = None;
 
     for_each_jsonl(path, |v| {
+        if let Some(ts) = v
+            .get("timestamp")
+            .and_then(|x| x.as_str())
+            .and_then(parse_ts)
+        {
+            first_ts = Some(match first_ts {
+                Some(cur) if cur <= ts => cur,
+                _ => ts,
+            });
+            last_ts = Some(match last_ts {
+                Some(cur) if cur >= ts => cur,
+                _ => ts,
+            });
+        }
+
         let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
         let payload = v.get("payload");
+
+        if ty == "response_item" {
+            if let Some(kind) = payload.and_then(|p| p.get("type")).and_then(|x| x.as_str()) {
+                if matches!(kind, "function_call" | "custom_tool_call") {
+                    tool_call_count += 1;
+                }
+            }
+        }
 
         if ty == "turn_context" {
             if let Some(p) = payload {
@@ -462,6 +489,24 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
                 Some(i) if !i.is_null() => i,
                 _ => return,
             };
+
+            let model_context_window = info
+                .get("model_context_window")
+                .and_then(|x| x.as_u64())
+                .filter(|w| *w > 0);
+
+            let turn_total = info
+                .get("last_token_usage")
+                .and_then(|l| l.get("total_tokens"))
+                .and_then(|x| x.as_u64());
+            if let (Some(total), Some(window)) = (turn_total, model_context_window) {
+                let pct = (total as f64 / window as f64) * 100.0;
+                context_used_pct = Some(match context_used_pct {
+                    Some(cur) if cur >= pct => cur,
+                    _ => pct,
+                });
+            }
+
             let last = match info.get("last_token_usage") {
                 Some(l) if !l.is_null() => l,
                 _ => return,
@@ -489,6 +534,10 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         })?;
     let included = matches!(plan.mode_for(ProviderKind::Codex), PlanMode::Included);
     let cost = pricing::compute_cost(&totals, &rates, included);
+    let duration_secs = match (first_ts, last_ts) {
+        (Some(start), Some(end)) if end >= start => Some((end - start).num_seconds() as u64),
+        _ => None,
+    };
 
     Ok(SessionAnalysis {
         summary: summary.clone(),
@@ -496,6 +545,9 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         cost,
         effective_model,
         subagent_file_count: 0,
+        tool_call_count: Some(tool_call_count),
+        duration_secs,
+        context_used_pct,
     })
 }
 

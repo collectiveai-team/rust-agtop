@@ -101,6 +101,18 @@ pub struct SessionAnalysis {
     /// consumers remain compatible.
     #[serde(default)]
     pub subagent_file_count: usize,
+    /// Number of tool invocations observed in the transcript (provider
+    /// specific best-effort). `None` when unavailable.
+    #[serde(default)]
+    pub tool_call_count: Option<u64>,
+    /// Session wall-clock duration in seconds. `None` when we cannot
+    /// infer both start and end timestamps.
+    #[serde(default)]
+    pub duration_secs: Option<u64>,
+    /// Peak per-turn context usage as a percentage of the model context
+    /// window (0..=100+), when the provider exposes both values.
+    #[serde(default)]
+    pub context_used_pct: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------

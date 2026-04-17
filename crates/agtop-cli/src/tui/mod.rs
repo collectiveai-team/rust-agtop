@@ -207,10 +207,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
 /// the border).
 #[inline]
 fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
-    col >= rect.x
-        && col < rect.x + rect.width
-        && row >= rect.y
-        && row < rect.y + rect.height
+    col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
 }
 
 /// Compose the full UI: header + session table + bottom tabs + footer.
@@ -481,6 +478,9 @@ mod tests {
             },
             effective_model: Some("claude-opus-4-6".into()),
             subagent_file_count: 2,
+            tool_call_count: None,
+            duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
+            context_used_pct: None,
         };
 
         let s2 = SessionAnalysis {
@@ -507,6 +507,9 @@ mod tests {
             },
             effective_model: Some("gpt-5".into()),
             subagent_file_count: 0,
+            tool_call_count: Some(12),
+            duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
+            context_used_pct: Some(38.2),
         };
 
         let mut app = App::new();
@@ -553,7 +556,10 @@ mod tests {
             .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
         let contents = buffer_to_string(&terminal.backend().buffer().clone());
-        assert!(contents.contains("bucket"), "bucket header missing:\n{contents}");
+        assert!(
+            contents.contains("bucket"),
+            "bucket header missing:\n{contents}"
+        );
         assert!(contents.contains("tokens"), "tokens header missing");
         assert!(
             contents.contains("total"),

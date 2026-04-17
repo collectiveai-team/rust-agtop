@@ -757,6 +757,9 @@ mod tests {
             },
             effective_model: Some(model.into()),
             subagent_file_count: 0,
+            tool_call_count: None,
+            duration_secs: Some(0),
+            context_used_pct: None,
         }
     }
 

@@ -445,6 +445,18 @@ fn analyze_session_sqlite(
         cost,
         effective_model: model,
         subagent_file_count: 0,
+        tool_call_count: None,
+        duration_secs: summary
+            .started_at
+            .zip(summary.last_active)
+            .and_then(|(start, end)| {
+                if end >= start {
+                    Some((end - start).num_seconds() as u64)
+                } else {
+                    None
+                }
+            }),
+        context_used_pct: None,
     })
 }
 
@@ -627,6 +639,18 @@ fn analyze_opencode_session_json(
         cost,
         effective_model: model,
         subagent_file_count: 0,
+        tool_call_count: None,
+        duration_secs: summary
+            .started_at
+            .zip(summary.last_active)
+            .and_then(|(start, end)| {
+                if end >= start {
+                    Some((end - start).num_seconds() as u64)
+                } else {
+                    None
+                }
+            }),
+        context_used_pct: None,
     })
 }
 
