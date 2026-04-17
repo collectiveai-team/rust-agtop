@@ -162,6 +162,15 @@ mod tests {
         }
     }
 
+    fn shift(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::SHIFT,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
     #[test]
     fn q_quits() {
         let mut app = App::new();
@@ -234,5 +243,134 @@ mod tests {
         };
         apply_key(&mut app, release);
         assert!(!app.should_quit());
+    }
+
+    use crate::tui::app::Tab;
+    use crate::tui::column_config::ColumnId;
+
+    /// Capture the current visible column order as a Vec for comparison.
+    #[allow(dead_code)]
+    fn visible_order(app: &App) -> Vec<ColumnId> {
+        app.column_config().visible()
+    }
+
+    /// Full order (including hidden) as a Vec, which is what reorder
+    /// operations actually mutate. `visible_order` alone can hide a
+    /// reorder of a hidden column; `full_order` catches it.
+    fn full_order(app: &App) -> Vec<(ColumnId, bool)> {
+        app.column_config()
+            .columns
+            .iter()
+            .map(|e| (e.id, e.visible))
+            .collect()
+    }
+
+    /// Shift+J in the Config tab must reorder the current column down,
+    /// not move the cursor. Regression for the hint-ambiguity bug that
+    /// led users to press plain `j` (cursor move) instead.
+    #[test]
+    fn shift_j_reorders_column_down_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        // Cursor starts at 0; move to a middle position so the column
+        // can legitimately swap both down and up.
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        let cursor_before = app.config_cursor();
+        let before = full_order(&app);
+
+        apply_key(&mut app, shift(KeyCode::Char('J')));
+
+        let after = full_order(&app);
+        assert_ne!(before, after, "Shift+J did not mutate column order");
+        // The cursor should follow the moved column (app.config_move_column_down
+        // increments the cursor).
+        assert_eq!(
+            app.config_cursor(),
+            cursor_before + 1,
+            "cursor should follow the moved column"
+        );
+        // The column that was at cursor_before should now be at cursor_before+1.
+        assert_eq!(after[cursor_before + 1].0, before[cursor_before].0);
+    }
+
+    #[test]
+    fn shift_k_reorders_column_up_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        let cursor_before = app.config_cursor();
+        let before = full_order(&app);
+
+        apply_key(&mut app, shift(KeyCode::Char('K')));
+
+        let after = full_order(&app);
+        assert_ne!(before, after, "Shift+K did not mutate column order");
+        assert_eq!(app.config_cursor(), cursor_before - 1);
+        assert_eq!(after[cursor_before - 1].0, before[cursor_before].0);
+    }
+
+    #[test]
+    fn shift_arrow_down_reorders_column_down_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        let before = full_order(&app);
+
+        apply_key(&mut app, shift(KeyCode::Down));
+
+        let after = full_order(&app);
+        assert_ne!(before, after, "Shift+Down did not mutate column order");
+    }
+
+    #[test]
+    fn shift_arrow_up_reorders_column_up_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        let before = full_order(&app);
+
+        apply_key(&mut app, shift(KeyCode::Up));
+
+        let after = full_order(&app);
+        assert_ne!(before, after, "Shift+Up did not mutate column order");
+    }
+
+    #[test]
+    fn plain_j_does_not_reorder_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        let order_before = full_order(&app);
+        let cursor_before = app.config_cursor();
+
+        apply_key(&mut app, press(KeyCode::Char('j')));
+
+        assert_eq!(full_order(&app), order_before, "plain j must not reorder");
+        assert_eq!(
+            app.config_cursor(),
+            cursor_before + 1,
+            "plain j must move the cursor down"
+        );
+    }
+
+    #[test]
+    fn plain_k_does_not_reorder_in_config_tab() {
+        let mut app = App::new();
+        app.set_tab(Tab::Config);
+        // Move cursor away from 0 so `k` has somewhere to go.
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        let order_before = full_order(&app);
+        let cursor_before = app.config_cursor();
+
+        apply_key(&mut app, press(KeyCode::Char('k')));
+
+        assert_eq!(full_order(&app), order_before, "plain k must not reorder");
+        assert_eq!(
+            app.config_cursor(),
+            cursor_before - 1,
+            "plain k must move the cursor up"
+        );
     }
 }
