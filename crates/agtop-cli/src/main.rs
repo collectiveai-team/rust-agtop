@@ -305,7 +305,14 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             ),
         };
 
-        let short_session = short_id(&s.session_id);
+        let mut short_session = short_id(&s.session_id);
+        // Flag Claude sessions that folded in subagent sidechains:
+        // "20cb0a50+2" = 2 subagent files merged. Only appears when > 0.
+        if let Some(a) = a {
+            if a.subagent_file_count > 0 {
+                short_session.push_str(&format!("+{}", a.subagent_file_count));
+            }
+        }
         let model = s.model.clone().unwrap_or_else(|| "?".into());
         let cwd = s.cwd.clone().unwrap_or_else(|| "-".into());
         let started = s
@@ -456,6 +463,10 @@ struct JsonSession {
     last_active: Option<DateTime<Utc>>,
     tokens: agtop_core::TokenTotals,
     cost: agtop_core::CostBreakdown,
+    /// Number of Claude subagent sidechains that were folded into
+    /// `tokens` / `cost`. Zero for non-Claude providers and for Claude
+    /// sessions without subagents.
+    subagent_file_count: usize,
     data_path: String,
 }
 
@@ -471,6 +482,7 @@ impl From<&SessionAnalysis> for JsonSession {
             last_active: a.summary.last_active,
             tokens: a.tokens.clone(),
             cost: a.cost.clone(),
+            subagent_file_count: a.subagent_file_count,
             data_path: a.summary.data_path.display().to_string(),
         }
     }

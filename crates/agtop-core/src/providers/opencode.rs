@@ -237,5 +237,6 @@ fn analyze_opencode_session(
         tokens: totals,
         cost,
         effective_model: model,
+        subagent_file_count: 0,
     })
 }

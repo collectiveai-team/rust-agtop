@@ -220,5 +220,6 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         tokens: totals,
         cost,
         effective_model,
+        subagent_file_count: 0,
     })
 }

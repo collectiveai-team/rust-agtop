@@ -95,4 +95,10 @@ pub struct SessionAnalysis {
     /// Model actually observed during token accounting (may differ from the
     /// summary model if a session uses multiple).
     pub effective_model: Option<String>,
+    /// Number of Claude subagent sidechain transcripts folded into
+    /// `tokens` / `cost` (0 when the session has none, or for non-Claude
+    /// providers). Defaults to 0 on deserialization so older JSON
+    /// consumers remain compatible.
+    #[serde(default)]
+    pub subagent_file_count: usize,
 }

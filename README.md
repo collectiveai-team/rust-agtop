@@ -117,8 +117,10 @@ agtop --list --no-pricing-refresh   # stay fully offline (built-in tables only)
   tokens differently. Treat `$` as a resource-consumption proxy, not a bill.
 - OpenCode's on-disk format is undocumented and may change. The provider is
   conservative and degrades gracefully when fields are missing.
-- Subagent sidechain files (`<uuid>/subagents/*.jsonl`) in Claude Code are
-  not yet summed. Main-transcript totals are reported.
+- Claude Code subagent sidechain transcripts (`<uuid>/subagents/*.jsonl`)
+  **are** folded into the parent session's totals. The table marks such
+  sessions as `<id>+N` where N is the number of sidechain files merged.
+  The JSON output surfaces the same count as `subagent_file_count`.
 
 ## License
 

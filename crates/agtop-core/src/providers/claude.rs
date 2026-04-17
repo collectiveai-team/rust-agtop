@@ -6,9 +6,11 @@
 //!    `requestId`; the last write wins for that turn (same policy as the
 //!    original `extractClaudeSessionData`).
 //!
-//! We intentionally skip subagent sidechain files (`<uuid>/subagents/*.jsonl`)
-//! for the MVP — they inflate a session's effective cost but most users reason
-//! about the main transcript first. Wiring them in is a later feature.
+//! Subagent sidechains (`<slug>/<uuid>/subagents/*.jsonl`) are folded into
+//! the parent session's totals so the reported cost reflects the full
+//! agent tree. Each sidechain file is a small Claude transcript in its
+//! own right — we reuse the same per-request dedup logic to sum it,
+//! then add the result to the parent.
 
 use std::collections::HashMap;
 use std::fs;
@@ -174,63 +176,34 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
 
 fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
     let path = &summary.data_path;
-    // Per-request-id snapshot: streaming rewrites the same requestId as it
-    // progresses; only the final write has correct totals. Keep the last.
-    let mut last_snapshot: HashMap<String, Snapshot> = HashMap::new();
-    // Entries with no requestId/messageId accumulate directly.
-    let mut keyless = Snapshot::default();
     let mut effective_model = summary.model.clone();
-
-    for_each_jsonl(path, |v| {
-        if v.get("type").and_then(|x| x.as_str()) != Some("assistant") {
-            return;
-        }
-        let message = match v.get("message") {
-            Some(m) => m,
-            None => return,
-        };
-        let usage = match message.get("usage") {
-            Some(u) if !u.is_null() => u,
-            _ => return,
-        };
-        let m = message.get("model").and_then(|x| x.as_str());
-        if let Some(m) = m {
-            if m != "<synthetic>" {
-                effective_model = Some(m.to_string());
-            }
-        }
-        let snap = snapshot_from_usage(usage);
-        let key = v
-            .get("requestId")
-            .and_then(|x| x.as_str())
-            .map(str::to_string)
-            .or_else(|| {
-                message
-                    .get("id")
-                    .and_then(|x| x.as_str())
-                    .map(str::to_string)
-            });
-        match key {
-            Some(k) => {
-                last_snapshot.insert(k, snap);
-            }
-            None => keyless.add(&snap),
-        }
-    })?;
-
     let mut totals = TokenTotals::default();
-    for snap in last_snapshot.values() {
-        totals.input += snap.input;
-        totals.output += snap.output;
-        totals.cache_read += snap.cache_read;
-        totals.cache_write_5m += snap.cache_write_5m;
-        totals.cache_write_1h += snap.cache_write_1h;
+
+    // Main transcript.
+    let main_file_totals = sum_jsonl_usage(path, &mut effective_model)?;
+    add_file_totals(&mut totals, &main_file_totals);
+
+    // Subagent sidechain transcripts (if any). They live in a directory
+    // sibling to the main `<uuid>.jsonl`, named `<uuid>/subagents/*.jsonl`.
+    // Each sidechain is its own small Claude transcript, so we sum them
+    // exactly the same way. Subagents may run a different model than the
+    // main session (Haiku for "search" subagents, etc.); we still attribute
+    // their tokens to the main session's model for costing purposes —
+    // that's a small fidelity loss in exchange for keeping the cost math
+    // single-rate per session, matching the original JS agtop.
+    let subagent_files = list_subagent_files(path, &summary.session_id);
+    let subagent_file_count = subagent_files.len();
+    for sub in &subagent_files {
+        // `sum_jsonl_usage` updates `effective_model` if a subagent reports
+        // one and the main transcript didn't — fine. We intentionally pass
+        // the shared `effective_model` so a subagent-only session (rare
+        // but possible on an abandoned main transcript) still resolves.
+        match sum_jsonl_usage(sub, &mut effective_model) {
+            Ok(sub_totals) => add_file_totals(&mut totals, &sub_totals),
+            Err(e) => tracing::debug!(path = %sub.display(), error = %e, "skip subagent file"),
+        }
     }
-    totals.input += keyless.input;
-    totals.output += keyless.output;
-    totals.cache_read += keyless.cache_read;
-    totals.cache_write_5m += keyless.cache_write_5m;
-    totals.cache_write_1h += keyless.cache_write_1h;
+
     // Claude's "cached_input" bucket for our cost math is cache_read.
     totals.cached_input = totals.cache_read;
 
@@ -254,7 +227,119 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         tokens: totals,
         cost,
         effective_model,
+        subagent_file_count,
     })
+}
+
+/// Scan a Claude-format JSONL (main transcript OR subagent sidechain)
+/// and return its per-file request-deduplicated usage totals. Updates
+/// `effective_model` as a side-effect when the file observes a model.
+///
+/// Subagent files are structurally identical to main transcripts at the
+/// record level: every assistant message carries its own requestId, so
+/// the same "last snapshot wins" dedup strategy is correct. Keyed
+/// snapshots are file-local (NOT shared across files) because we must
+/// not let a subagent's requestId accidentally collide with the parent's.
+fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<FileTotals> {
+    // Per-request-id snapshot: streaming rewrites the same requestId as it
+    // progresses; only the final write has correct totals. Keep the last.
+    let mut last_snapshot: HashMap<String, Snapshot> = HashMap::new();
+    let mut keyless = Snapshot::default();
+
+    for_each_jsonl(path, |v| {
+        if v.get("type").and_then(|x| x.as_str()) != Some("assistant") {
+            return;
+        }
+        let message = match v.get("message") {
+            Some(m) => m,
+            None => return,
+        };
+        let usage = match message.get("usage") {
+            Some(u) if !u.is_null() => u,
+            _ => return,
+        };
+        let m = message.get("model").and_then(|x| x.as_str());
+        if let Some(m) = m {
+            if m != "<synthetic>" && effective_model.is_none() {
+                *effective_model = Some(m.to_string());
+            }
+        }
+        let snap = snapshot_from_usage(usage);
+        let key = v
+            .get("requestId")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .or_else(|| {
+                message
+                    .get("id")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string)
+            });
+        match key {
+            Some(k) => {
+                last_snapshot.insert(k, snap);
+            }
+            None => keyless.add(&snap),
+        }
+    })?;
+
+    let mut ft = FileTotals::default();
+    for snap in last_snapshot.values() {
+        ft.input += snap.input;
+        ft.output += snap.output;
+        ft.cache_read += snap.cache_read;
+        ft.cache_write_5m += snap.cache_write_5m;
+        ft.cache_write_1h += snap.cache_write_1h;
+    }
+    ft.input += keyless.input;
+    ft.output += keyless.output;
+    ft.cache_read += keyless.cache_read;
+    ft.cache_write_5m += keyless.cache_write_5m;
+    ft.cache_write_1h += keyless.cache_write_1h;
+    Ok(ft)
+}
+
+fn add_file_totals(totals: &mut TokenTotals, ft: &FileTotals) {
+    totals.input += ft.input;
+    totals.output += ft.output;
+    totals.cache_read += ft.cache_read;
+    totals.cache_write_5m += ft.cache_write_5m;
+    totals.cache_write_1h += ft.cache_write_1h;
+}
+
+/// Return sorted list of subagent JSONL files for a main transcript.
+/// The layout is `<main_transcript_dir>/<session_id>/subagents/*.jsonl`.
+/// Missing directory → empty vec. Never panics on I/O errors.
+fn list_subagent_files(main_path: &Path, session_id: &str) -> Vec<PathBuf> {
+    let Some(parent) = main_path.parent() else {
+        return vec![];
+    };
+    let sub_dir = parent.join(session_id).join("subagents");
+    let mut out = Vec::new();
+    let entries = match fs::read_dir(&sub_dir) {
+        Ok(r) => r,
+        Err(_) => return out,
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().map(|e| e == "jsonl").unwrap_or(false) {
+            out.push(p);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Per-file accumulator. Kept separate from `TokenTotals` because
+/// `TokenTotals` also carries `cached_input` / `reasoning_output` which
+/// are derived at the session level, not per-file.
+#[derive(Debug, Default, Clone)]
+struct FileTotals {
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write_5m: u64,
+    cache_write_1h: u64,
 }
 
 #[derive(Debug, Default, Clone)]
