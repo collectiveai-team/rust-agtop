@@ -20,6 +20,7 @@ fn fixture_main_path() -> PathBuf {
 fn summary_for_fixture() -> SessionSummary {
     SessionSummary {
         provider: ProviderKind::Claude,
+        subscription: None,
         session_id: "deadbeef-1234-5678-9abc-def012345678".into(),
         started_at: None,
         last_active: None,

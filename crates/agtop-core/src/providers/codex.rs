@@ -63,6 +63,7 @@ impl Provider for CodexProvider {
         if !dir_exists(&self.sessions_root) {
             return Ok(vec![]);
         }
+        let subscription = read_plan_name(&self.auth_path);
         let mut out = Vec::new();
         for entry in WalkDir::new(&self.sessions_root)
             .into_iter()
@@ -76,7 +77,10 @@ impl Provider for CodexProvider {
                 continue;
             }
             match summarize_codex_file(p) {
-                Ok(s) => out.push(s),
+                Ok(mut s) => {
+                    s.subscription = subscription.clone();
+                    out.push(s)
+                }
                 Err(e) => {
                     tracing::debug!(path = %p.display(), error = %e, "skip codex file");
                     continue;
@@ -418,6 +422,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
 
     Ok(SessionSummary {
         provider: ProviderKind::Codex,
+        subscription: None,
         session_id: session_id.unwrap_or_else(|| {
             path.file_stem()
                 .and_then(|s| s.to_str())

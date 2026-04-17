@@ -31,6 +31,10 @@ impl std::fmt::Display for ProviderKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub provider: ProviderKind,
+    /// Billing/auth bucket for this session when known, e.g. "Max 5x",
+    /// "ChatGPT Plus", or "API key".
+    #[serde(default)]
+    pub subscription: Option<String>,
     pub session_id: String,
     pub started_at: Option<DateTime<Utc>>,
     pub last_active: Option<DateTime<Utc>>,

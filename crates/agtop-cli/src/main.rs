@@ -35,9 +35,14 @@ struct Cli {
     #[arg(short = 'p', long, default_value = "retail")]
     plan: String,
 
-    /// Only include sessions from this provider (claude, codex, opencode).
+    /// Only include sessions from this agentic provider (claude, codex, opencode).
     /// May be given multiple times.
-    #[arg(long = "provider", value_name = "KIND")]
+    #[arg(
+        long = "provider",
+        alias = "backend",
+        alias = "agentic-provider",
+        value_name = "KIND"
+    )]
     providers: Vec<String>,
 
     /// Re-render the `--list` table every `--delay` seconds until Ctrl-C.
@@ -91,7 +96,7 @@ fn main() -> Result<()> {
             .collect();
         if wanted.is_empty() {
             anyhow::bail!(
-                "no recognized --provider values (got: {:?}). expected: claude, codex, opencode",
+                "no recognized --provider/--backend/--agentic-provider values (got: {:?}). expected: claude, codex, opencode",
                 cli.providers
             );
         }
@@ -326,10 +331,20 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     let now = Utc::now();
     println!(
-        "{:<10}  {:<10}  {:<16}  {:>4}  {:<22}  {:<22}  {:>9}  {:>9}  {:>9}  {:>8}",
-        "PROVIDER", "SESSION", "STARTED", "AGE", "MODEL", "CWD", "IN", "OUT", "CACHE", "COST$"
+        "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
+        "PROVIDER",
+        "SUBSCRIPTION",
+        "SESSION",
+        "STARTED",
+        "AGE",
+        "MODEL",
+        "CWD",
+        "IN",
+        "OUT",
+        "CACHE",
+        "COST$"
     );
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(160));
 
     let mut printed = 0usize;
     for s in summaries {
@@ -367,6 +382,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             }
         }
         let model = s.model.clone().unwrap_or_else(|| "?".into());
+        let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
         let cwd = s.cwd.clone().unwrap_or_else(|| "-".into());
         let started = s
             .started_at
@@ -377,13 +393,14 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             .map(|t| relative_age(t, now))
             .unwrap_or_else(|| "-".into());
         println!(
-            "{:<10}  {:<10}  {:<16}  {:>4}  {:<22}  {:<22}  {:>9}  {:>9}  {:>9}  {:>8}",
+            "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
             s.provider.as_str(),
+            fit(&subscription, 16),
             fit(&short_session, 10),
             fit(&started, 16),
             fit(&age, 4),
-            fit(&model, 22),
-            fit(&shorten_path(&cwd), 22),
+            fit(&model, 20),
+            fit(&shorten_path(&cwd), 18),
             input,
             output,
             cache,
@@ -404,7 +421,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     // Footer totals.
     let totals = JsonTotals::from(&analyses.to_vec());
-    println!("{}", "-".repeat(140));
+    println!("{}", "-".repeat(160));
     println!(
         "totals: {} sessions  in={}  out={}  cache={}  cost=${:.4} (billed)  incl.sessions={}",
         analyses.len(),
@@ -508,6 +525,7 @@ struct JsonOutput {
 #[derive(Debug, Serialize)]
 struct JsonSession {
     provider: &'static str,
+    subscription: Option<String>,
     session_id: String,
     model: Option<String>,
     effective_model: Option<String>,
@@ -530,6 +548,7 @@ impl From<&SessionAnalysis> for JsonSession {
     fn from(a: &SessionAnalysis) -> Self {
         Self {
             provider: a.summary.provider.as_str(),
+            subscription: a.summary.subscription.clone(),
             session_id: a.summary.session_id.clone(),
             model: a.summary.model.clone(),
             effective_model: a.effective_model.clone(),

@@ -53,13 +53,13 @@ agtop --dashboard
 agtop --list
 
 # Only Claude Code sessions under the "Max" plan (Claude sessions marked included)
-agtop --list --plan max --provider claude
+agtop --list --plan max --agentic-provider claude
 
 # Dump everything as JSON (good for piping to jq)
 agtop --json
 
-# Multiple provider filters
-agtop --list --provider claude --provider codex
+# Multiple agentic provider filters
+agtop --list --agentic-provider claude --agentic-provider codex
 
 # Non-interactive refresh loop (for headless monitoring). Not valid with --json.
 agtop --list --watch --delay 5

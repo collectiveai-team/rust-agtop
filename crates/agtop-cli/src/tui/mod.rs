@@ -455,6 +455,7 @@ mod tests {
         let s1 = SessionAnalysis {
             summary: SessionSummary {
                 provider: ProviderKind::Claude,
+                subscription: Some("Max 5x".into()),
                 session_id: "deadbeef-aaaa-bbbb-cccc-1234".into(),
                 started_at: Some(ts_started),
                 last_active: Some(ts_last),
@@ -486,6 +487,7 @@ mod tests {
         let s2 = SessionAnalysis {
             summary: SessionSummary {
                 provider: ProviderKind::Codex,
+                subscription: Some("ChatGPT Plus".into()),
                 session_id: "ses_gpt5".into(),
                 started_at: Some(ts_started),
                 last_active: Some(ts_last),

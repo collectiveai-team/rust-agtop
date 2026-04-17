@@ -34,7 +34,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // out of scope mid-render. Build everything as `String`
             // first, then hand it over.
             let lines = vec![
-                kv_line("provider", s.provider.as_str().to_string()),
+                kv_line("agentic_provider", s.provider.as_str().to_string()),
+                kv_line(
+                    "subscription",
+                    s.subscription.clone().unwrap_or_else(|| "-".into()),
+                ),
                 kv_line("session_id", s.session_id.clone()),
                 kv_line("started", fmt_dt(s.started_at)),
                 kv_line("last_active", fmt_dt(s.last_active)),

@@ -25,12 +25,17 @@ struct ColDef {
 /// Column definitions: label, optional sort column, and fixed pixel width.
 /// `Constraint::Min` columns (CWD) use width=0 as a sentinel — they are
 /// not sortable so they don't need an exact width for hit-testing.
-fn col_defs() -> [ColDef; 10] {
+fn col_defs() -> [ColDef; 11] {
     [
         ColDef {
             label: "PROVIDER",
             sort_col: Some(SortColumn::Provider),
             width: 8,
+        },
+        ColDef {
+            label: "SUB",
+            sort_col: None,
+            width: 16,
         },
         ColDef {
             label: "SESSION",
@@ -235,6 +240,7 @@ fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) 
         .map(|t| relative_age(t, now))
         .unwrap_or_else(|| "-".into());
     let model = s.model.clone().unwrap_or_else(|| "?".into());
+    let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
     let cwd = shorten_path(s.cwd.as_deref().unwrap_or("-"));
     let cost = if c.included {
         "incl".to_string()
@@ -274,6 +280,7 @@ fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) 
 
     Row::new(vec![
         Cell::from(s.provider.as_str()).style(provider_style),
+        Cell::from(subscription),
         Cell::from(short),
         Cell::from(started),
         Cell::from(age),

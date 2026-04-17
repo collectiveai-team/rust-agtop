@@ -45,7 +45,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            " per provider (retail estimate)",
+            " per agentic provider (retail estimate)",
             Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
         )),
         Line::from(format!(" claude    ${:>9.4}", per_provider[0])),

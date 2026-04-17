@@ -599,19 +599,20 @@ impl App {
 /// Does `a` match the current text filter? Empty filter → match all.
 /// The filter is lowercased by `push_filter_char`; we lowercase the
 /// haystack fields inline. We match against session id (short + full),
-/// model, effective_model, cwd, and provider name, which covers the
+/// model, effective_model, cwd, provider name, and subscription, which covers the
 /// cases users actually search for.
 fn matches_filter(a: &SessionAnalysis, filter_lower: &str) -> bool {
     if filter_lower.is_empty() {
         return true;
     }
     let s = &a.summary;
-    let candidates: [Option<&str>; 5] = [
+    let candidates: [Option<&str>; 6] = [
         Some(s.session_id.as_str()),
         s.model.as_deref(),
         a.effective_model.as_deref(),
         s.cwd.as_deref(),
         Some(s.provider.as_str()),
+        s.subscription.as_deref(),
     ];
     candidates
         .iter()
@@ -740,6 +741,7 @@ mod tests {
         SessionAnalysis {
             summary: SessionSummary {
                 provider,
+                subscription: None,
                 session_id: id.into(),
                 started_at: Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
                 last_active: Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
