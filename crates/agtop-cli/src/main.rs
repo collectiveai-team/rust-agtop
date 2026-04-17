@@ -1,7 +1,9 @@
 //! agtop — htop-style dashboard for AI coding agents (Rust port).
 //!
-//! MVP scope: session discovery + cost estimation, with `--list` and
-//! `--json` output. Interactive TUI will land in a follow-up.
+//! Default mode is an interactive ratatui TUI (see [`tui`]). `--list`
+//! and `--json` remain one-shot non-interactive paths for scripting.
+
+mod tui;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -105,19 +107,31 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Default + --list both print the table. (Interactive TUI is TODO; for
-    // now --list is the only mode.)
+    // `--list` (with or without `--watch`) keeps the scriptable flat
+    // table output. Bare `agtop` (no `--list`, no `--json`) launches
+    // the interactive TUI.
     if cli.watch {
+        if !cli.list {
+            anyhow::bail!(
+                "--watch without --list is redundant: the TUI refreshes automatically. \
+                 Use `agtop --list --watch` for the non-interactive refresh loop, or \
+                 run `agtop --delay <secs>` for the TUI."
+            );
+        }
         run_watch(&providers, plan, cli.delay.max(1))?;
-    } else if cli.list || !cli.json {
+    } else if cli.list {
         let analyses = analyze_all(&providers, plan);
         let summaries = discover_all(&providers);
         render_table(&summaries, &analyses);
-        if !cli.list {
-            eprintln!(
-                "\n(interactive TUI coming soon — for now, agtop prints the table; pass --json for machine-readable output.)"
-            );
-        }
+    } else {
+        // Default: launch the TUI. Any rendering error is bubbled up
+        // after the terminal has been restored (tui::run guarantees
+        // teardown on both success and failure paths).
+        tui::run(
+            providers,
+            plan,
+            std::time::Duration::from_secs(cli.delay.max(1)),
+        )?;
     }
 
     Ok(())

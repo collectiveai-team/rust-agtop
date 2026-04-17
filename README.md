@@ -17,15 +17,16 @@ Adding a new provider is a single `impl Provider` in `agtop-core::providers`.
 
 ## Status
 
-**MVP scope** — v0.1.0 ships session discovery, token extraction, and cost
-estimation with two output modes:
+**v0.2** adds an interactive TUI (ratatui + crossterm) on top of the
+v0.1 analysis engine. Three output modes:
 
-- `--list` — human-readable table (default when invoked with no args).
-- `--json` — full analysis as JSON (includes per-bucket token + cost breakdown).
+- *(no flag)* — interactive htop-style dashboard (default).
+- `--list` — human-readable one-shot table.
+- `--json` — full analysis as JSON (per-bucket tokens + cost).
 
-The original JS agtop's interactive htop-style TUI (tabs, filters, sort,
-mouse support, delete, etc.) is planned for a follow-up release. The `ratatui`
-crate is already selected; the provider-abstraction layer is TUI-ready.
+The TUI refreshes in the background every `--delay` seconds (default 2)
+via a dedicated tokio worker thread; the core analysis layer remains
+TUI-free.
 
 ## Build
 
@@ -39,7 +40,13 @@ Rust toolchain: 1.75+ (works with 1.93 as of this commit).
 ## Usage
 
 ```sh
-# Table of all sessions across all providers
+# Interactive TUI (default)
+agtop
+
+# Interactive TUI refreshing every 5 seconds instead of the default 2
+agtop --delay 5
+
+# One-shot table (good for scripts / CI)
 agtop --list
 
 # Only Claude Code sessions under the "Max" plan (Claude sessions marked included)
@@ -51,10 +58,23 @@ agtop --json
 # Multiple provider filters
 agtop --list --provider claude --provider codex
 
-# Refresh the table every 5 seconds (Ctrl-C to exit). Useful for CI/ops-
-# style monitoring until the interactive TUI lands. Not valid with --json.
+# Non-interactive refresh loop (for headless monitoring). Not valid with --json.
 agtop --list --watch --delay 5
 ```
+
+### TUI keys
+
+| Keys                 | Action                                   |
+|----------------------|------------------------------------------|
+| `j` / `k` or ↓ / ↑   | Move selection                           |
+| `g` / `G` (or Home/End) | Jump to first / last row              |
+| PgUp / PgDn          | Move ±10 rows                            |
+| `/`                  | Enter filter mode (Esc clears, Enter confirms) |
+| `F6` or `>`          | Cycle sort column                        |
+| `i`                  | Flip sort direction                      |
+| Tab / Shift-Tab      | Cycle bottom-panel tabs (Info, Cost)     |
+| `F5` or `r`          | Manual refresh                           |
+| `q` / `F10` / Ctrl-C | Quit                                     |
 
 ### Plans
 

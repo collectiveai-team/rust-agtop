@@ -22,9 +22,17 @@ chrono.workspace = true
 dirs.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# Used by `--watch` for cross-platform screen clearing; also pre-positions
-# for the ratatui-based interactive TUI planned in v0.2.
+# Used by `--watch` for cross-platform screen clearing; also the terminal
+# backend for the ratatui-based interactive TUI. Kept at 0.28 to match
+# ratatui 0.29's own crossterm dep.
 crossterm = "0.28"
 # Clean Ctrl-C handling in the `--watch` loop so we can restore the cursor
 # before exiting. Zero transitive deps.
 ctrlc = "3"
+# Interactive TUI. Uses the crossterm backend pulled in above.
+ratatui = "0.29"
+# Background refresh worker for the TUI: a small tokio runtime driving a
+# watch channel so the UI redraws on each snapshot. `rt` gives us the
+# current-thread runtime; `macros` is for #[tokio::main]-style spawns if
+# ever needed; `sync` supplies watch/Mutex; `time` supplies `sleep`.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
