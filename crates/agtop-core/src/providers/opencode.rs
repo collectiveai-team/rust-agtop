@@ -54,6 +54,7 @@ impl Provider for OpenCodeProvider {
 
     fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
         let db_path = self.storage_root.join("opencode.db");
+        let subscription = read_subscription(&self.storage_root);
         let mut out = Vec::new();
 
         // --- SQLite path (v1.4+) ---
@@ -73,6 +74,10 @@ impl Provider for OpenCodeProvider {
                 Ok(mut rows) => out.append(&mut rows),
                 Err(e) => tracing::warn!(error = %e, "opencode json list failed"),
             }
+        }
+
+        for row in &mut out {
+            row.subscription = subscription.clone();
         }
 
         Ok(out)
@@ -225,6 +230,15 @@ fn read_anthropic_auth_kind(auth_path: &Path) -> Option<AuthKind> {
     }
 }
 
+fn read_subscription(storage_root: &Path) -> Option<String> {
+    let auth_path = storage_root.join("auth.json");
+    match read_anthropic_auth_kind(&auth_path) {
+        Some(AuthKind::Oauth) => Some("Anthropic Max".to_string()),
+        Some(AuthKind::Api) => Some("API key".to_string()),
+        None => None,
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct AnthropicRateLimitSnapshot {
     util_5h: Option<f64>,
@@ -331,6 +345,7 @@ fn list_sessions_sqlite(db_path: &Path) -> Result<Vec<SessionSummary>> {
             let model = first_message_model_sqlite(&conn, &id);
             SessionSummary {
                 provider: ProviderKind::OpenCode,
+                subscription: None,
                 session_id: id.clone(),
                 started_at,
                 last_active,
@@ -377,6 +392,8 @@ fn analyze_session_sqlite(
     let mut model: Option<String> = summary.model.clone();
     let mut cost_reported: f64 = 0.0;
     let mut saw = false;
+    let mut tool_call_count: u64 = 0;
+    let mut context_used_pct: Option<f64> = None;
 
     let rows = stmt
         .query_map(rusqlite::params![&summary.session_id], |row| {
@@ -397,6 +414,37 @@ fn analyze_session_sqlite(
         if model.is_none() {
             if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
                 model = Some(m.to_string());
+            }
+        }
+        if v.get("finish").and_then(|x| x.as_str()) == Some("tool-calls") {
+            tool_call_count += 1;
+        }
+
+        if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
+            if let Some(window) =
+                pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
+            {
+                let turn_total = v
+                    .get("tokens")
+                    .map(|t| {
+                        t.get("input").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("output").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("reasoning").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("cache")
+                                .and_then(|c| c.get("read"))
+                                .and_then(|x| x.as_u64())
+                                .unwrap_or(0)
+                            + t.get("cache")
+                                .and_then(|c| c.get("write"))
+                                .and_then(|x| x.as_u64())
+                                .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+                let pct = (turn_total as f64 / window as f64) * 100.0;
+                context_used_pct = Some(match context_used_pct {
+                    Some(cur) if cur >= pct => cur,
+                    _ => pct,
+                });
             }
         }
         if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
@@ -445,7 +493,7 @@ fn analyze_session_sqlite(
         cost,
         effective_model: model,
         subagent_file_count: 0,
-        tool_call_count: None,
+        tool_call_count: Some(tool_call_count),
         duration_secs: summary
             .started_at
             .zip(summary.last_active)
@@ -456,7 +504,7 @@ fn analyze_session_sqlite(
                     None
                 }
             }),
-        context_used_pct: None,
+        context_used_pct,
     })
 }
 
@@ -529,6 +577,7 @@ fn summarize_opencode_session_json(
 
     Ok(SessionSummary {
         provider: ProviderKind::OpenCode,
+        subscription: None,
         session_id,
         started_at: created,
         last_active: updated.or(created),
@@ -574,6 +623,8 @@ fn analyze_opencode_session_json(
     let mut model: Option<String> = summary.model.clone();
     let mut cost_reported: f64 = 0.0;
     let mut saw = false;
+    let mut tool_call_count: u64 = 0;
+    let mut context_used_pct: Option<f64> = None;
 
     let entries = fs::read_dir(&msg_dir)?;
     for f in entries.flatten() {
@@ -591,6 +642,36 @@ fn analyze_opencode_session_json(
         if model.is_none() {
             if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
                 model = Some(m.to_string());
+            }
+        }
+        if v.get("finish").and_then(|x| x.as_str()) == Some("tool-calls") {
+            tool_call_count += 1;
+        }
+        if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
+            if let Some(window) =
+                pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
+            {
+                let turn_total = v
+                    .get("tokens")
+                    .map(|t| {
+                        t.get("input").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("output").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("reasoning").and_then(|x| x.as_u64()).unwrap_or(0)
+                            + t.get("cache")
+                                .and_then(|c| c.get("read"))
+                                .and_then(|x| x.as_u64())
+                                .unwrap_or(0)
+                            + t.get("cache")
+                                .and_then(|c| c.get("write"))
+                                .and_then(|x| x.as_u64())
+                                .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
+                let pct = (turn_total as f64 / window as f64) * 100.0;
+                context_used_pct = Some(match context_used_pct {
+                    Some(cur) if cur >= pct => cur,
+                    _ => pct,
+                });
             }
         }
         if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
@@ -639,7 +720,7 @@ fn analyze_opencode_session_json(
         cost,
         effective_model: model,
         subagent_file_count: 0,
-        tool_call_count: None,
+        tool_call_count: Some(tool_call_count),
         duration_secs: summary
             .started_at
             .zip(summary.last_active)
@@ -650,7 +731,7 @@ fn analyze_opencode_session_json(
                     None
                 }
             }),
-        context_used_pct: None,
+        context_used_pct,
     })
 }
 

@@ -65,6 +65,11 @@ impl Provider for ClaudeProvider {
         if !dir_exists(&self.projects_root) {
             return Ok(vec![]);
         }
+        let claude_dir = self
+            .projects_root
+            .parent()
+            .unwrap_or(self.projects_root.as_path());
+        let subscription = read_credentials_plan(claude_dir).1;
         let mut out = Vec::new();
         let projects = match fs::read_dir(&self.projects_root) {
             Ok(r) => r,
@@ -92,7 +97,10 @@ impl Provider for ClaudeProvider {
                     continue;
                 }
                 match summarize_claude_file(&p) {
-                    Ok(s) if s.model.is_some() => out.push(s),
+                    Ok(mut s) if s.model.is_some() => {
+                        s.subscription = subscription.clone();
+                        out.push(s)
+                    }
                     Ok(_) => continue, // skip empty/abandoned sessions
                     Err(e) => {
                         tracing::debug!(path = %p.display(), error = %e, "skip claude file");
@@ -367,6 +375,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
 
     Ok(SessionSummary {
         provider: ProviderKind::Claude,
+        subscription: None,
         session_id,
         started_at: earliest,
         last_active,
@@ -380,10 +389,14 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let path = &summary.data_path;
     let mut effective_model = summary.model.clone();
     let mut totals = TokenTotals::default();
+    let mut tool_call_count: u64 = 0;
+    let mut context_used_pct: Option<f64> = None;
 
     // Main transcript.
     let main_file_totals = sum_jsonl_usage(path, &mut effective_model)?;
     add_file_totals(&mut totals, &main_file_totals);
+    tool_call_count += main_file_totals.tool_call_count;
+    context_used_pct = max_pct(context_used_pct, main_file_totals.context_used_pct);
 
     // Subagent sidechain transcripts (if any). They live in a directory
     // sibling to the main `<uuid>.jsonl`, named `<uuid>/subagents/*.jsonl`.
@@ -401,7 +414,11 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         // the shared `effective_model` so a subagent-only session (rare
         // but possible on an abandoned main transcript) still resolves.
         match sum_jsonl_usage(sub, &mut effective_model) {
-            Ok(sub_totals) => add_file_totals(&mut totals, &sub_totals),
+            Ok(sub_totals) => {
+                add_file_totals(&mut totals, &sub_totals);
+                tool_call_count += sub_totals.tool_call_count;
+                context_used_pct = max_pct(context_used_pct, sub_totals.context_used_pct);
+            }
             Err(e) => tracing::debug!(path = %sub.display(), error = %e, "skip subagent file"),
         }
     }
@@ -430,7 +447,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         cost,
         effective_model,
         subagent_file_count,
-        tool_call_count: None,
+        tool_call_count: Some(tool_call_count),
         duration_secs: summary
             .started_at
             .zip(summary.last_active)
@@ -441,8 +458,17 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
                     None
                 }
             }),
-        context_used_pct: None,
+        context_used_pct,
     })
+}
+
+fn max_pct(cur: Option<f64>, next: Option<f64>) -> Option<f64> {
+    match (cur, next) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    }
 }
 
 /// Scan a Claude-format JSONL (main transcript OR subagent sidechain)
@@ -459,6 +485,8 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     // progresses; only the final write has correct totals. Keep the last.
     let mut last_snapshot: HashMap<String, Snapshot> = HashMap::new();
     let mut keyless = Snapshot::default();
+    let mut tool_call_count: u64 = 0;
+    let mut context_used_pct: Option<f64> = None;
 
     for_each_jsonl(path, |v| {
         if v.get("type").and_then(|x| x.as_str()) != Some("assistant") {
@@ -472,10 +500,45 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
             Some(u) if !u.is_null() => u,
             _ => return,
         };
+
+        if let Some(arr) = message.get("content").and_then(|x| x.as_array()) {
+            for part in arr {
+                if part.get("type").and_then(|x| x.as_str()) == Some("tool_use") {
+                    tool_call_count += 1;
+                }
+            }
+        }
+
         let m = message.get("model").and_then(|x| x.as_str());
         if let Some(m) = m {
             if m != "<synthetic>" && effective_model.is_none() {
                 *effective_model = Some(m.to_string());
+            }
+
+            if let Some(window) =
+                pricing::context_window(ProviderKind::Claude, m).filter(|w| *w > 0)
+            {
+                let g = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+                let cache_creation = usage
+                    .get("cache_creation")
+                    .and_then(|cc| cc.get("ephemeral_5m_input_tokens"))
+                    .and_then(|x| x.as_u64())
+                    .unwrap_or(0)
+                    + usage
+                        .get("cache_creation")
+                        .and_then(|cc| cc.get("ephemeral_1h_input_tokens"))
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0)
+                    + usage
+                        .get("cache_creation_input_tokens")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0);
+                let total = g("input_tokens")
+                    + g("cache_read_input_tokens")
+                    + cache_creation
+                    + g("output_tokens");
+                let pct = (total as f64 / window as f64) * 100.0;
+                context_used_pct = max_pct(context_used_pct, Some(pct));
             }
         }
         let snap = snapshot_from_usage(usage);
@@ -510,6 +573,8 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     ft.cache_read += keyless.cache_read;
     ft.cache_write_5m += keyless.cache_write_5m;
     ft.cache_write_1h += keyless.cache_write_1h;
+    ft.tool_call_count = tool_call_count;
+    ft.context_used_pct = context_used_pct;
     Ok(ft)
 }
 
@@ -554,6 +619,8 @@ struct FileTotals {
     cache_read: u64,
     cache_write_5m: u64,
     cache_write_1h: u64,
+    tool_call_count: u64,
+    context_used_pct: Option<f64>,
 }
 
 #[derive(Debug, Default, Clone)]

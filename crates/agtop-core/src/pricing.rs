@@ -157,6 +157,22 @@ pub fn lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     builtin_lookup(provider, model)
 }
 
+/// Best-effort model context window lookup (tokens).
+///
+/// Uses the LiteLLM cache when available, then falls back to a tiny
+/// built-in table for common models we observe in local transcripts.
+pub fn context_window(provider: ProviderKind, model: &str) -> Option<u64> {
+    autoload_index();
+    if let Ok(slot) = pricing_slot().read() {
+        if let Some(idx) = slot.as_ref() {
+            if let Some(w) = idx.lookup_context_window(provider, model) {
+                return Some(w);
+            }
+        }
+    }
+    builtin_context_window(provider, model)
+}
+
 /// Built-in (hard-coded) lookup. Exposed so tests can bypass the cache.
 pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     let table: &[(&str, Rates)] = match provider {
@@ -189,6 +205,39 @@ pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
         }
     }
     None
+}
+
+fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
+    let key = strip_date_suffix(model);
+    if key != model {
+        return builtin_context_window(provider, key);
+    }
+
+    // OpenCode often reports `provider/model`.
+    if let Some((_, suffix)) = model.rsplit_once('/') {
+        if suffix != model {
+            if let Some(w) = builtin_context_window(provider, suffix) {
+                return Some(w);
+            }
+        }
+    }
+
+    match provider {
+        ProviderKind::Codex => {
+            if model.starts_with("gpt-5") || model.starts_with("codex") {
+                Some(258_400)
+            } else {
+                None
+            }
+        }
+        ProviderKind::Claude | ProviderKind::OpenCode => {
+            if model.starts_with("claude") {
+                Some(1_000_000)
+            } else {
+                None
+            }
+        }
+    }
 }
 
 fn strip_date_suffix(model: &str) -> &str {

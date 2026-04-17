@@ -74,6 +74,8 @@ struct RawEntry {
     /// Claude-style 1-hour ephemeral cache write price.
     #[serde(default)]
     cache_creation_input_token_cost_above_1hr: Option<f64>,
+    #[serde(default)]
+    max_input_tokens: Option<u64>,
 }
 
 /// Optional wrapper written alongside the cache to record the timestamp
@@ -94,6 +96,7 @@ struct CacheMeta {
 #[derive(Debug, Default, Clone)]
 pub struct PricingIndex {
     by_key: HashMap<String, Rates>,
+    ctx_by_key: HashMap<String, u64>,
 }
 
 impl PricingIndex {
@@ -103,8 +106,9 @@ impl PricingIndex {
     /// are dropped.
     pub fn from_json(raw: &serde_json::Value) -> Self {
         let mut by_key: HashMap<String, Rates> = HashMap::new();
+        let mut ctx_by_key: HashMap<String, u64> = HashMap::new();
         let Some(obj) = raw.as_object() else {
-            return Self { by_key };
+            return Self { by_key, ctx_by_key };
         };
         for (key, val) in obj {
             if key == "sample_spec" {
@@ -150,15 +154,21 @@ impl PricingIndex {
 
             // Store the primary key as-is …
             by_key.insert(key.clone(), rates);
+            if let Some(ctx) = entry.max_input_tokens.filter(|w| *w > 0) {
+                ctx_by_key.insert(key.clone(), ctx);
+            }
             // … and also store variants that strip LiteLLM's provider
             // prefixes so transcripts that report a bare model name still
             // hit. e.g. "anthropic.claude-opus-4-7" → also index under
             // "claude-opus-4-7"; "us.anthropic.claude-opus-4-7" → same.
             for stripped in strip_provider_prefixes(key) {
-                by_key.entry(stripped).or_insert(rates);
+                by_key.entry(stripped.clone()).or_insert(rates);
+                if let Some(ctx) = entry.max_input_tokens.filter(|w| *w > 0) {
+                    ctx_by_key.entry(stripped).or_insert(ctx);
+                }
             }
         }
-        Self { by_key }
+        Self { by_key, ctx_by_key }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -201,6 +211,33 @@ impl PricingIndex {
             }
         }
         best.map(|(_, r)| r)
+    }
+
+    pub fn lookup_context_window(&self, provider: ProviderKind, model: &str) -> Option<u64> {
+        if let Some(w) = self.ctx_by_key.get(model).copied() {
+            return Some(w);
+        }
+        let trimmed = strip_date_suffix(model);
+        if trimmed != model {
+            if let Some(w) = self.ctx_by_key.get(trimmed).copied() {
+                return Some(w);
+            }
+        }
+        for candidate in prefix_candidates(provider, model) {
+            if let Some(w) = self.ctx_by_key.get(&candidate).copied() {
+                return Some(w);
+            }
+        }
+        let mut best: Option<(usize, u64)> = None;
+        for (k, w) in &self.ctx_by_key {
+            if model.starts_with(k.as_str()) {
+                let len = k.len();
+                if best.map(|(prev, _)| prev < len).unwrap_or(true) {
+                    best = Some((len, *w));
+                }
+            }
+        }
+        best.map(|(_, w)| w)
     }
 }
 
