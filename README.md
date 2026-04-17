@@ -46,6 +46,9 @@ agtop
 # Interactive TUI refreshing every 5 seconds instead of the default 2
 agtop --delay 5
 
+# Start directly in the btop-style dashboard view
+agtop --dashboard
+
 # One-shot table (good for scripts / CI)
 agtop --list
 
@@ -72,6 +75,7 @@ agtop --list --watch --delay 5
 | `/`                  | Enter filter mode (Esc clears, Enter confirms) |
 | `F6` or `>`          | Cycle sort column                        |
 | `i`                  | Flip sort direction                      |
+| `d`                  | Toggle classic/dashboard layout          |
 | Tab / Shift-Tab      | Cycle bottom-panel tabs (Info, Cost)     |
 | `F5` or `r`          | Manual refresh                           |
 | `q` / `F10` / Ctrl-C | Quit                                     |
@@ -98,6 +102,7 @@ Core types:
 - `Provider` trait: `list_sessions()` + `analyze(summary, plan)`.
 - `SessionSummary`: metadata discovered without re-reading the full transcript.
 - `SessionAnalysis`: summary + `TokenTotals` + `CostBreakdown`.
+- `PlanUsage`: best-effort plan/limit snapshots for dashboard panes.
 
 The provider layer is `Send + Sync`, so the upcoming TUI can drive it from
 a background refresh thread.

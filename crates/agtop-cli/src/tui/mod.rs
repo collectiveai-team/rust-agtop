@@ -36,7 +36,7 @@ use ratatui::{
 use agtop_core::pricing::Plan;
 use agtop_core::Provider;
 
-use app::{App, InputMode, Tab};
+use app::{App, InputMode, Tab, UiMode};
 use events::{apply_key, Action};
 use refresh::{RefreshHandle, RefreshMsg};
 
@@ -64,6 +64,7 @@ pub fn run(
     providers: Vec<Arc<dyn Provider>>,
     plan: Plan,
     refresh_interval: Duration,
+    start_dashboard: bool,
 ) -> Result<()> {
     let mut terminal = setup_terminal().context("set up terminal for TUI")?;
     // Ensure the terminal is always restored, even on panic. We install
@@ -75,6 +76,9 @@ pub fn run(
     let mut handle = refresh::spawn(providers, plan, refresh_interval)
         .context("spawn background refresh worker")?;
     let mut app = App::new();
+    if start_dashboard {
+        app.set_ui_mode(UiMode::Dashboard);
+    }
 
     let result = event_loop(&mut terminal, &mut app, &mut handle);
 
@@ -104,7 +108,11 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
         // 1. Drain any fresh snapshots from the background worker.
         while let Some(msg) = handle.try_recv() {
             match msg {
-                RefreshMsg::Snapshot { analyses, .. } => app.set_sessions(analyses),
+                RefreshMsg::Snapshot {
+                    analyses,
+                    plan_usage,
+                    ..
+                } => app.set_snapshot(analyses, plan_usage),
                 RefreshMsg::Error { message, .. } => app.set_refresh_error(message),
             }
         }
@@ -214,6 +222,11 @@ fn render(
     table_state: &mut ratatui::widgets::TableState,
     layout: &mut UiLayout,
 ) {
+    if app.ui_mode() == UiMode::Dashboard {
+        render_dashboard(frame, app, table_state, layout);
+        return;
+    }
+
     // Layout: 3 cells total — status header (1), split area (flex),
     // footer (1). The split area is 60/40 table-vs-bottompanel by
     // default; tests hit this layout via the TestBackend snapshots.
@@ -241,6 +254,39 @@ fn render(
     render_footer(frame, outer[3], app);
 }
 
+fn render_dashboard(
+    frame: &mut Frame<'_>,
+    app: &App,
+    table_state: &mut ratatui::widgets::TableState,
+    layout: &mut UiLayout,
+) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),  // status
+            Constraint::Length(9),  // usage chart
+            Constraint::Length(12), // plan + cost panes
+            Constraint::Min(8),     // sessions table
+            Constraint::Length(1),  // footer
+        ])
+        .split(frame.area());
+
+    render_status(frame, outer[0], app);
+    widgets::dashboard_usage::render(frame, outer[1], app);
+
+    let mid = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(outer[2]);
+    widgets::dashboard_plan::render(frame, mid[0], app);
+    widgets::dashboard_cost::render(frame, mid[1], app);
+
+    layout.table_area = outer[3];
+    layout.tab_bar_area = Rect::default();
+    widgets::session_table::render(frame, outer[3], app, table_state, &mut layout.header_cols);
+    render_footer(frame, outer[4], app);
+}
+
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let sel = app
         .selected()
@@ -255,8 +301,12 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         })
         .unwrap_or_else(|| "[--]".into());
 
+    let mode = match app.ui_mode() {
+        UiMode::Classic => "classic",
+        UiMode::Dashboard => "dashboard",
+    };
     let status = format!(
-        " agtop  refresh#{}  {}  {}",
+        " agtop [{mode}]  refresh#{}  {}  {}",
         app.refresh_count(),
         sel,
         app.last_error().unwrap_or(""),
@@ -321,7 +371,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         InputMode::Normal => (
             concat!(
-                " q:quit  j/k:↕  click:select  scroll:↕  Tab:tab  /:filter  >:sort  i:dir  r:refresh  ",
+                " q:quit  d:dashboard  j/k:↕  click:select  scroll:↕  Tab:tab  /:filter  >:sort  i:dir  r:refresh  ",
                 "g/G:top/bot  PgUp/PgDn:10"
             )
             .to_string(),

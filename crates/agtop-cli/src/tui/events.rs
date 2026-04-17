@@ -36,6 +36,7 @@ pub enum Action {
 /// - i: flip sort direction (Asc ↔ Desc)
 /// - F5 or r: manual refresh
 /// - Tab / Shift-Tab: cycle bottom panel
+/// - d: toggle dashboard/classic layout
 pub fn apply_key(app: &mut App, key: KeyEvent) -> Action {
     // ratatui's docs and tui-textarea both recommend ignoring Release
     // events on Windows — they'd otherwise double-fire every binding.
@@ -101,6 +102,7 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::F(6) | KeyCode::Char('>') => app.cycle_sort_column(),
         KeyCode::Char('i') => app.flip_sort_direction(),
         KeyCode::F(5) | KeyCode::Char('r') => return Action::ManualRefresh,
+        KeyCode::Char('d') => app.toggle_ui_mode(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
         _ => {}

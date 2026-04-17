@@ -49,6 +49,10 @@ struct Cli {
     #[arg(short = 'd', long, default_value_t = 2u64, value_name = "SECS")]
     delay: u64,
 
+    /// Start directly in the btop-style dashboard view.
+    #[arg(short = 'D', long)]
+    dashboard: bool,
+
     /// Force a synchronous fetch of the LiteLLM pricing table before
     /// analyzing sessions. Network required; errors are logged and the
     /// built-in tables are used as a fallback.
@@ -133,6 +137,7 @@ fn main() -> Result<()> {
             providers,
             plan,
             std::time::Duration::from_secs(cli.delay.max(1)),
+            cli.dashboard,
         )?;
     }
 

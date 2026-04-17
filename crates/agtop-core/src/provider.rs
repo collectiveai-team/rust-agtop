@@ -1,5 +1,5 @@
 use crate::pricing::Plan;
-use crate::session::{ProviderKind, SessionAnalysis, SessionSummary};
+use crate::session::{PlanUsage, ProviderKind, SessionAnalysis, SessionSummary};
 use crate::Result;
 
 /// A provider knows how to:
@@ -25,4 +25,14 @@ pub trait Provider: Send + Sync {
     /// Re-read `summary.data_path` and produce a full analysis (tokens +
     /// cost) under the given billing `plan`.
     fn analyze(&self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis>;
+
+    /// Return zero-or-more plan-usage snapshots the provider can source
+    /// from local auth/state files. The default implementation returns
+    /// an empty vec, so providers that don't have a plan signal (or
+    /// haven't implemented it yet) remain valid. MUST NOT panic; return
+    /// `Ok(vec![])` on missing files or parse failures and log via
+    /// `tracing` if useful.
+    fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
+        Ok(Vec::new())
+    }
 }

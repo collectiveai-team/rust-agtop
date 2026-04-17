@@ -13,12 +13,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, TimeZone, Utc};
+use rusqlite::OptionalExtension;
 
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
 use crate::providers::util::dir_exists;
-use crate::session::{ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{
+    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+};
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeProvider {
@@ -92,6 +95,10 @@ impl Provider for OpenCodeProvider {
         // Fallback: legacy JSON message files.
         analyze_opencode_session_json(summary, plan, &self.storage_root)
     }
+
+    fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
+        Ok(collect_plan_usage(&self.storage_root))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +112,183 @@ fn ms_to_utc(ms: i64) -> Option<DateTime<Utc>> {
 fn read_json(path: &Path) -> Result<serde_json::Value> {
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
+}
+
+// ---------------------------------------------------------------------------
+// Plan usage (Anthropic OAuth snapshots in opencode.db)
+// ---------------------------------------------------------------------------
+
+fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
+    let auth_path = storage_root.join("auth.json");
+    let db_path = storage_root.join("opencode.db");
+
+    let anthropic_auth = read_anthropic_auth_kind(&auth_path);
+
+    // Out of scope: raw API keys don't map to a user plan/quota pane.
+    if anthropic_auth == Some(AuthKind::Api) {
+        return Vec::new();
+    }
+
+    // If we can't determine Anthropic OAuth auth and there's no DB to mine,
+    // we have nothing actionable to show.
+    if anthropic_auth.is_none() && !db_path.exists() {
+        return Vec::new();
+    }
+
+    let mut windows: Vec<PlanWindow> = Vec::new();
+    let mut last_limit_hit: Option<DateTime<Utc>> = None;
+    let mut note: Option<String> = None;
+
+    if db_path.exists() {
+        match read_latest_anthropic_snapshot(&db_path) {
+            Ok(Some(snapshot)) => {
+                last_limit_hit = ms_to_utc(snapshot.time_created_ms);
+
+                let bind_5h = snapshot.representative_claim.as_deref() == Some("five_hour");
+                let bind_7d = snapshot.representative_claim.as_deref() == Some("weekly");
+
+                if snapshot.util_5h.is_some() || snapshot.reset_5h.is_some() {
+                    windows.push(PlanWindow {
+                        label: "5h".to_string(),
+                        utilization: snapshot.util_5h,
+                        reset_at: snapshot
+                            .reset_5h
+                            .and_then(|secs| Utc.timestamp_opt(secs, 0).single()),
+                        reset_hint: None,
+                        binding: bind_5h,
+                    });
+                }
+
+                if snapshot.util_7d.is_some() || snapshot.reset_7d.is_some() {
+                    windows.push(PlanWindow {
+                        label: "7d".to_string(),
+                        utilization: snapshot.util_7d,
+                        reset_at: snapshot
+                            .reset_7d
+                            .and_then(|secs| Utc.timestamp_opt(secs, 0).single()),
+                        reset_hint: None,
+                        binding: bind_7d,
+                    });
+                }
+            }
+            Ok(None) => {
+                if anthropic_auth == Some(AuthKind::Oauth) {
+                    note = Some("no recent rate-limit snapshot".to_string());
+                }
+            }
+            Err(e) => {
+                tracing::debug!(path = %db_path.display(), error = %e, "opencode plan_usage query failed");
+                if anthropic_auth == Some(AuthKind::Oauth) {
+                    note = Some("no recent rate-limit snapshot".to_string());
+                }
+            }
+        }
+    } else if anthropic_auth == Some(AuthKind::Oauth) {
+        note = Some("no recent rate-limit snapshot".to_string());
+    }
+
+    // If we still don't have Anthropic OAuth, don't emit a vague card.
+    if anthropic_auth != Some(AuthKind::Oauth) {
+        return Vec::new();
+    }
+
+    let plan_name = Some("Max".to_string());
+    let label = "OpenCode · Anthropic (Max)".to_string();
+
+    vec![PlanUsage {
+        provider: ProviderKind::OpenCode,
+        label,
+        plan_name,
+        windows,
+        last_limit_hit,
+        note,
+    }]
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthKind {
+    Oauth,
+    Api,
+}
+
+fn read_anthropic_auth_kind(auth_path: &Path) -> Option<AuthKind> {
+    let raw = fs::read_to_string(auth_path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    match v
+        .get("anthropic")
+        .and_then(|x| x.get("type"))
+        .and_then(|x| x.as_str())
+    {
+        Some("oauth") => Some(AuthKind::Oauth),
+        Some("api") => Some(AuthKind::Api),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct AnthropicRateLimitSnapshot {
+    util_5h: Option<f64>,
+    reset_5h: Option<i64>,
+    util_7d: Option<f64>,
+    reset_7d: Option<i64>,
+    representative_claim: Option<String>,
+    time_created_ms: i64,
+}
+
+fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRateLimitSnapshot>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT data, time_created FROM message \
+             WHERE data LIKE ?1 \
+             ORDER BY time_created DESC LIMIT 1",
+        )
+        .map_err(|e| Error::Other(format!("sqlite prepare plan_usage: {e}")))?;
+
+    let like = "%anthropic-ratelimit-unified-5h-utilization%";
+    let row = stmt
+        .query_row(rusqlite::params![like], |row| {
+            let data: String = row.get(0)?;
+            let time_created: i64 = row.get(1)?;
+            Ok((data, time_created))
+        })
+        .optional()
+        .map_err(|e| Error::Other(format!("sqlite query plan_usage: {e}")))?;
+
+    let Some((data, time_created_ms)) = row else {
+        return Ok(None);
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&data) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let headers = parsed
+        .get("error")
+        .and_then(|x| x.get("data"))
+        .and_then(|x| x.get("responseHeaders"));
+    let Some(h) = headers else {
+        return Ok(None);
+    };
+
+    let get_str = |k: &str| h.get(k).and_then(|x| x.as_str());
+    let util_5h =
+        get_str("anthropic-ratelimit-unified-5h-utilization").and_then(|s| s.parse::<f64>().ok());
+    let reset_5h = get_str("anthropic-ratelimit-unified-5h-reset").and_then(|s| s.parse().ok());
+    let util_7d =
+        get_str("anthropic-ratelimit-unified-7d-utilization").and_then(|s| s.parse::<f64>().ok());
+    let reset_7d = get_str("anthropic-ratelimit-unified-7d-reset").and_then(|s| s.parse().ok());
+    let representative_claim =
+        get_str("anthropic-ratelimit-unified-representative-claim").map(|s| s.to_string());
+
+    Ok(Some(AnthropicRateLimitSnapshot {
+        util_5h,
+        reset_5h,
+        util_7d,
+        reset_7d,
+        representative_claim,
+        time_created_ms,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -444,4 +628,152 @@ fn analyze_opencode_session_json(
         effective_model: model,
         subagent_file_count: 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TestDir {
+        path: PathBuf,
+    }
+
+    impl TestDir {
+        fn new(prefix: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!("{prefix}-{nanos}"));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("create temp test dir");
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn write_auth_json(root: &Path, auth_kind: &str) {
+        let auth = serde_json::json!({
+            "anthropic": {
+                "type": auth_kind,
+                "access": "token"
+            }
+        });
+        fs::write(
+            root.join("auth.json"),
+            serde_json::to_vec(&auth).expect("auth json"),
+        )
+        .expect("write auth.json");
+    }
+
+    fn init_db(root: &Path) {
+        let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
+        conn.execute(
+            "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT)",
+            [],
+        )
+        .expect("create message table");
+    }
+
+    fn insert_message(root: &Path, data: serde_json::Value, time_created_ms: i64) {
+        let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO message(id, session_id, time_created, data) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                "msg_1",
+                "ses_1",
+                time_created_ms,
+                serde_json::to_string(&data).expect("msg json")
+            ],
+        )
+        .expect("insert message row");
+    }
+
+    #[test]
+    fn plan_usage_happy_path_with_all_headers() {
+        let tmp = TestDir::new("agtop-opencode-plan-usage");
+        write_auth_json(&tmp.path, "oauth");
+        init_db(&tmp.path);
+
+        let data = serde_json::json!({
+            "role": "assistant",
+            "error": {
+                "name": "APIError",
+                "data": {
+                    "responseHeaders": {
+                        "anthropic-ratelimit-unified-5h-utilization": "0.64",
+                        "anthropic-ratelimit-unified-5h-reset": "1774299600",
+                        "anthropic-ratelimit-unified-7d-utilization": "0.05",
+                        "anthropic-ratelimit-unified-7d-reset": "1774886400",
+                        "anthropic-ratelimit-unified-representative-claim": "five_hour"
+                    }
+                }
+            }
+        });
+        insert_message(&tmp.path, data, 1_774_290_000_000);
+
+        let provider = OpenCodeProvider {
+            storage_root: tmp.path.clone(),
+        };
+        let out = provider.plan_usage().expect("plan_usage");
+        assert_eq!(out.len(), 1);
+        let pu = &out[0];
+        assert_eq!(pu.plan_name.as_deref(), Some("Max"));
+        assert_eq!(pu.windows.len(), 2);
+
+        let w5 = pu.windows.iter().find(|w| w.label == "5h").expect("5h");
+        let w7 = pu.windows.iter().find(|w| w.label == "7d").expect("7d");
+        assert_eq!(w5.utilization, Some(0.64));
+        assert_eq!(w7.utilization, Some(0.05));
+        assert!(w5.binding);
+        assert!(!w7.binding);
+        assert!(pu.last_limit_hit.is_some());
+    }
+
+    #[test]
+    fn plan_usage_api_auth_returns_empty() {
+        // Implementation choice: skip API-key auth entirely because plan
+        // usage panes are only meaningful for OAuth/subscription auth.
+        let tmp = TestDir::new("agtop-opencode-plan-api");
+        write_auth_json(&tmp.path, "api");
+        init_db(&tmp.path);
+
+        let provider = OpenCodeProvider {
+            storage_root: tmp.path.clone(),
+        };
+        let out = provider.plan_usage().expect("plan_usage");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn plan_usage_missing_db_returns_empty_without_auth() {
+        let tmp = TestDir::new("agtop-opencode-plan-missing-db");
+        let provider = OpenCodeProvider {
+            storage_root: tmp.path.clone(),
+        };
+        let out = provider.plan_usage().expect("plan_usage");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn plan_usage_no_matching_rows_emits_note_when_oauth_exists() {
+        let tmp = TestDir::new("agtop-opencode-plan-no-rows");
+        write_auth_json(&tmp.path, "oauth");
+        init_db(&tmp.path);
+
+        let provider = OpenCodeProvider {
+            storage_root: tmp.path.clone(),
+        };
+        let out = provider.plan_usage().expect("plan_usage");
+        assert_eq!(out.len(), 1);
+        let pu = &out[0];
+        assert_eq!(pu.note.as_deref(), Some("no recent rate-limit snapshot"));
+        assert!(pu.windows.is_empty());
+    }
 }

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agtop_core::pricing::Plan;
-use agtop_core::{analyze_all, Provider};
+use agtop_core::{analyze_all, plan_usage_all, Provider};
 use tokio::sync::watch;
 
 /// Message the UI consumes from the refresh task.
@@ -29,6 +29,7 @@ pub enum RefreshMsg {
         #[allow(dead_code)]
         generation: u64,
         analyses: Vec<agtop_core::session::SessionAnalysis>,
+        plan_usage: Vec<agtop_core::PlanUsage>,
     },
     /// Analysis failed; the last good snapshot (if any) stays in place.
     /// The string is already formatted for display.
@@ -129,12 +130,17 @@ pub fn spawn(
         loop {
             generation = generation.wrapping_add(1);
             let providers_inner = providers_arc.clone();
-            let result = tokio::task::spawn_blocking(move || analyze_all(&providers_inner, plan))
-                .await;
+            let result = tokio::task::spawn_blocking(move || {
+                let analyses = analyze_all(&providers_inner, plan);
+                let plan_usage = plan_usage_all(&providers_inner);
+                (analyses, plan_usage)
+            })
+            .await;
             let msg = match result {
-                Ok(analyses) => RefreshMsg::Snapshot {
+                Ok((analyses, plan_usage)) => RefreshMsg::Snapshot {
                     generation,
                     analyses,
+                    plan_usage,
                 },
                 Err(e) => RefreshMsg::Error {
                     generation,

@@ -22,7 +22,17 @@ use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts};
-use crate::session::{ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{
+    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+};
+
+/// Upper bound on how many recent transcripts we scan for synthetic
+/// `rate_limit` error events in `plan_usage()`. Users can accumulate
+/// thousands of session files, and walking every one on each refresh is
+/// wasteful: limit-hits are rare and, once logged, persist, so the newest
+/// hit is overwhelmingly likely to live in a recently-modified file. We
+/// sort by mtime descending and inspect at most this many files.
+const PLAN_USAGE_RECENT_FILE_SCAN_LIMIT: usize = 50;
 
 #[derive(Debug, Clone)]
 pub struct ClaudeProvider {
@@ -97,6 +107,198 @@ impl Provider for ClaudeProvider {
     fn analyze(&self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
         analyze_claude_file(summary, plan)
     }
+
+    fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
+        plan_usage_for(&self.projects_root)
+    }
+}
+
+/// Map a Claude `rateLimitTier` string to a human-readable plan name.
+/// Returns `None` for unknown/empty tiers so the caller can fall back to
+/// `subscriptionType`.
+pub fn rate_limit_tier_to_plan_name(tier: &str) -> Option<String> {
+    match tier {
+        "default_claude_pro" => Some("Pro".to_string()),
+        "default_claude_max_5x" => Some("Max 5x".to_string()),
+        "default_claude_max_20x" => Some("Max 20x".to_string()),
+        _ => None,
+    }
+}
+
+/// Title-case a short ASCII identifier like `"max"` → `"Max"`. Used only
+/// as a last-ditch fallback when `rateLimitTier` is unrecognised.
+fn title_case_ascii(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// Derive plan_name from a parsed `.credentials.json` value.
+fn plan_name_from_credentials(v: &serde_json::Value) -> Option<String> {
+    let oauth = v.get("claudeAiOauth")?;
+    let tier = oauth.get("rateLimitTier").and_then(|x| x.as_str());
+    if let Some(t) = tier {
+        if let Some(name) = rate_limit_tier_to_plan_name(t) {
+            return Some(name);
+        }
+    }
+    oauth
+        .get("subscriptionType")
+        .and_then(|x| x.as_str())
+        .filter(|s| !s.is_empty())
+        .map(title_case_ascii)
+}
+
+/// Read `<claude_dir>/.credentials.json` and derive plan_name.
+/// Returns `(credentials_exist, plan_name)`.
+fn read_credentials_plan(claude_dir: &Path) -> (bool, Option<String>) {
+    let path = claude_dir.join(".credentials.json");
+    let Ok(bytes) = fs::read(&path) else {
+        return (false, None);
+    };
+    let parsed: std::result::Result<serde_json::Value, _> = serde_json::from_slice(&bytes);
+    match parsed {
+        Ok(v) => (true, plan_name_from_credentials(&v)),
+        Err(_) => (true, None),
+    }
+}
+
+/// Extract a flat text body from a Claude assistant message record.
+/// Returns `None` if no text parts are present.
+fn extract_message_text(v: &serde_json::Value) -> Option<String> {
+    let content = v.get("message")?.get("content")?;
+    let arr = content.as_array()?;
+    let mut out = String::new();
+    for part in arr {
+        if part.get("type").and_then(|x| x.as_str()) == Some("text") {
+            if let Some(t) = part.get("text").and_then(|x| x.as_str()) {
+                if !out.is_empty() {
+                    out.push(' ');
+                }
+                out.push_str(t);
+            }
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Enumerate `<projects_root>/<slug>/<uuid>.jsonl` files and return them
+/// sorted by mtime descending.
+fn list_transcript_files_by_mtime_desc(projects_root: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<(PathBuf, DateTime<Utc>)> = Vec::new();
+    let Ok(projects) = fs::read_dir(projects_root) else {
+        return Vec::new();
+    };
+    for entry in projects.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let proj_dir = entry.path();
+        let Ok(inner) = fs::read_dir(&proj_dir) else {
+            continue;
+        };
+        for f in inner.flatten() {
+            let p = f.path();
+            if p.extension().map(|e| e != "jsonl").unwrap_or(true) {
+                continue;
+            }
+            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if !is_full_uuid(stem) {
+                continue;
+            }
+            let ts = mtime(&p).unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
+            files.push((p, ts));
+        }
+    }
+    files.sort_by(|a, b| b.1.cmp(&a.1));
+    files.into_iter().map(|(p, _)| p).collect()
+}
+
+/// Scan `projects_root` for the most-recent `rate_limit` error event and
+/// return `(timestamp, optional_text_body)`. Bounded to the
+/// `PLAN_USAGE_RECENT_FILE_SCAN_LIMIT` most-recently-modified transcripts.
+fn find_latest_limit_hit(projects_root: &Path) -> Option<(DateTime<Utc>, Option<String>)> {
+    let files = list_transcript_files_by_mtime_desc(projects_root);
+    let mut latest: Option<(DateTime<Utc>, Option<String>)> = None;
+    for path in files.iter().take(PLAN_USAGE_RECENT_FILE_SCAN_LIMIT) {
+        let _ = for_each_jsonl(path, |v| {
+            if v.get("error").and_then(|x| x.as_str()) != Some("rate_limit") {
+                return;
+            }
+            let ts = match v
+                .get("timestamp")
+                .and_then(|x| x.as_str())
+                .and_then(parse_ts)
+            {
+                Some(t) => t,
+                None => return,
+            };
+            let text = extract_message_text(v);
+            match &latest {
+                Some((cur_ts, _)) if *cur_ts >= ts => {}
+                _ => latest = Some((ts, text)),
+            }
+        });
+    }
+    latest
+}
+
+/// Build the single `PlanUsage` entry (or none) for the Claude provider.
+/// Exposed as a free function for ease of testing with a mocked
+/// `projects_root`.
+fn plan_usage_for(projects_root: &Path) -> Result<Vec<PlanUsage>> {
+    let claude_dir = match projects_root.parent() {
+        Some(p) => p,
+        // Root path (e.g. "/"): treat as absent.
+        None => return Ok(vec![]),
+    };
+
+    let (creds_exist, plan_name) = read_credentials_plan(claude_dir);
+    let limit_hit = find_latest_limit_hit(projects_root);
+
+    if !creds_exist && limit_hit.is_none() {
+        return Ok(vec![]);
+    }
+
+    let label = match &plan_name {
+        Some(p) => format!("Claude Code · {}", p),
+        None => "Claude Code".to_string(),
+    };
+
+    let mut windows: Vec<PlanWindow> = Vec::new();
+    let last_limit_hit = limit_hit.as_ref().map(|(ts, _)| *ts);
+    if let Some((_, hint)) = &limit_hit {
+        windows.push(PlanWindow {
+            label: "last limit-hit".to_string(),
+            utilization: None,
+            reset_at: None,
+            reset_hint: hint.clone(),
+            binding: true,
+        });
+    }
+
+    let note = if plan_name.is_some() && last_limit_hit.is_none() {
+        Some("no utilization data available from transcripts".to_string())
+    } else {
+        None
+    };
+
+    Ok(vec![PlanUsage {
+        provider: ProviderKind::Claude,
+        label,
+        plan_name,
+        windows,
+        last_limit_hit,
+        note,
+    }])
 }
 
 fn is_full_uuid(s: &str) -> bool {
@@ -424,5 +626,164 @@ mod tests {
             serde_json::from_str(r#"{"input_tokens":1,"cache_creation_input_tokens":9}"#).unwrap();
         let s = snapshot_from_usage(&v);
         assert_eq!(s.cache_write_5m, 9);
+    }
+
+    // ---------------- plan_usage tests ----------------
+
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Minimal tempdir substitute: creates a unique directory under
+    /// `std::env::temp_dir()` and cleans it up on drop. We avoid pulling
+    /// in the `tempfile` crate as a dev-dep (see Cargo.toml constraints).
+    struct TestDir {
+        path: PathBuf,
+    }
+    impl TestDir {
+        fn new() -> Self {
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let pid = std::process::id();
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!("agtop-claude-test-{pid}-{ts}-{n}"));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// Build a temp `~/.claude/` dir for a test. Returns (guard, projects_root).
+    fn make_fake_claude_home() -> (TestDir, PathBuf) {
+        let td = TestDir::new();
+        let claude_dir = td.path().join(".claude");
+        let projects_root = claude_dir.join("projects");
+        fs::create_dir_all(&projects_root).unwrap();
+        (td, projects_root)
+    }
+
+    fn write_credentials(claude_dir: &Path, tier: &str, subscription: &str) {
+        let body = format!(
+            r#"{{"claudeAiOauth":{{"subscriptionType":"{}","rateLimitTier":"{}","accessToken":"x","refreshToken":"y","expiresAt":1774299600000}}}}"#,
+            subscription, tier
+        );
+        let mut f = fs::File::create(claude_dir.join(".credentials.json")).unwrap();
+        f.write_all(body.as_bytes()).unwrap();
+    }
+
+    fn write_jsonl(path: &Path, lines: &[&str]) {
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p).unwrap();
+        }
+        let mut f = fs::File::create(path).unwrap();
+        for l in lines {
+            f.write_all(l.as_bytes()).unwrap();
+            f.write_all(b"\n").unwrap();
+        }
+    }
+
+    #[test]
+    fn plan_name_mapping_covers_known_tiers() {
+        assert_eq!(
+            rate_limit_tier_to_plan_name("default_claude_pro"),
+            Some("Pro".to_string())
+        );
+        assert_eq!(
+            rate_limit_tier_to_plan_name("default_claude_max_5x"),
+            Some("Max 5x".to_string())
+        );
+        assert_eq!(
+            rate_limit_tier_to_plan_name("default_claude_max_20x"),
+            Some("Max 20x".to_string())
+        );
+        assert_eq!(rate_limit_tier_to_plan_name("something_else"), None);
+        assert_eq!(rate_limit_tier_to_plan_name(""), None);
+    }
+
+    #[test]
+    fn plan_usage_with_credentials_and_recent_limit_hit() {
+        let (_td, projects_root) = make_fake_claude_home();
+        let claude_dir = projects_root.parent().unwrap();
+        write_credentials(claude_dir, "default_claude_max_5x", "max");
+
+        let transcript = projects_root
+            .join("proj_x")
+            .join("02742fb3-d98e-4fa2-8184-2fddd7ee544d.jsonl");
+        let expected_ts_str = "2026-03-12T15:30:00.000Z";
+        let normal = r#"{"type":"assistant","message":{"model":"claude-sonnet-4","content":[{"type":"text","text":"hi"}]},"timestamp":"2026-03-12T15:00:00.000Z"}"#;
+        let limit = r#"{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You've hit your limit · resets 3pm (America/Buenos_Aires)"}]},"error":"rate_limit","timestamp":"2026-03-12T15:30:00.000Z"}"#;
+        write_jsonl(&transcript, &[normal, limit]);
+
+        let out = plan_usage_for(&projects_root).unwrap();
+        assert_eq!(out.len(), 1);
+        let pu = &out[0];
+        assert_eq!(pu.provider, ProviderKind::Claude);
+        assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
+        assert_eq!(pu.label, "Claude Code · Max 5x");
+        let expected_ts = parse_ts(expected_ts_str).unwrap();
+        assert_eq!(pu.last_limit_hit, Some(expected_ts));
+        assert_eq!(pu.windows.len(), 1);
+        let w = &pu.windows[0];
+        assert_eq!(w.label, "last limit-hit");
+        assert!(w.utilization.is_none());
+        assert!(w.reset_at.is_none());
+        assert!(w.binding);
+        let hint = w.reset_hint.as_deref().unwrap();
+        assert!(hint.contains("resets 3pm"), "hint was {:?}", hint);
+        // note should be None because we DO have a last_limit_hit.
+        assert!(pu.note.is_none());
+    }
+
+    #[test]
+    fn plan_usage_credentials_only_no_limit_hit() {
+        let (_td, projects_root) = make_fake_claude_home();
+        let claude_dir = projects_root.parent().unwrap();
+        write_credentials(claude_dir, "default_claude_pro", "pro");
+
+        // A transcript with no rate_limit errors.
+        let transcript = projects_root
+            .join("proj_y")
+            .join("12742fb3-d98e-4fa2-8184-2fddd7ee544d.jsonl");
+        let normal = r#"{"type":"assistant","message":{"model":"claude-sonnet-4","content":[{"type":"text","text":"hello"}]},"timestamp":"2026-03-12T15:00:00.000Z"}"#;
+        write_jsonl(&transcript, &[normal]);
+
+        let out = plan_usage_for(&projects_root).unwrap();
+        assert_eq!(out.len(), 1);
+        let pu = &out[0];
+        assert_eq!(pu.plan_name.as_deref(), Some("Pro"));
+        assert!(pu.windows.is_empty());
+        assert!(pu.last_limit_hit.is_none());
+        assert_eq!(
+            pu.note.as_deref(),
+            Some("no utilization data available from transcripts")
+        );
+    }
+
+    #[test]
+    fn plan_usage_no_credentials_no_transcripts() {
+        let (_td, projects_root) = make_fake_claude_home();
+        // No .credentials.json, no transcripts written.
+        let out = plan_usage_for(&projects_root).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn plan_usage_unknown_tier_falls_back_to_subscription_type() {
+        let (_td, projects_root) = make_fake_claude_home();
+        let claude_dir = projects_root.parent().unwrap();
+        write_credentials(claude_dir, "brand_new_tier", "max");
+
+        let out = plan_usage_for(&projects_root).unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].plan_name.as_deref(), Some("Max"));
     }
 }

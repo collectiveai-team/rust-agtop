@@ -6,7 +6,97 @@
 //! without a terminal backend. The rendering layer in
 //! [`super::widgets`] consumes an [`App`] snapshot via shared refs.
 
-use agtop_core::session::{CostBreakdown, SessionAnalysis, TokenTotals};
+use std::collections::VecDeque;
+
+use chrono::{DateTime, Utc};
+
+use agtop_core::session::{CostBreakdown, ProviderKind, SessionAnalysis, TokenTotals};
+
+// ---------------------------------------------------------------------------
+// Rolling usage history (for dashboard charts)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct UsagePoint {
+    pub ts: DateTime<Utc>,
+    pub tokens_by_provider: [u64; 3],
+}
+
+#[derive(Debug, Default)]
+pub struct UsageHistory {
+    points: VecDeque<UsagePoint>,
+}
+
+pub const CHART_WINDOW_MINS: i64 = 60;
+const RETENTION_SECS: i64 = CHART_WINDOW_MINS * 60 * 2;
+
+impl UsageHistory {
+    pub fn push(&mut self, point: UsagePoint) {
+        let cutoff = point.ts - chrono::Duration::seconds(RETENTION_SECS);
+        self.points.push_back(point);
+        while self.points.front().is_some_and(|p| p.ts < cutoff) {
+            self.points.pop_front();
+        }
+    }
+
+    pub fn points(&self) -> &VecDeque<UsagePoint> {
+        &self.points
+    }
+
+    pub fn buckets_by_provider(
+        &self,
+        now: DateTime<Utc>,
+        n_buckets: usize,
+        provider: ProviderKind,
+    ) -> Vec<u64> {
+        self.buckets_by_provider_idx(now, n_buckets, provider_idx(provider))
+    }
+
+    fn buckets_by_provider_idx(
+        &self,
+        now: DateTime<Utc>,
+        n_buckets: usize,
+        provider_idx: usize,
+    ) -> Vec<u64> {
+        if n_buckets == 0 {
+            return Vec::new();
+        }
+        let window_secs = CHART_WINDOW_MINS * 60;
+        let bucket_secs = (window_secs / n_buckets as i64).max(1);
+        let window_start = now - chrono::Duration::seconds(window_secs);
+        let mut out = vec![0u64; n_buckets];
+
+        for p in &self.points {
+            if p.ts < window_start {
+                continue;
+            }
+            let age_secs = (now - p.ts).num_seconds().max(0);
+            let bucket_from_end = (age_secs / bucket_secs) as usize;
+            if bucket_from_end >= n_buckets {
+                continue;
+            }
+            let bucket = n_buckets - 1 - bucket_from_end;
+            let v = p.tokens_by_provider[provider_idx];
+            out[bucket] = out[bucket].max(v);
+        }
+
+        out
+    }
+}
+
+fn provider_idx(kind: ProviderKind) -> usize {
+    match kind {
+        ProviderKind::Claude => 0,
+        ProviderKind::Codex => 1,
+        ProviderKind::OpenCode => 2,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiMode {
+    Classic,
+    Dashboard,
+}
 
 /// Columns the user can sort the session table by. Cycles via `F6` / `>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +251,12 @@ pub struct App {
     /// Last error we want to surface in the footer (e.g. refresh
     /// failure). Cleared on the next successful refresh.
     last_error: Option<String>,
+    /// Classic table/tabs view vs btop-like dashboard.
+    ui_mode: UiMode,
+    /// Rolling aggregate usage points for spark/line charts.
+    history: UsageHistory,
+    /// Plan usage snapshots per provider.
+    plan_usage: Vec<agtop_core::PlanUsage>,
 }
 
 impl Default for App {
@@ -183,6 +279,9 @@ impl App {
             should_quit: false,
             refresh_count: 0,
             last_error: None,
+            ui_mode: UiMode::Classic,
+            history: UsageHistory::default(),
+            plan_usage: Vec::new(),
         }
     }
 
@@ -211,6 +310,18 @@ impl App {
     }
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+    pub fn ui_mode(&self) -> UiMode {
+        self.ui_mode
+    }
+    pub fn history(&self) -> &UsageHistory {
+        &self.history
+    }
+    pub fn plan_usage(&self) -> &[agtop_core::PlanUsage] {
+        &self.plan_usage
+    }
+    pub fn sessions(&self) -> &[SessionAnalysis] {
+        &self.sessions
     }
 
     /// Build the sorted + filtered view of sessions that the table
@@ -258,8 +369,30 @@ impl App {
     /// Replace the underlying session list with a fresh snapshot. Tries
     /// to preserve the cursor on whichever session was selected before
     /// by matching on `session_id`; otherwise clamps to a valid row.
+    #[allow(dead_code)]
     pub fn set_sessions(&mut self, sessions: Vec<SessionAnalysis>) {
+        self.set_snapshot(sessions, self.plan_usage.clone());
+    }
+
+    /// Replace sessions + plan-usage in a single atomic swap.
+    pub fn set_snapshot(
+        &mut self,
+        sessions: Vec<SessionAnalysis>,
+        plan_usage: Vec<agtop_core::PlanUsage>,
+    ) {
+        let mut tokens_by_provider = [0u64; 3];
+        for a in &sessions {
+            let idx = provider_idx(a.summary.provider);
+            let tok = a.tokens.grand_total();
+            tokens_by_provider[idx] += tok;
+        }
+        self.history.push(UsagePoint {
+            ts: Utc::now(),
+            tokens_by_provider,
+        });
+
         self.sessions = sessions;
+        self.plan_usage = plan_usage;
         self.refresh_count = self.refresh_count.saturating_add(1);
         self.last_error = None;
         self.reconcile_selection();
@@ -340,8 +473,8 @@ impl App {
 
     /// Sort by `col` via mouse click on a header cell.
     /// - If `col` is already the active sort column, toggle the direction.
-    /// - Otherwise switch to `col` using its default direction.
-    /// In both cases the cursor jumps to the top of the new order.
+    /// - Otherwise, switch to `col` using its default direction.
+    ///   In both cases the cursor jumps to the top of the new order.
     pub fn set_sort_column(&mut self, col: SortColumn) {
         if self.sort_col == col {
             self.sort_dir = self.sort_dir.flip();
@@ -399,6 +532,17 @@ impl App {
     /// Ask the event loop to exit on its next tick.
     pub fn request_quit(&mut self) {
         self.should_quit = true;
+    }
+
+    pub fn toggle_ui_mode(&mut self) {
+        self.ui_mode = match self.ui_mode {
+            UiMode::Classic => UiMode::Dashboard,
+            UiMode::Dashboard => UiMode::Classic,
+        };
+    }
+
+    pub fn set_ui_mode(&mut self, mode: UiMode) {
+        self.ui_mode = mode;
     }
 
     // ---- internal helpers --------------------------------------------------

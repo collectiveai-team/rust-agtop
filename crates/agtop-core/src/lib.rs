@@ -21,7 +21,10 @@ pub mod session;
 pub use error::{Error, Result};
 pub use pricing::{Plan, PlanMode};
 pub use provider::Provider;
-pub use session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+pub use session::{
+    CostBreakdown, PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary,
+    TokenTotals,
+};
 
 use std::sync::Arc;
 
@@ -50,6 +53,23 @@ pub fn discover_all(providers: &[Arc<dyn Provider>]) -> Vec<SessionSummary> {
         }
     }
     out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
+    out
+}
+
+/// Collect plan-usage snapshots across all given providers. Errors from
+/// any single provider are logged and swallowed; the caller always gets
+/// the partial result. Empty vec means "no provider had anything to
+/// report" — not a fatal condition.
+pub fn plan_usage_all(providers: &[Arc<dyn Provider>]) -> Vec<PlanUsage> {
+    let mut out = Vec::new();
+    for p in providers {
+        match p.plan_usage() {
+            Ok(entries) => out.extend(entries),
+            Err(e) => {
+                tracing::warn!(provider = p.kind().as_str(), error = %e, "plan_usage failed")
+            }
+        }
+    }
     out
 }
 
