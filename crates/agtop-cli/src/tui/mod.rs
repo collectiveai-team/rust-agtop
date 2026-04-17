@@ -357,14 +357,30 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
         .divider("│");
 
     // Compute pixel-accurate hit-test ranges for each tab button.
-    // Tabs render as: title0 + "│" + title1 + "│" + title2, flush-left.
-    // Each divider is 1 terminal column wide.
+    //
+    // ratatui's `Tabs` widget renders each title with a 1-column left
+    // pad and 1-column right pad (verified against ratatui 0.29
+    // src/widgets/tabs.rs). A 1-column divider is placed *between*
+    // tabs; no trailing divider is emitted after the last tab. For
+    // titles t0..tN-1 with char-widths w0..wN-1 the full bar is
+    //   " t0 │ t1 │ ... │ tN-1 "
+    // and cell i (the clickable region for tab i) covers
+    //   [x_i, x_i + 2 + w_i)
+    // NOTE: `chars().count()` is only correct because current tab
+    // titles are pure ASCII. If non-ASCII titles are introduced,
+    // switch to `unicode-width::UnicodeWidthStr::width` and add the
+    // crate as a dependency.
     layout.tab_cells.clear();
     let mut x = rows[0].x;
-    for &tab in Tab::all() {
+    let tabs = Tab::all();
+    for (i, &tab) in tabs.iter().enumerate() {
         let w = tab.title().chars().count() as u16;
-        layout.tab_cells.push((x, x + w, tab));
-        x += w + 1; // +1 for the "│" divider
+        let cell_width = w + 2; // 1 pad left + title + 1 pad right
+        layout.tab_cells.push((x, x + cell_width, tab));
+        x += cell_width;
+        if i + 1 < tabs.len() {
+            x += 1; // divider column between tabs only
+        }
     }
 
     frame.render_widget(tab_bar, rows[0]);
