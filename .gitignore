@@ -3,6 +3,7 @@
 Cargo.lock.bak
 .DS_Store
 .ruff_cache/
+.worktrees/
 
 # .agents
 # opencode.jsonc
