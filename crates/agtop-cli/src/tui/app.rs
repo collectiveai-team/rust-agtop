@@ -15,12 +15,18 @@ pub enum SortColumn {
     LastActive,
     /// Provider name, then session id (ascending, alphabetical).
     Provider,
+    /// Session started-at timestamp (descending = newest first).
+    Started,
     /// Model string (ascending). Unknowns sort last.
     Model,
     /// Total dollar cost (descending). Included sessions count as 0.
     Cost,
     /// Grand-total token count (descending).
     Tokens,
+    /// Output-only token count (descending).
+    OutputTokens,
+    /// Cache token total (read + write, descending).
+    CacheTokens,
 }
 
 impl SortColumn {
@@ -28,10 +34,13 @@ impl SortColumn {
     pub fn next(self) -> Self {
         match self {
             Self::LastActive => Self::Provider,
-            Self::Provider => Self::Model,
+            Self::Provider => Self::Started,
+            Self::Started => Self::Model,
             Self::Model => Self::Cost,
             Self::Cost => Self::Tokens,
-            Self::Tokens => Self::LastActive,
+            Self::Tokens => Self::OutputTokens,
+            Self::OutputTokens => Self::CacheTokens,
+            Self::CacheTokens => Self::LastActive,
         }
     }
 
@@ -39,9 +48,12 @@ impl SortColumn {
         match self {
             Self::LastActive => "last-active",
             Self::Provider => "provider",
+            Self::Started => "started",
             Self::Model => "model",
             Self::Cost => "cost",
             Self::Tokens => "tokens",
+            Self::OutputTokens => "output",
+            Self::CacheTokens => "cache",
         }
     }
 
@@ -50,7 +62,12 @@ impl SortColumn {
     /// best alphabetically. Users can flip with the `>` prefix key.
     pub fn default_direction(self) -> SortDir {
         match self {
-            Self::LastActive | Self::Cost | Self::Tokens => SortDir::Desc,
+            Self::LastActive
+            | Self::Started
+            | Self::Cost
+            | Self::Tokens
+            | Self::OutputTokens
+            | Self::CacheTokens => SortDir::Desc,
             Self::Provider | Self::Model => SortDir::Asc,
         }
     }
@@ -280,6 +297,19 @@ impl App {
         self.update_sticky();
     }
 
+    /// Select a row by its absolute index in the current view. Clamps to
+    /// the last valid index; no-op on an empty list.
+    pub fn select_at(&mut self, idx: usize) {
+        let len = self.view_len();
+        if len == 0 {
+            self.selected_idx = None;
+            self.sticky_id = None;
+            return;
+        }
+        self.selected_idx = Some(idx.min(len - 1));
+        self.update_sticky();
+    }
+
     /// Jump to the last visible row.
     pub fn select_last(&mut self) {
         let len = self.view_len();
@@ -305,6 +335,19 @@ impl App {
     /// user wants "oldest first" or "cheapest first".
     pub fn flip_sort_direction(&mut self) {
         self.sort_dir = self.sort_dir.flip();
+        self.reconcile_selection();
+    }
+
+    /// Sort by `col` via mouse click on a header cell.
+    /// - If `col` is already the active sort column, toggle the direction.
+    /// - Otherwise switch to `col` using its default direction.
+    pub fn set_sort_column(&mut self, col: SortColumn) {
+        if self.sort_col == col {
+            self.sort_dir = self.sort_dir.flip();
+        } else {
+            self.sort_col = col;
+            self.sort_dir = col.default_direction();
+        }
         self.reconcile_selection();
     }
 
@@ -447,6 +490,7 @@ fn sort_view(view: &mut [&SessionAnalysis], col: SortColumn, dir: SortDir) {
                     p
                 }
             }
+            SortColumn::Started => a.summary.started_at.cmp(&b.summary.started_at),
             SortColumn::Model => {
                 cmp_opt_str(a.summary.model.as_deref(), b.summary.model.as_deref())
             }
@@ -456,6 +500,8 @@ fn sort_view(view: &mut [&SessionAnalysis], col: SortColumn, dir: SortDir) {
                 .partial_cmp(&b.cost.total)
                 .unwrap_or(Ordering::Equal),
             SortColumn::Tokens => grand_total(&a.tokens).cmp(&grand_total(&b.tokens)),
+            SortColumn::OutputTokens => a.tokens.output.cmp(&b.tokens.output),
+            SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
         };
         match dir {
             SortDir::Asc => ord,
@@ -478,6 +524,10 @@ fn cmp_opt_str(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
 
 fn grand_total(t: &TokenTotals) -> u64 {
     t.grand_total()
+}
+
+fn cache_total(t: &TokenTotals) -> u64 {
+    t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input
 }
 
 /// Small helper used by the Cost tab to format a single row uniformly.

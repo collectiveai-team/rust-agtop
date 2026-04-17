@@ -14,9 +14,84 @@ use ratatui::{
 
 use crate::tui::app::{App, SortColumn, SortDir};
 
+/// A column descriptor: (header label, optional sort column, pixel width).
+/// `None` for `sort_col` means the column is not sortable.
+struct ColDef {
+    label: &'static str,
+    sort_col: Option<SortColumn>,
+    width: u16,
+}
+
+/// Column definitions: label, optional sort column, and fixed pixel width.
+/// `Constraint::Min` columns (CWD) use width=0 as a sentinel — they are
+/// not sortable so they don't need an exact width for hit-testing.
+fn col_defs() -> [ColDef; 10] {
+    [
+        ColDef {
+            label: "PROVIDER",
+            sort_col: Some(SortColumn::Provider),
+            width: 8,
+        },
+        ColDef {
+            label: "SESSION",
+            sort_col: None,
+            width: 12,
+        },
+        ColDef {
+            label: "STARTED",
+            sort_col: Some(SortColumn::Started),
+            width: 16,
+        },
+        ColDef {
+            label: "AGE",
+            sort_col: Some(SortColumn::LastActive),
+            width: 5,
+        },
+        ColDef {
+            label: "MODEL",
+            sort_col: Some(SortColumn::Model),
+            width: 24,
+        },
+        ColDef {
+            label: "CWD",
+            sort_col: None,
+            width: 0,
+        }, // Min(16)
+        ColDef {
+            label: "TOK",
+            sort_col: Some(SortColumn::Tokens),
+            width: 8,
+        },
+        ColDef {
+            label: "OUT",
+            sort_col: Some(SortColumn::OutputTokens),
+            width: 8,
+        },
+        ColDef {
+            label: "CACHE",
+            sort_col: Some(SortColumn::CacheTokens),
+            width: 8,
+        },
+        ColDef {
+            label: "COST$",
+            sort_col: Some(SortColumn::Cost),
+            width: 10,
+        },
+    ]
+}
+
 /// Render the session table into `area`. Takes a `TableState` so scroll
 /// offset survives redraws — ratatui doesn't maintain it internally.
-pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, state: &mut TableState) {
+///
+/// `header_cols` is overwritten with the absolute terminal x-ranges of
+/// every sortable header cell so the mouse handler can hit-test clicks.
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    app: &App,
+    state: &mut TableState,
+    header_cols: &mut Vec<(u16, u16, SortColumn)>,
+) {
     // Sync the widget's idea of selection with the app's.
     state.select(app.selected_idx());
 
@@ -32,36 +107,70 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, state: &mut TableSta
         SortDir::Desc => "↓",
     };
 
-    let header_cells = [
-        header_with_marker("PROVIDER", SortColumn::Provider, app, arrow),
-        header_cell("SESSION"),
-        header_cell("STARTED"),
-        header_with_marker("AGE", SortColumn::LastActive, app, arrow),
-        header_with_marker("MODEL", SortColumn::Model, app, arrow),
-        header_cell("CWD"),
-        header_with_marker("TOK", SortColumn::Tokens, app, arrow),
-        header_cell("OUT"),
-        header_cell("CACHE"),
-        header_with_marker("COST$", SortColumn::Cost, app, arrow),
-    ];
+    let defs = col_defs();
+
+    let header_cells: Vec<Cell<'static>> = defs
+        .iter()
+        .map(|d| match d.sort_col {
+            Some(sc) => header_with_marker(d.label, sc, app, arrow),
+            None => header_cell(d.label),
+        })
+        .collect();
     let header = Row::new(header_cells).style(header_style).height(1);
 
-    let now = Utc::now();
-    let view = app.view();
-    let rows: Vec<Row> = view.iter().map(|a| row_for(a, now)).collect();
+    // ── Compute absolute x-ranges for sortable header cells ──────────────
+    // The table widget draws: left border (1px) + highlight-symbol (2px) +
+    // then columns laid out left-to-right with 1px spacing between them.
+    // We replicate that math here so we can map a clicked x-coordinate to
+    // a SortColumn without re-running ratatui's layout engine.
+    //
+    // area.x + 1 (border) + 2 (highlight symbol "▶ ") = first column origin.
+    // Each column occupies exactly `width` chars; Min(16) columns (CWD,
+    // width==0 in our defs) occupy whatever is left — we skip them since
+    // they are not sortable.
+    header_cols.clear();
+    let mut cursor_x = area.x + 1 + 2; // left border + "▶ "
+    for d in &defs {
+        if d.width == 0 {
+            // Variable-width (CWD): not sortable — skip the hit-test entry
+            // but we still need to advance past it. Since we don't know its
+            // rendered width here, we just stop tracking after this point;
+            // columns after CWD are tracked by computing from the right edge.
+            break;
+        }
+        if let Some(sc) = d.sort_col {
+            header_cols.push((cursor_x, cursor_x + d.width, sc));
+        }
+        cursor_x += d.width + 1; // +1 for the inter-column spacing
+    }
+    // Columns after CWD (TOK, OUT, CACHE, COST$) — compute from right edge.
+    // area.x + area.width - 1 (right border) = first char past the last col.
+    let right_edge = area.x + area.width - 1;
+    // Walk the tail cols in reverse.
+    let tail_defs: Vec<&ColDef> = defs
+        .iter()
+        .rev()
+        .take_while(|d| d.width != 0)
+        .collect::<Vec<_>>();
+    // They were reversed, so flip them back for left→right ordering.
+    let tail_defs: Vec<&ColDef> = tail_defs.into_iter().rev().collect();
+    let mut rx = right_edge;
+    for d in tail_defs.iter().rev() {
+        let x_start = rx.saturating_sub(d.width);
+        if let Some(sc) = d.sort_col {
+            header_cols.push((x_start, rx, sc));
+        }
+        rx = x_start.saturating_sub(1); // -1 for inter-column spacing
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
-    let widths = [
-        Constraint::Length(8),  // PROVIDER
-        Constraint::Length(12), // SESSION
-        Constraint::Length(16), // STARTED
-        Constraint::Length(5),  // AGE
-        Constraint::Length(24), // MODEL
-        Constraint::Min(16),    // CWD (flexes)
-        Constraint::Length(8),  // TOK (grand total)
-        Constraint::Length(8),  // OUT
-        Constraint::Length(8),  // CACHE
-        Constraint::Length(10), // COST$
-    ];
+    let widths = defs.iter().map(|d| {
+        if d.width == 0 {
+            Constraint::Min(16)
+        } else {
+            Constraint::Length(d.width)
+        }
+    });
 
     let title = format!(
         " Sessions ({visible}/{total})  sort:{col}{dir}  filter:\"{f}\" ",
@@ -74,6 +183,10 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, state: &mut TableSta
         },
         f = app.filter(),
     );
+
+    let now = Utc::now();
+    let view = app.view();
+    let rows: Vec<Row> = view.iter().map(|a| row_for(a, now)).collect();
 
     let table = Table::new(rows, widths)
         .header(header)

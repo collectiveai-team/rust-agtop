@@ -18,7 +18,8 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyboardEnhancementFlags,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        MouseButton, MouseEvent, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
@@ -38,6 +39,23 @@ use agtop_core::Provider;
 use app::{App, InputMode, Tab};
 use events::{apply_key, Action};
 use refresh::{RefreshHandle, RefreshMsg};
+
+/// Geometry of the last-rendered frame. Written by [`render`], read by
+/// the event loop to map mouse coordinates to UI regions.
+#[derive(Debug, Clone, Default)]
+struct UiLayout {
+    /// The full table widget area (including its border).
+    table_area: Rect,
+    /// The one-row tab bar area at the top of the bottom panel.
+    tab_bar_area: Rect,
+    /// Scroll offset of the table, so we can convert a clicked row-pixel
+    /// to the correct view index even when the list is scrolled.
+    table_scroll_offset: usize,
+    /// Absolute terminal x-ranges for each sortable header column.
+    /// Each entry: `(x_start, x_end_exclusive, SortColumn)`.
+    /// Populated by `widgets::session_table::render`.
+    header_cols: Vec<(u16, u16, app::SortColumn)>,
+}
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
 /// raises an IO error. On exit, the terminal is returned to its
@@ -79,6 +97,8 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
     // only happens on an event or a new snapshot; idle CPU is bounded
     // by this timeout.
     let poll_interval = Duration::from_millis(100);
+    // Geometry written by the last render call; used for mouse hit-testing.
+    let mut layout = UiLayout::default();
 
     loop {
         // 1. Drain any fresh snapshots from the background worker.
@@ -89,8 +109,11 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
             }
         }
 
-        // 2. Render.
-        terminal.draw(|f| render(f, app, &mut table_state))?;
+        // 2. Render and capture geometry for mouse hit-testing.
+        terminal.draw(|f| render(f, app, &mut table_state, &mut layout))?;
+        // Keep scroll offset in sync after every draw so clicks are mapped
+        // correctly even when the user has scrolled far down the list.
+        layout.table_scroll_offset = table_state.offset();
 
         if app.should_quit() {
             break;
@@ -104,6 +127,7 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
                     Action::None => {}
                     Action::ManualRefresh => handle.trigger_manual(),
                 },
+                Event::Mouse(m) => apply_mouse(app, m, &layout),
                 Event::Resize(_, _) => {
                     // Ratatui redraws the whole screen on every `draw()`
                     // call, so all we need to do is loop back. Keeping
@@ -118,8 +142,78 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
     Ok(())
 }
 
+/// Translate a crossterm mouse event into an App mutation. All geometry
+/// is sourced from the `UiLayout` captured during the previous render.
+fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
+    match event.kind {
+        // ── Scroll wheel anywhere ─────────────────────────────────────────
+        MouseEventKind::ScrollDown => app.move_selection(3),
+        MouseEventKind::ScrollUp => app.move_selection(-3),
+
+        // ── Left-click ────────────────────────────────────────────────────
+        MouseEventKind::Down(MouseButton::Left) => {
+            let (col, row) = (event.column, event.row);
+
+            // Click on the tab bar → cycle to the clicked tab.
+            if rect_contains(layout.tab_bar_area, col, row) {
+                let x_offset = col.saturating_sub(layout.tab_bar_area.x) as usize;
+                // Tab titles are rendered with a "│" divider between them.
+                // "Info" occupies ~4 chars, "│" = 1, "Cost" occupies ~4.
+                // Any click in the first ~4 columns = Info; anything after = Cost.
+                // We use a simple threshold: if x < 5 → Info, else Cost.
+                if x_offset < 5 {
+                    app.set_tab(Tab::Info);
+                } else {
+                    app.set_tab(Tab::Cost);
+                }
+                return;
+            }
+
+            // Click inside the table widget area.
+            if rect_contains(layout.table_area, col, row) {
+                let rel_row = row.saturating_sub(layout.table_area.y) as usize;
+                // rel_row 0 = top border, rel_row 1 = header row.
+                // Data rows start at rel_row 2.
+                if rel_row == 1 {
+                    // Header click → sort by the column under the cursor,
+                    // or toggle direction if it is already the active column.
+                    for &(x_start, x_end, sc) in &layout.header_cols {
+                        if col >= x_start && col < x_end {
+                            app.set_sort_column(sc);
+                            break;
+                        }
+                    }
+                } else if rel_row >= 2 {
+                    let data_row = rel_row - 2;
+                    let view_idx = layout.table_scroll_offset + data_row;
+                    app.select_at(view_idx);
+                }
+            }
+        }
+
+        _ => {}
+    }
+}
+
+/// Return true when `(col, row)` falls inside `rect` (all inclusive of
+/// the border).
+#[inline]
+fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x
+        && col < rect.x + rect.width
+        && row >= rect.y
+        && row < rect.y + rect.height
+}
+
 /// Compose the full UI: header + session table + bottom tabs + footer.
-fn render(frame: &mut Frame<'_>, app: &App, table_state: &mut ratatui::widgets::TableState) {
+/// Also writes the geometry of key areas into `layout` so the event
+/// loop can do mouse hit-testing without re-computing the split.
+fn render(
+    frame: &mut Frame<'_>,
+    app: &App,
+    table_state: &mut ratatui::widgets::TableState,
+    layout: &mut UiLayout,
+) {
     // Layout: 3 cells total — status header (1), split area (flex),
     // footer (1). The split area is 60/40 table-vs-bottompanel by
     // default; tests hit this layout via the TestBackend snapshots.
@@ -138,9 +232,12 @@ fn render(frame: &mut Frame<'_>, app: &App, table_state: &mut ratatui::widgets::
         ])
         .split(frame.area());
 
+    // Capture geometry for mouse hit-testing.
+    layout.table_area = outer[1];
+
     render_status(frame, outer[0], app);
-    widgets::session_table::render(frame, outer[1], app, table_state);
-    render_bottom_panel(frame, outer[2], app);
+    widgets::session_table::render(frame, outer[1], app, table_state, &mut layout.header_cols);
+    render_bottom_panel(frame, outer[2], app, layout);
     render_footer(frame, outer[3], app);
 }
 
@@ -173,12 +270,15 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(p, area);
 }
 
-fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App) {
+fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mut UiLayout) {
     // Two-row layout inside the panel: tab bar + the active tab body.
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
         .split(area);
+
+    // Capture the tab bar rect for mouse hit-testing.
+    layout.tab_bar_area = rows[0];
 
     let titles: Vec<Line<'_>> = Tab::all()
         .iter()
@@ -221,7 +321,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
         ),
         InputMode::Normal => (
             concat!(
-                " q:quit  j/k:↕  Enter/Tab:tab  /:filter  >:sort  i:dir  r:refresh  ",
+                " q:quit  j/k:↕  click:select  scroll:↕  Tab:tab  /:filter  >:sort  i:dir  r:refresh  ",
                 "g/G:top/bot  PgUp/PgDn:10"
             )
             .to_string(),
@@ -376,7 +476,7 @@ mod tests {
         let app = fixture_app();
         let mut state = ratatui::widgets::TableState::default();
         terminal
-            .draw(|f| render(f, &app, &mut state))
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
 
         let buffer = terminal.backend().buffer().clone();
@@ -400,7 +500,7 @@ mod tests {
         app.set_tab(Tab::Cost);
         let mut state = ratatui::widgets::TableState::default();
         terminal
-            .draw(|f| render(f, &app, &mut state))
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
         let contents = buffer_to_string(&terminal.backend().buffer().clone());
         assert!(contents.contains("bucket"), "bucket header missing:\n{contents}");
@@ -421,7 +521,7 @@ mod tests {
         app.push_filter_char('p');
         let mut state = ratatui::widgets::TableState::default();
         terminal
-            .draw(|f| render(f, &app, &mut state))
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
         let contents = buffer_to_string(&terminal.backend().buffer().clone());
         assert!(contents.contains("/op"), "filter prompt missing");
@@ -435,7 +535,7 @@ mod tests {
         app.set_sessions(vec![]);
         let mut state = ratatui::widgets::TableState::default();
         terminal
-            .draw(|f| render(f, &app, &mut state))
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
         let contents = buffer_to_string(&terminal.backend().buffer().clone());
         assert!(contents.contains("no session selected"));
