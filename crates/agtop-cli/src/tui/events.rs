@@ -9,7 +9,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::app::{App, InputMode};
+use super::app::{App, InputMode, Tab};
 
 /// A hint returned from [`apply_key`] so the event loop can take
 /// side-effect actions the pure state can't model (e.g. "refresh now").
@@ -83,6 +83,11 @@ fn apply_filter_key(app: &mut App, key: KeyEvent) -> Action {
 }
 
 fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
+    // When the Config tab is active, most keys are intercepted for column editing.
+    if app.tab() == Tab::Config {
+        return apply_config_key(app, key);
+    }
+
     match key.code {
         KeyCode::Char('q') | KeyCode::F(10) => {
             app.request_quit();
@@ -105,6 +110,30 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Char('d') => app.toggle_ui_mode(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        _ => {}
+    }
+    Action::None
+}
+
+fn apply_config_key(app: &mut App, key: KeyEvent) -> Action {
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    match key.code {
+        // Always allow quit and tab-switching from config.
+        KeyCode::Char('q') | KeyCode::F(10) => app.request_quit(),
+        KeyCode::Tab => app.next_tab(),
+        KeyCode::BackTab => app.prev_tab(),
+
+        // Cursor movement.
+        KeyCode::Char('j') | KeyCode::Down if !shift => app.config_move_down(),
+        KeyCode::Char('k') | KeyCode::Up if !shift => app.config_move_up(),
+
+        // Reorder (Shift+j/J or Shift+k/K or Shift+arrows).
+        KeyCode::Char('J') | KeyCode::Down if shift => app.config_move_column_down(),
+        KeyCode::Char('K') | KeyCode::Up if shift => app.config_move_column_up(),
+
+        // Toggle visibility.
+        KeyCode::Char(' ') | KeyCode::Enter => app.config_toggle(),
+
         _ => {}
     }
     Action::None

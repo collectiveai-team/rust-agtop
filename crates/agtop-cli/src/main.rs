@@ -541,6 +541,8 @@ struct JsonSession {
     tool_call_count: Option<u64>,
     duration_secs: Option<u64>,
     context_used_pct: Option<f64>,
+    context_used_tokens: Option<u64>,
+    context_window: Option<u64>,
     data_path: String,
 }
 
@@ -561,6 +563,8 @@ impl From<&SessionAnalysis> for JsonSession {
             tool_call_count: a.tool_call_count,
             duration_secs: a.duration_secs,
             context_used_pct: a.context_used_pct,
+            context_used_tokens: a.context_used_tokens,
+            context_window: a.context_window,
             data_path: a.summary.data_path.display().to_string(),
         }
     }

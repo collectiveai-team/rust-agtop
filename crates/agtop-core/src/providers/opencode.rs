@@ -9,6 +9,7 @@
 //! This provider tries SQLite first (preferred), then falls back to the legacy
 //! JSON layout so that old session history is still visible.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -54,12 +55,12 @@ impl Provider for OpenCodeProvider {
 
     fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
         let db_path = self.storage_root.join("opencode.db");
-        let subscription = read_subscription(&self.storage_root);
+        let subscriptions = read_subscriptions(&self.storage_root);
         let mut out = Vec::new();
 
         // --- SQLite path (v1.4+) ---
         if db_path.exists() {
-            match list_sessions_sqlite(&db_path) {
+            match list_sessions_sqlite(&db_path, &subscriptions) {
                 Ok(mut rows) => out.append(&mut rows),
                 Err(e) => {
                     tracing::warn!(path = %db_path.display(), error = %e, "opencode sqlite list failed")
@@ -70,14 +71,10 @@ impl Provider for OpenCodeProvider {
         // --- Legacy JSON path (v1.1 and earlier) ---
         let session_root = self.storage_root.join("storage").join("session");
         if dir_exists(&session_root) {
-            match list_sessions_json(&session_root, &self.storage_root) {
+            match list_sessions_json(&session_root, &self.storage_root, &subscriptions) {
                 Ok(mut rows) => out.append(&mut rows),
                 Err(e) => tracing::warn!(error = %e, "opencode json list failed"),
             }
-        }
-
-        for row in &mut out {
-            row.subscription = subscription.clone();
         }
 
         Ok(out)
@@ -120,40 +117,46 @@ fn read_json(path: &Path) -> Result<serde_json::Value> {
 }
 
 // ---------------------------------------------------------------------------
-// Plan usage (Anthropic OAuth snapshots in opencode.db)
+// Plan usage
 // ---------------------------------------------------------------------------
 
 fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
-    let auth_path = storage_root.join("auth.json");
+    let subscriptions = read_subscriptions(storage_root);
+    let auth_kinds = read_auth_kinds(storage_root);
     let db_path = storage_root.join("opencode.db");
 
-    let anthropic_auth = read_anthropic_auth_kind(&auth_path);
+    let mut oauth_providers: Vec<String> = auth_kinds
+        .iter()
+        .filter_map(|(provider_id, kind)| {
+            if *kind == AuthKind::Oauth {
+                Some(provider_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    oauth_providers.sort();
 
-    // Out of scope: raw API keys don't map to a user plan/quota pane.
-    if anthropic_auth == Some(AuthKind::Api) {
+    if oauth_providers.is_empty() {
         return Vec::new();
     }
 
-    // If we can't determine Anthropic OAuth auth and there's no DB to mine,
-    // we have nothing actionable to show.
-    if anthropic_auth.is_none() && !db_path.exists() {
-        return Vec::new();
-    }
+    let anthropic_oauth = auth_kinds.get("anthropic") == Some(&AuthKind::Oauth);
 
-    let mut windows: Vec<PlanWindow> = Vec::new();
-    let mut last_limit_hit: Option<DateTime<Utc>> = None;
-    let mut note: Option<String> = None;
+    let mut anthropic_windows: Vec<PlanWindow> = Vec::new();
+    let mut anthropic_last_limit_hit: Option<DateTime<Utc>> = None;
+    let mut anthropic_note: Option<String> = None;
 
-    if db_path.exists() {
+    if anthropic_oauth && db_path.exists() {
         match read_latest_anthropic_snapshot(&db_path) {
             Ok(Some(snapshot)) => {
-                last_limit_hit = ms_to_utc(snapshot.time_created_ms);
+                anthropic_last_limit_hit = ms_to_utc(snapshot.time_created_ms);
 
                 let bind_5h = snapshot.representative_claim.as_deref() == Some("five_hour");
                 let bind_7d = snapshot.representative_claim.as_deref() == Some("weekly");
 
                 if snapshot.util_5h.is_some() || snapshot.reset_5h.is_some() {
-                    windows.push(PlanWindow {
+                    anthropic_windows.push(PlanWindow {
                         label: "5h".to_string(),
                         utilization: snapshot.util_5h,
                         reset_at: snapshot
@@ -165,7 +168,7 @@ fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
                 }
 
                 if snapshot.util_7d.is_some() || snapshot.reset_7d.is_some() {
-                    windows.push(PlanWindow {
+                    anthropic_windows.push(PlanWindow {
                         label: "7d".to_string(),
                         utilization: snapshot.util_7d,
                         reset_at: snapshot
@@ -176,38 +179,45 @@ fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
                     });
                 }
             }
-            Ok(None) => {
-                if anthropic_auth == Some(AuthKind::Oauth) {
-                    note = Some("no recent rate-limit snapshot".to_string());
-                }
-            }
+            Ok(None) => anthropic_note = Some("no recent rate-limit snapshot".to_string()),
             Err(e) => {
                 tracing::debug!(path = %db_path.display(), error = %e, "opencode plan_usage query failed");
-                if anthropic_auth == Some(AuthKind::Oauth) {
-                    note = Some("no recent rate-limit snapshot".to_string());
-                }
+                anthropic_note = Some("no recent rate-limit snapshot".to_string());
             }
         }
-    } else if anthropic_auth == Some(AuthKind::Oauth) {
-        note = Some("no recent rate-limit snapshot".to_string());
+    } else if anthropic_oauth {
+        anthropic_note = Some("no recent rate-limit snapshot".to_string());
     }
 
-    // If we still don't have Anthropic OAuth, don't emit a vague card.
-    if anthropic_auth != Some(AuthKind::Oauth) {
-        return Vec::new();
+    let mut out = Vec::new();
+    for provider_id in oauth_providers {
+        if provider_id == "anthropic" {
+            out.push(PlanUsage {
+                provider: ProviderKind::OpenCode,
+                label: "OpenCode · Anthropic (Max)".to_string(),
+                plan_name: Some("Max".to_string()),
+                windows: anthropic_windows.clone(),
+                last_limit_hit: anthropic_last_limit_hit,
+                note: anthropic_note.clone(),
+            });
+            continue;
+        }
+
+        let plan_name = subscriptions
+            .get(&provider_id)
+            .cloned()
+            .unwrap_or_else(|| format!("{} (OAuth)", title_case_words(&provider_id)));
+        out.push(PlanUsage {
+            provider: ProviderKind::OpenCode,
+            label: format!("OpenCode · {plan_name}"),
+            plan_name: Some(plan_name),
+            windows: Vec::new(),
+            last_limit_hit: None,
+            note: Some("usage windows unavailable in OpenCode telemetry".to_string()),
+        });
     }
 
-    let plan_name = Some("Max".to_string());
-    let label = "OpenCode · Anthropic (Max)".to_string();
-
-    vec![PlanUsage {
-        provider: ProviderKind::OpenCode,
-        label,
-        plan_name,
-        windows,
-        last_limit_hit,
-        note,
-    }]
+    out
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,27 +226,210 @@ enum AuthKind {
     Api,
 }
 
-fn read_anthropic_auth_kind(auth_path: &Path) -> Option<AuthKind> {
-    let raw = fs::read_to_string(auth_path).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    match v
-        .get("anthropic")
-        .and_then(|x| x.get("type"))
-        .and_then(|x| x.as_str())
-    {
-        Some("oauth") => Some(AuthKind::Oauth),
-        Some("api") => Some(AuthKind::Api),
-        _ => None,
+fn read_auth_kinds(storage_root: &Path) -> HashMap<String, AuthKind> {
+    let auth_path = storage_root.join("auth.json");
+    let raw = match fs::read_to_string(&auth_path) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let Some(obj) = parsed.as_object() else {
+        return HashMap::new();
+    };
+
+    let mut out = HashMap::new();
+    for (provider_id, entry) in obj {
+        let kind = match entry.get("type").and_then(|x| x.as_str()) {
+            Some("oauth") => AuthKind::Oauth,
+            Some("api") => AuthKind::Api,
+            _ => continue,
+        };
+        out.insert(provider_id.to_string(), kind);
+    }
+    out
+}
+
+fn read_subscriptions(storage_root: &Path) -> HashMap<String, String> {
+    let auth_path = storage_root.join("auth.json");
+    let raw = match fs::read_to_string(&auth_path) {
+        Ok(s) => s,
+        Err(_) => return HashMap::new(),
+    };
+    let parsed: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return HashMap::new(),
+    };
+    let Some(obj) = parsed.as_object() else {
+        return HashMap::new();
+    };
+
+    let mut out = HashMap::new();
+    for (provider_id, entry) in obj {
+        let Some(label) = subscription_label_for_provider(provider_id, entry) else {
+            continue;
+        };
+        out.insert(provider_id.to_string(), label);
+    }
+    out
+}
+
+fn subscription_label_for_provider(
+    provider_id: &str,
+    auth_entry: &serde_json::Value,
+) -> Option<String> {
+    let auth_kind = match auth_entry.get("type").and_then(|x| x.as_str()) {
+        Some("oauth") => AuthKind::Oauth,
+        Some("api") => AuthKind::Api,
+        _ => return None,
+    };
+
+    match (provider_id, auth_kind) {
+        ("anthropic", AuthKind::Oauth) => Some("Anthropic Max".to_string()),
+        ("anthropic", AuthKind::Api) => Some("Anthropic API key".to_string()),
+        ("openai", AuthKind::Oauth) => {
+            read_openai_plan_name(auth_entry).or_else(|| Some("ChatGPT (OAuth)".to_string()))
+        }
+        ("openai", AuthKind::Api) => Some("OpenAI API key".to_string()),
+        ("github-copilot", AuthKind::Oauth) => Some("GitHub Copilot".to_string()),
+        ("github-copilot", AuthKind::Api) => Some("GitHub Copilot API key".to_string()),
+        ("amazon-bedrock", AuthKind::Oauth) => Some("Amazon Bedrock (OAuth)".to_string()),
+        ("amazon-bedrock", AuthKind::Api) => Some("Amazon Bedrock API key".to_string()),
+        (_, AuthKind::Oauth) => Some(format!("{} (OAuth)", title_case_words(provider_id))),
+        (_, AuthKind::Api) => Some(format!("{} API key", title_case_words(provider_id))),
     }
 }
 
-fn read_subscription(storage_root: &Path) -> Option<String> {
-    let auth_path = storage_root.join("auth.json");
-    match read_anthropic_auth_kind(&auth_path) {
-        Some(AuthKind::Oauth) => Some("Anthropic Max".to_string()),
-        Some(AuthKind::Api) => Some("API key".to_string()),
-        None => None,
+fn read_openai_plan_name(auth_entry: &serde_json::Value) -> Option<String> {
+    let token = auth_entry
+        .get("id_token")
+        .and_then(|x| x.as_str())
+        .or_else(|| auth_entry.get("access").and_then(|x| x.as_str()))?;
+    let payload_b64 = token.split('.').nth(1)?;
+    let bytes = base64url_decode(payload_b64)?;
+    let payload: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let auth = payload.get("https://api.openai.com/auth")?;
+    let plan_type = auth.get("chatgpt_plan_type").and_then(|x| x.as_str())?;
+    Some(map_openai_plan_type(plan_type))
+}
+
+fn map_openai_plan_type(raw: &str) -> String {
+    match raw {
+        "plus" => "ChatGPT Plus".to_string(),
+        "pro" => "ChatGPT Pro".to_string(),
+        "business" => "ChatGPT Business".to_string(),
+        "enterprise" => "ChatGPT Enterprise".to_string(),
+        other => title_case_words(other),
     }
+}
+
+fn title_case_words(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut make_upper = true;
+    for c in raw.chars() {
+        if c == '-' || c == '_' || c == ' ' {
+            out.push(' ');
+            make_upper = true;
+            continue;
+        }
+        if make_upper {
+            for up in c.to_uppercase() {
+                out.push(up);
+            }
+            make_upper = false;
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn resolve_subscription(
+    subscriptions: &HashMap<String, String>,
+    provider_id: Option<&str>,
+    model: Option<&str>,
+) -> Option<String> {
+    if let Some(provider) = provider_id {
+        if let Some(name) = subscriptions.get(provider) {
+            return Some(name.clone());
+        }
+    }
+
+    let inferred_provider = model.and_then(infer_provider_from_model);
+    inferred_provider.and_then(|provider| subscriptions.get(provider).cloned())
+}
+
+fn infer_provider_from_model(model: &str) -> Option<&'static str> {
+    let lower = model.to_ascii_lowercase();
+    for provider in [
+        "anthropic",
+        "openai",
+        "github-copilot",
+        "amazon-bedrock",
+        "opencode",
+    ] {
+        let slash = format!("{provider}/");
+        let dot = format!("{provider}.");
+        if lower.starts_with(&slash) || lower.starts_with(&dot) {
+            return Some(provider);
+        }
+    }
+    None
+}
+
+/// Decode a base64url-encoded string (RFC 4648 §5) — standard alphabet
+/// with `-`/`_` and optional padding. Returns `None` on any character or
+/// length error.
+fn base64url_decode(input: &str) -> Option<Vec<u8>> {
+    let mut s: String = input
+        .chars()
+        .map(|c| match c {
+            '-' => '+',
+            '_' => '/',
+            c => c,
+        })
+        .collect();
+    while s.len() % 4 != 0 {
+        s.push('=');
+    }
+
+    fn val(c: u8) -> Option<u8> {
+        match c {
+            b'A'..=b'Z' => Some(c - b'A'),
+            b'a'..=b'z' => Some(c - b'a' + 26),
+            b'0'..=b'9' => Some(c - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        if chunk.len() < 4 {
+            return None;
+        }
+        let pad = chunk.iter().rev().take_while(|&&b| b == b'=').count();
+        if pad > 2 {
+            return None;
+        }
+        let mut n = 0u32;
+        for (i, &b) in chunk.iter().enumerate() {
+            let v = if b == b'=' { 0 } else { val(b)? };
+            n |= (v as u32) << (18 - 6 * i);
+        }
+        out.push(((n >> 16) & 0xFF) as u8);
+        if pad < 2 {
+            out.push(((n >> 8) & 0xFF) as u8);
+        }
+        if pad < 1 {
+            out.push((n & 0xFF) as u8);
+        }
+    }
+    Some(out)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -317,7 +510,10 @@ fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
     .map_err(|e| Error::Other(format!("sqlite open {}: {e}", db_path.display())))
 }
 
-fn list_sessions_sqlite(db_path: &Path) -> Result<Vec<SessionSummary>> {
+fn list_sessions_sqlite(
+    db_path: &Path,
+    subscriptions: &HashMap<String, String>,
+) -> Result<Vec<SessionSummary>> {
     let conn = open_db(db_path)?;
     let mut stmt = conn
         .prepare(
@@ -340,12 +536,12 @@ fn list_sessions_sqlite(db_path: &Path) -> Result<Vec<SessionSummary>> {
         .map(|(id, cwd, created_ms, updated_ms)| {
             let started_at = created_ms.and_then(ms_to_utc);
             let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
-            // model is filled lazily from the first assistant message during analysis;
-            // we set it to None here and let analyze() resolve it.
-            let model = first_message_model_sqlite(&conn, &id);
+            let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
+            let subscription =
+                resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
             SessionSummary {
                 provider: ProviderKind::OpenCode,
-                subscription: None,
+                subscription,
                 session_id: id.clone(),
                 started_at,
                 last_active,
@@ -359,18 +555,24 @@ fn list_sessions_sqlite(db_path: &Path) -> Result<Vec<SessionSummary>> {
     Ok(rows)
 }
 
-fn first_message_model_sqlite(conn: &rusqlite::Connection, session_id: &str) -> Option<String> {
+fn first_message_identity_sqlite(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> (Option<String>, Option<String>) {
     conn.query_row(
-        "SELECT json_extract(data, '$.modelID') FROM message \
+        "SELECT json_extract(data, '$.modelID'), json_extract(data, '$.providerID') FROM message \
          WHERE session_id = ?1 \
            AND json_extract(data, '$.role') = 'assistant' \
          ORDER BY time_created ASC \
          LIMIT 1",
         rusqlite::params![session_id],
-        |row| row.get::<_, Option<String>>(0),
+        |row| {
+            let model: Option<String> = row.get(0)?;
+            let provider_id: Option<String> = row.get(1)?;
+            Ok((model, provider_id))
+        },
     )
-    .ok()
-    .flatten()
+    .unwrap_or((None, None))
 }
 
 fn analyze_session_sqlite(
@@ -394,6 +596,8 @@ fn analyze_session_sqlite(
     let mut saw = false;
     let mut tool_call_count: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
+    let mut context_used_tokens: Option<u64> = None;
+    let mut context_window: Option<u64> = None;
 
     let rows = stmt
         .query_map(rusqlite::params![&summary.session_id], |row| {
@@ -441,10 +645,15 @@ fn analyze_session_sqlite(
                     })
                     .unwrap_or(0);
                 let pct = (turn_total as f64 / window as f64) * 100.0;
+                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,
                 });
+                if is_new_peak {
+                    context_used_tokens = Some(turn_total);
+                    context_window = Some(window);
+                }
             }
         }
         if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
@@ -505,6 +714,8 @@ fn analyze_session_sqlite(
                 }
             }),
         context_used_pct,
+        context_used_tokens,
+        context_window,
     })
 }
 
@@ -512,7 +723,11 @@ fn analyze_session_sqlite(
 // Legacy JSON backend (v1.1 and earlier)
 // ---------------------------------------------------------------------------
 
-fn list_sessions_json(session_root: &Path, storage_root: &Path) -> Result<Vec<SessionSummary>> {
+fn list_sessions_json(
+    session_root: &Path,
+    storage_root: &Path,
+    subscriptions: &HashMap<String, String>,
+) -> Result<Vec<SessionSummary>> {
     let mut out = Vec::new();
     let project_dirs = match fs::read_dir(session_root) {
         Ok(r) => r,
@@ -531,7 +746,7 @@ fn list_sessions_json(session_root: &Path, storage_root: &Path) -> Result<Vec<Se
             if p.extension().map(|e| e != "json").unwrap_or(true) {
                 continue;
             }
-            match summarize_opencode_session_json(&p, storage_root) {
+            match summarize_opencode_session_json(&p, storage_root, subscriptions) {
                 Ok(s) => out.push(s),
                 Err(e) => {
                     tracing::debug!(path = %p.display(), error = %e, "skip opencode json session");
@@ -546,6 +761,7 @@ fn list_sessions_json(session_root: &Path, storage_root: &Path) -> Result<Vec<Se
 fn summarize_opencode_session_json(
     session_file: &Path,
     storage_root: &Path,
+    subscriptions: &HashMap<String, String>,
 ) -> Result<SessionSummary> {
     let v = read_json(session_file)?;
     let session_id = v
@@ -573,11 +789,13 @@ fn summarize_opencode_session_json(
         .join("storage")
         .join("message")
         .join(&session_id);
-    let model = first_message_model_json(&msg_dir);
+    let (model, provider_id) = first_message_identity_json(&msg_dir);
+    let subscription =
+        resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
 
     Ok(SessionSummary {
         provider: ProviderKind::OpenCode,
-        subscription: None,
+        subscription,
         session_id,
         started_at: created,
         last_active: updated.or(created),
@@ -587,11 +805,14 @@ fn summarize_opencode_session_json(
     })
 }
 
-fn first_message_model_json(msg_dir: &Path) -> Option<String> {
+fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
     if !dir_exists(msg_dir) {
-        return None;
+        return (None, None);
     }
-    let entries = fs::read_dir(msg_dir).ok()?;
+    let entries = match fs::read_dir(msg_dir) {
+        Ok(entries) => entries,
+        Err(_) => return (None, None),
+    };
     for f in entries.flatten() {
         let p = f.path();
         if p.extension().map(|e| e != "json").unwrap_or(true) {
@@ -599,11 +820,15 @@ fn first_message_model_json(msg_dir: &Path) -> Option<String> {
         }
         if let Ok(v) = read_json(&p) {
             if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
-                return Some(m.to_string());
+                let provider_id = v
+                    .get("providerID")
+                    .and_then(|x| x.as_str())
+                    .map(|s| s.to_string());
+                return (Some(m.to_string()), provider_id);
             }
         }
     }
-    None
+    (None, None)
 }
 
 fn analyze_opencode_session_json(
@@ -625,6 +850,8 @@ fn analyze_opencode_session_json(
     let mut saw = false;
     let mut tool_call_count: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
+    let mut context_used_tokens: Option<u64> = None;
+    let mut context_window: Option<u64> = None;
 
     let entries = fs::read_dir(&msg_dir)?;
     for f in entries.flatten() {
@@ -668,10 +895,15 @@ fn analyze_opencode_session_json(
                     })
                     .unwrap_or(0);
                 let pct = (turn_total as f64 / window as f64) * 100.0;
+                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,
                 });
+                if is_new_peak {
+                    context_used_tokens = Some(turn_total);
+                    context_window = Some(window);
+                }
             }
         }
         if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
@@ -732,6 +964,8 @@ fn analyze_opencode_session_json(
                 }
             }),
         context_used_pct,
+        context_used_tokens,
+        context_window,
     })
 }
 
@@ -773,6 +1007,14 @@ mod tests {
         fs::write(
             root.join("auth.json"),
             serde_json::to_vec(&auth).expect("auth json"),
+        )
+        .expect("write auth.json");
+    }
+
+    fn write_auth_json_value(root: &Path, v: serde_json::Value) {
+        fs::write(
+            root.join("auth.json"),
+            serde_json::to_vec(&v).expect("auth json"),
         )
         .expect("write auth.json");
     }
@@ -880,5 +1122,102 @@ mod tests {
         let pu = &out[0];
         assert_eq!(pu.note.as_deref(), Some("no recent rate-limit snapshot"));
         assert!(pu.windows.is_empty());
+    }
+
+    #[test]
+    fn plan_usage_emits_cards_for_multiple_oauth_providers() {
+        let tmp = TestDir::new("agtop-opencode-plan-multi-oauth");
+        let auth = serde_json::json!({
+            "anthropic": {"type": "oauth", "access": "x"},
+            "openai": {"type": "oauth", "access": "not-a-jwt"},
+            "github-copilot": {"type": "oauth", "access": "x"}
+        });
+        write_auth_json_value(&tmp.path, auth);
+        init_db(&tmp.path);
+
+        let provider = OpenCodeProvider {
+            storage_root: tmp.path.clone(),
+        };
+        let out = provider.plan_usage().expect("plan_usage");
+
+        assert_eq!(out.len(), 3);
+        let anthropic = out
+            .iter()
+            .find(|pu| pu.label == "OpenCode · Anthropic (Max)")
+            .expect("anthropic card");
+        assert_eq!(anthropic.plan_name.as_deref(), Some("Max"));
+        assert_eq!(
+            anthropic.note.as_deref(),
+            Some("no recent rate-limit snapshot")
+        );
+
+        let openai = out
+            .iter()
+            .find(|pu| pu.label == "OpenCode · ChatGPT (OAuth)")
+            .expect("openai card");
+        assert_eq!(openai.windows.len(), 0);
+        assert_eq!(
+            openai.note.as_deref(),
+            Some("usage windows unavailable in OpenCode telemetry")
+        );
+
+        let copilot = out
+            .iter()
+            .find(|pu| pu.label == "OpenCode · GitHub Copilot")
+            .expect("copilot card");
+        assert_eq!(copilot.plan_name.as_deref(), Some("GitHub Copilot"));
+    }
+
+    #[test]
+    fn read_subscriptions_maps_multiple_providers() {
+        let tmp = TestDir::new("agtop-opencode-subscriptions");
+        let auth = serde_json::json!({
+            "anthropic": {"type": "oauth", "access": "x"},
+            "openai": {"type": "oauth", "access": "not-a-jwt"},
+            "github-copilot": {"type": "oauth", "access": "x"},
+            "amazon-bedrock": {"type": "api", "key": "x"}
+        });
+        write_auth_json_value(&tmp.path, auth);
+
+        let subscriptions = read_subscriptions(&tmp.path);
+        assert_eq!(
+            subscriptions.get("anthropic").map(String::as_str),
+            Some("Anthropic Max")
+        );
+        assert_eq!(
+            subscriptions.get("openai").map(String::as_str),
+            Some("ChatGPT (OAuth)")
+        );
+        assert_eq!(
+            subscriptions.get("github-copilot").map(String::as_str),
+            Some("GitHub Copilot")
+        );
+        assert_eq!(
+            subscriptions.get("amazon-bedrock").map(String::as_str),
+            Some("Amazon Bedrock API key")
+        );
+    }
+
+    #[test]
+    fn resolve_subscription_prefers_provider_id_over_model_name() {
+        let mut subscriptions = HashMap::new();
+        subscriptions.insert("anthropic".to_string(), "Anthropic Max".to_string());
+        subscriptions.insert("openai".to_string(), "ChatGPT Plus".to_string());
+
+        let got = resolve_subscription(
+            &subscriptions,
+            Some("openai"),
+            Some("anthropic/claude-opus-4-6"),
+        );
+        assert_eq!(got.as_deref(), Some("ChatGPT Plus"));
+    }
+
+    #[test]
+    fn resolve_subscription_falls_back_to_model_prefix() {
+        let mut subscriptions = HashMap::new();
+        subscriptions.insert("openai".to_string(), "ChatGPT Plus".to_string());
+
+        let got = resolve_subscription(&subscriptions, None, Some("openai/gpt-5.4"));
+        assert_eq!(got.as_deref(), Some("ChatGPT Plus"));
     }
 }

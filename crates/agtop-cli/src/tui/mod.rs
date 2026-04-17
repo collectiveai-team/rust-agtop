@@ -6,6 +6,7 @@
 //! methods; all rendering through [`widgets`].
 
 pub mod app;
+pub mod column_config;
 mod events;
 mod refresh;
 pub mod widgets;
@@ -166,13 +167,14 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
             if rect_contains(layout.tab_bar_area, col, row) {
                 let x_offset = col.saturating_sub(layout.tab_bar_area.x) as usize;
                 // Tab titles are rendered with a "│" divider between them.
-                // "Info" occupies ~4 chars, "│" = 1, "Cost" occupies ~4.
-                // Any click in the first ~4 columns = Info; anything after = Cost.
-                // We use a simple threshold: if x < 5 → Info, else Cost.
+                // "Info"=4 chars, "│"=1, "Cost"=4, "│"=1, "Config"=6.
+                // Thresholds: 0..4 = Info, 5..9 = Cost, 10+ = Config.
                 if x_offset < 5 {
                     app.set_tab(Tab::Info);
-                } else {
+                } else if x_offset < 10 {
                     app.set_tab(Tab::Cost);
+                } else {
+                    app.set_tab(Tab::Config);
                 }
                 return;
             }
@@ -348,6 +350,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
         .select(match app.tab() {
             Tab::Info => 0,
             Tab::Cost => 1,
+            Tab::Config => 2,
         })
         .block(Block::default().borders(Borders::NONE))
         .divider("│");
@@ -357,6 +360,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     match app.tab() {
         Tab::Info => widgets::info_tab::render(frame, rows[1], app),
         Tab::Cost => widgets::cost_tab::render(frame, rows[1], app),
+        Tab::Config => widgets::config_tab::render(frame, rows[1], app),
     }
 }
 
@@ -482,6 +486,8 @@ mod tests {
             tool_call_count: None,
             duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
             context_used_pct: None,
+            context_used_tokens: None,
+            context_window: None,
         };
 
         let s2 = SessionAnalysis {
@@ -512,6 +518,8 @@ mod tests {
             tool_call_count: Some(12),
             duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
             context_used_pct: Some(38.2),
+            context_used_tokens: Some(98_380),
+            context_window: Some(258_400),
         };
 
         let mut app = App::new();

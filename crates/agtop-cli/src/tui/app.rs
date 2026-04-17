@@ -12,6 +12,8 @@ use chrono::{DateTime, Utc};
 
 use agtop_core::session::{CostBreakdown, ProviderKind, SessionAnalysis, TokenTotals};
 
+use super::column_config::ColumnConfig;
+
 // ---------------------------------------------------------------------------
 // Rolling usage history (for dashboard charts)
 // ---------------------------------------------------------------------------
@@ -117,6 +119,10 @@ pub enum SortColumn {
     OutputTokens,
     /// Cache token total (read + write, descending).
     CacheTokens,
+    /// Number of tool calls (descending). None sorts last.
+    ToolCalls,
+    /// Session wall-clock duration in seconds (descending). None sorts last.
+    Duration,
 }
 
 impl SortColumn {
@@ -130,7 +136,9 @@ impl SortColumn {
             Self::Cost => Self::Tokens,
             Self::Tokens => Self::OutputTokens,
             Self::OutputTokens => Self::CacheTokens,
-            Self::CacheTokens => Self::LastActive,
+            Self::CacheTokens => Self::ToolCalls,
+            Self::ToolCalls => Self::Duration,
+            Self::Duration => Self::LastActive,
         }
     }
 
@@ -144,6 +152,8 @@ impl SortColumn {
             Self::Tokens => "tokens",
             Self::OutputTokens => "output",
             Self::CacheTokens => "cache",
+            Self::ToolCalls => "tool-calls",
+            Self::Duration => "duration",
         }
     }
 
@@ -157,7 +167,9 @@ impl SortColumn {
             | Self::Cost
             | Self::Tokens
             | Self::OutputTokens
-            | Self::CacheTokens => SortDir::Desc,
+            | Self::CacheTokens
+            | Self::ToolCalls
+            | Self::Duration => SortDir::Desc,
             Self::Provider | Self::Model => SortDir::Asc,
         }
     }
@@ -178,35 +190,41 @@ impl SortDir {
     }
 }
 
-/// Bottom-panel tab selector. Only Info/Cost in the MVP; other tabs are
-/// a follow-up.
+/// Bottom-panel tab selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Info,
     Cost,
+    Config,
 }
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Info, Tab::Cost]
+        &[Tab::Info, Tab::Cost, Tab::Config]
     }
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Info => "Info",
             Self::Cost => "Cost",
+            Self::Config => "Config",
         }
     }
 
     pub fn cycle_forward(self) -> Self {
         match self {
             Self::Info => Self::Cost,
-            Self::Cost => Self::Info,
+            Self::Cost => Self::Config,
+            Self::Config => Self::Info,
         }
     }
 
     pub fn cycle_back(self) -> Self {
-        self.cycle_forward()
+        match self {
+            Self::Info => Self::Config,
+            Self::Cost => Self::Info,
+            Self::Config => Self::Cost,
+        }
     }
 }
 
@@ -257,6 +275,10 @@ pub struct App {
     history: UsageHistory,
     /// Plan usage snapshots per provider.
     plan_usage: Vec<agtop_core::PlanUsage>,
+    /// Persistent column configuration (visibility + order).
+    column_config: ColumnConfig,
+    /// Selected row index in the Config tab column list.
+    config_cursor: usize,
 }
 
 impl Default for App {
@@ -282,6 +304,8 @@ impl App {
             ui_mode: UiMode::Classic,
             history: UsageHistory::default(),
             plan_usage: Vec::new(),
+            column_config: ColumnConfig::load(),
+            config_cursor: 0,
         }
     }
 
@@ -322,6 +346,55 @@ impl App {
     }
     pub fn sessions(&self) -> &[SessionAnalysis] {
         &self.sessions
+    }
+    pub fn column_config(&self) -> &ColumnConfig {
+        &self.column_config
+    }
+    /// Save column config to disk (called after mutations in the config tab).
+    #[allow(dead_code)]
+    pub fn save_column_config(&self) {
+        self.column_config.save();
+    }
+
+    // ---- Config tab ---------------------------------------------------------
+
+    pub fn config_cursor(&self) -> usize {
+        self.config_cursor
+    }
+
+    pub fn config_move_up(&mut self) {
+        if self.config_cursor > 0 {
+            self.config_cursor -= 1;
+        }
+    }
+
+    pub fn config_move_down(&mut self) {
+        let max = self.column_config.columns.len().saturating_sub(1);
+        if self.config_cursor < max {
+            self.config_cursor += 1;
+        }
+    }
+
+    pub fn config_toggle(&mut self) {
+        self.column_config.toggle(self.config_cursor);
+        self.column_config.save();
+    }
+
+    pub fn config_move_column_up(&mut self) {
+        if self.config_cursor > 0 {
+            self.column_config.move_up(self.config_cursor);
+            self.config_cursor -= 1;
+            self.column_config.save();
+        }
+    }
+
+    pub fn config_move_column_down(&mut self) {
+        let max = self.column_config.columns.len().saturating_sub(1);
+        if self.config_cursor < max {
+            self.column_config.move_down(self.config_cursor);
+            self.config_cursor += 1;
+            self.column_config.save();
+        }
     }
 
     /// Build the sorted + filtered view of sessions that the table
@@ -648,12 +721,25 @@ fn sort_view(view: &mut [&SessionAnalysis], col: SortColumn, dir: SortDir) {
             SortColumn::Tokens => grand_total(&a.tokens).cmp(&grand_total(&b.tokens)),
             SortColumn::OutputTokens => a.tokens.output.cmp(&b.tokens.output),
             SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
+            SortColumn::ToolCalls => cmp_opt_u64(a.tool_call_count, b.tool_call_count),
+            SortColumn::Duration => cmp_opt_u64(a.duration_secs, b.duration_secs),
         };
         match dir {
             SortDir::Asc => ord,
             SortDir::Desc => ord.reverse(),
         }
     });
+}
+
+/// Treat `None` as "sorts after everything" regardless of direction.
+fn cmp_opt_u64(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
+    }
 }
 
 /// Treat `None` as "sorts after everything" regardless of direction so
@@ -762,6 +848,8 @@ mod tests {
             tool_call_count: None,
             duration_secs: Some(0),
             context_used_pct: None,
+            context_used_tokens: None,
+            context_window: None,
         }
     }
 
@@ -965,6 +1053,8 @@ mod tests {
         assert_eq!(app.tab(), Tab::Info);
         app.next_tab();
         assert_eq!(app.tab(), Tab::Cost);
+        app.next_tab();
+        assert_eq!(app.tab(), Tab::Config);
         app.next_tab();
         assert_eq!(app.tab(), Tab::Info);
     }

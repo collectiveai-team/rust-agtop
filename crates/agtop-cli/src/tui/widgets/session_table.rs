@@ -13,77 +13,7 @@ use ratatui::{
 };
 
 use crate::tui::app::{App, SortColumn, SortDir};
-
-/// A column descriptor: (header label, optional sort column, pixel width).
-/// `None` for `sort_col` means the column is not sortable.
-struct ColDef {
-    label: &'static str,
-    sort_col: Option<SortColumn>,
-    width: u16,
-}
-
-/// Column definitions: label, optional sort column, and fixed pixel width.
-/// `Constraint::Min` columns (CWD) use width=0 as a sentinel — they are
-/// not sortable so they don't need an exact width for hit-testing.
-fn col_defs() -> [ColDef; 11] {
-    [
-        ColDef {
-            label: "PROVIDER",
-            sort_col: Some(SortColumn::Provider),
-            width: 8,
-        },
-        ColDef {
-            label: "SUB",
-            sort_col: None,
-            width: 16,
-        },
-        ColDef {
-            label: "SESSION",
-            sort_col: None,
-            width: 12,
-        },
-        ColDef {
-            label: "STARTED",
-            sort_col: Some(SortColumn::Started),
-            width: 16,
-        },
-        ColDef {
-            label: "AGE",
-            sort_col: Some(SortColumn::LastActive),
-            width: 5,
-        },
-        ColDef {
-            label: "MODEL",
-            sort_col: Some(SortColumn::Model),
-            width: 24,
-        },
-        ColDef {
-            label: "CWD",
-            sort_col: None,
-            width: 0,
-        }, // Min(16)
-        ColDef {
-            label: "TOK",
-            sort_col: Some(SortColumn::Tokens),
-            width: 8,
-        },
-        ColDef {
-            label: "OUT",
-            sort_col: Some(SortColumn::OutputTokens),
-            width: 8,
-        },
-        ColDef {
-            label: "CACHE",
-            sort_col: Some(SortColumn::CacheTokens),
-            width: 8,
-        },
-        ColDef {
-            label: "COST$",
-            sort_col: Some(SortColumn::Cost),
-            width: 10,
-        },
-    ]
-}
+use crate::tui::column_config::ColumnId;
 
 /// Render the session table into `area`. Takes a `TableState` so scroll
 /// offset survives redraws — ratatui doesn't maintain it internally.
@@ -112,13 +42,17 @@ pub fn render(
         SortDir::Desc => "↓",
     };
 
-    let defs = col_defs();
+    let col_cfg = app.column_config();
+    let visible = col_cfg.visible();
 
-    let header_cells: Vec<Cell<'static>> = defs
+    let header_cells: Vec<Cell<'static>> = visible
         .iter()
-        .map(|d| match d.sort_col {
-            Some(sc) => header_with_marker(d.label, sc, app, arrow),
-            None => header_cell(d.label),
+        .map(|&col_id| {
+            let label = col_id.label();
+            match col_id.sort_col() {
+                Some(sc) => header_with_marker(label, sc, app, arrow),
+                None => header_cell(label),
+            }
         })
         .collect();
     let header = Row::new(header_cells).style(header_style).height(1);
@@ -126,56 +60,61 @@ pub fn render(
     // ── Compute absolute x-ranges for sortable header cells ──────────────
     // The table widget draws: left border (1px) + highlight-symbol (2px) +
     // then columns laid out left-to-right with 1px spacing between them.
-    // We replicate that math here so we can map a clicked x-coordinate to
-    // a SortColumn without re-running ratatui's layout engine.
-    //
-    // area.x + 1 (border) + 2 (highlight symbol "▶ ") = first column origin.
-    // Each column occupies exactly `width` chars; Min(16) columns (CWD,
-    // width==0 in our defs) occupy whatever is left — we skip them since
-    // they are not sortable.
     header_cols.clear();
     let mut cursor_x = area.x + 1 + 2; // left border + "▶ "
-    for d in &defs {
-        if d.width == 0 {
-            // Variable-width (CWD): not sortable — skip the hit-test entry
-            // but we still need to advance past it. Since we don't know its
-            // rendered width here, we just stop tracking after this point;
-            // columns after CWD are tracked by computing from the right edge.
+
+    // Walk all visible columns. Stop tracking when we hit a flexible (CWD)
+    // column since we don't know its rendered width here.
+    let mut hit_flexible = false;
+    for &col_id in &visible {
+        if hit_flexible {
             break;
         }
-        if let Some(sc) = d.sort_col {
-            header_cols.push((cursor_x, cursor_x + d.width, sc));
+        if col_id.is_flexible() {
+            hit_flexible = true;
+            continue;
         }
-        cursor_x += d.width + 1; // +1 for the inter-column spacing
+        let w = col_id.fixed_width().unwrap_or(0);
+        if let Some(sc) = col_id.sort_col() {
+            header_cols.push((cursor_x, cursor_x + w, sc));
+        }
+        cursor_x += w + 1; // +1 for the inter-column spacing
     }
-    // Columns after CWD (TOK, OUT, CACHE, COST$) — compute from right edge.
-    // area.x + area.width - 1 (right border) = first char past the last col.
-    let right_edge = area.x + area.width - 1;
-    // Walk the tail cols in reverse.
-    let tail_defs: Vec<&ColDef> = defs
-        .iter()
-        .rev()
-        .take_while(|d| d.width != 0)
-        .collect::<Vec<_>>();
-    // They were reversed, so flip them back for left→right ordering.
-    let tail_defs: Vec<&ColDef> = tail_defs.into_iter().rev().collect();
-    let mut rx = right_edge;
-    for d in tail_defs.iter().rev() {
-        let x_start = rx.saturating_sub(d.width);
-        if let Some(sc) = d.sort_col {
-            header_cols.push((x_start, rx, sc));
+
+    // Columns after the flexible CWD column — compute from right edge.
+    if hit_flexible {
+        let right_edge = area.x + area.width - 1;
+        let tail: Vec<ColumnId> = visible
+            .iter()
+            .rev()
+            .take_while(|&&id| !id.is_flexible())
+            .copied()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let mut rx = right_edge;
+        for col_id in tail.iter().rev() {
+            let w = col_id.fixed_width().unwrap_or(0);
+            let x_start = rx.saturating_sub(w);
+            if let Some(sc) = col_id.sort_col() {
+                header_cols.push((x_start, rx, sc));
+            }
+            rx = x_start.saturating_sub(1);
         }
-        rx = x_start.saturating_sub(1); // -1 for inter-column spacing
     }
     // ─────────────────────────────────────────────────────────────────────
 
-    let widths = defs.iter().map(|d| {
-        if d.width == 0 {
-            Constraint::Min(16)
-        } else {
-            Constraint::Length(d.width)
-        }
-    });
+    let widths: Vec<Constraint> = visible
+        .iter()
+        .map(|&col_id| {
+            if col_id.is_flexible() {
+                Constraint::Min(16)
+            } else {
+                Constraint::Length(col_id.fixed_width().unwrap_or(8))
+            }
+        })
+        .collect();
 
     let title = format!(
         " Sessions ({visible}/{total})  sort:{col}{dir}  filter:\"{f}\" ",
@@ -191,7 +130,7 @@ pub fn render(
 
     let now = Utc::now();
     let view = app.view();
-    let rows: Vec<Row> = view.iter().map(|a| row_for(a, now)).collect();
+    let rows: Vec<Row> = view.iter().map(|a| row_for(a, now, &visible)).collect();
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -226,7 +165,11 @@ fn header_with_marker(
     }
 }
 
-fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) -> Row<'a> {
+fn row_for<'a>(
+    a: &'a agtop_core::session::SessionAnalysis,
+    now: DateTime<Utc>,
+    visible: &[ColumnId],
+) -> Row<'a> {
     let s = &a.summary;
     let t = &a.tokens;
     let c = &a.cost;
@@ -237,12 +180,12 @@ fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) 
         .unwrap_or_else(|| "-".into());
     let age = s
         .last_active
-        .map(|t| relative_age(t, now))
+        .map(|ts| relative_age(ts, now))
         .unwrap_or_else(|| "-".into());
     let model = s.model.clone().unwrap_or_else(|| "?".into());
     let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
     let cwd = shorten_path(s.cwd.as_deref().unwrap_or("-"));
-    let cost = if c.included {
+    let cost_str = if c.included {
         "incl".to_string()
     } else {
         format!("{:.4}", c.total)
@@ -254,11 +197,9 @@ fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) 
         }
         id
     };
+    let cache_total = t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input;
 
     // Color the cost cell for quick at-a-glance reading:
-    // - included sessions: dim green
-    // - $0.00 real: default
-    // - anything else: yellow (warn) above $5, white (default) otherwise.
     let cost_style = if c.included {
         Style::default()
             .fg(Color::Green)
@@ -276,21 +217,34 @@ fn row_for<'a>(a: &'a agtop_core::session::SessionAnalysis, now: DateTime<Utc>) 
         agtop_core::session::ProviderKind::OpenCode => Style::default().fg(Color::Green),
     };
 
-    let cache_total = t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input;
+    let cells: Vec<Cell<'a>> = visible
+        .iter()
+        .map(|&col_id| match col_id {
+            ColumnId::Provider => Cell::from(s.provider.as_str()).style(provider_style),
+            ColumnId::Subscription => Cell::from(subscription.clone()),
+            ColumnId::Session => Cell::from(short.clone()),
+            ColumnId::Started => Cell::from(started.clone()),
+            ColumnId::Age => Cell::from(age.clone()),
+            ColumnId::Model => Cell::from(model.clone()),
+            ColumnId::Cwd => Cell::from(cwd.clone()),
+            ColumnId::Tokens => Cell::from(compact(t.input + t.output + cache_total)),
+            ColumnId::OutputTokens => Cell::from(compact(t.output)),
+            ColumnId::CacheTokens => Cell::from(compact(cache_total)),
+            ColumnId::Cost => Cell::from(cost_str.clone()).style(cost_style),
+            ColumnId::ToolCalls => Cell::from(
+                a.tool_call_count
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".into()),
+            ),
+            ColumnId::Duration => Cell::from(
+                a.duration_secs
+                    .map(format_duration_compact)
+                    .unwrap_or_else(|| "-".into()),
+            ),
+        })
+        .collect();
 
-    Row::new(vec![
-        Cell::from(s.provider.as_str()).style(provider_style),
-        Cell::from(subscription),
-        Cell::from(short),
-        Cell::from(started),
-        Cell::from(age),
-        Cell::from(model),
-        Cell::from(cwd),
-        Cell::from(compact(t.input + t.output + cache_total)),
-        Cell::from(compact(t.output)),
-        Cell::from(compact(cache_total)),
-        Cell::from(cost).style(cost_style),
-    ])
+    Row::new(cells)
 }
 
 fn format_local_datetime(ts: DateTime<Utc>) -> String {
@@ -331,6 +285,16 @@ fn compact(n: u64) -> String {
         format!("{:.1}K", n as f64 / 1e3)
     } else {
         n.to_string()
+    }
+}
+
+fn format_duration_compact(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{}m{}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
     }
 }
 

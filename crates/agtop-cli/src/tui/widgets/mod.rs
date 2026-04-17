@@ -2,6 +2,7 @@
 //! taking a frame + area + app snapshot; all state lives upstream in
 //! [`crate::tui::app`].
 
+pub mod config_tab;
 pub mod cost_tab;
 pub mod dashboard_cost;
 pub mod dashboard_plan;

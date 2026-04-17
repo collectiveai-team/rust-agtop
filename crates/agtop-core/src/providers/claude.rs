@@ -391,12 +391,31 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut totals = TokenTotals::default();
     let mut tool_call_count: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
+    let mut context_used_tokens: Option<u64> = None;
+    let mut context_window: Option<u64> = None;
+
+    // Helper to merge a FileTotals' context peak into our running max.
+    let mut merge_context = |ft: &FileTotals| {
+        if let (Some(pct), Some(toks), Some(win)) = (
+            ft.context_used_pct,
+            ft.context_used_tokens,
+            ft.context_window,
+        ) {
+            if context_used_pct.map_or(true, |cur| pct > cur) {
+                context_used_pct = Some(pct);
+                context_used_tokens = Some(toks);
+                context_window = Some(win);
+            }
+        } else {
+            context_used_pct = max_pct(context_used_pct, ft.context_used_pct);
+        }
+    };
 
     // Main transcript.
     let main_file_totals = sum_jsonl_usage(path, &mut effective_model)?;
     add_file_totals(&mut totals, &main_file_totals);
     tool_call_count += main_file_totals.tool_call_count;
-    context_used_pct = max_pct(context_used_pct, main_file_totals.context_used_pct);
+    merge_context(&main_file_totals);
 
     // Subagent sidechain transcripts (if any). They live in a directory
     // sibling to the main `<uuid>.jsonl`, named `<uuid>/subagents/*.jsonl`.
@@ -417,7 +436,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
             Ok(sub_totals) => {
                 add_file_totals(&mut totals, &sub_totals);
                 tool_call_count += sub_totals.tool_call_count;
-                context_used_pct = max_pct(context_used_pct, sub_totals.context_used_pct);
+                merge_context(&sub_totals);
             }
             Err(e) => tracing::debug!(path = %sub.display(), error = %e, "skip subagent file"),
         }
@@ -459,6 +478,8 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
                 }
             }),
         context_used_pct,
+        context_used_tokens,
+        context_window,
     })
 }
 
@@ -487,6 +508,8 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     let mut keyless = Snapshot::default();
     let mut tool_call_count: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
+    let mut context_used_tokens: Option<u64> = None;
+    let mut context_window_size: Option<u64> = None;
 
     for_each_jsonl(path, |v| {
         if v.get("type").and_then(|x| x.as_str()) != Some("assistant") {
@@ -538,7 +561,13 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
                     + cache_creation
                     + g("output_tokens");
                 let pct = (total as f64 / window as f64) * 100.0;
+                // Track raw tokens and window size at the peak-utilization turn.
+                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
                 context_used_pct = max_pct(context_used_pct, Some(pct));
+                if is_new_peak {
+                    context_used_tokens = Some(total);
+                    context_window_size = Some(window);
+                }
             }
         }
         let snap = snapshot_from_usage(usage);
@@ -575,6 +604,8 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     ft.cache_write_1h += keyless.cache_write_1h;
     ft.tool_call_count = tool_call_count;
     ft.context_used_pct = context_used_pct;
+    ft.context_used_tokens = context_used_tokens;
+    ft.context_window = context_window_size;
     Ok(ft)
 }
 
@@ -621,6 +652,10 @@ struct FileTotals {
     cache_write_1h: u64,
     tool_call_count: u64,
     context_used_pct: Option<f64>,
+    /// Raw token count at the peak-utilization turn.
+    context_used_tokens: Option<u64>,
+    /// Context window size (denominator) at the peak-utilization turn.
+    context_window: Option<u64>,
 }
 
 #[derive(Debug, Default, Clone)]

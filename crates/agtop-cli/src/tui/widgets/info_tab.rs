@@ -70,9 +70,18 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 ),
                 kv_line(
                     "context_used",
-                    a.context_used_pct
-                        .map(|p| format!("{p:.1}%"))
-                        .unwrap_or_else(|| "-".to_string()),
+                    match (a.context_used_tokens, a.context_window, a.context_used_pct) {
+                        (Some(n), Some(max), Some(pct)) => {
+                            format!(
+                                "{}/{} ({:.1}%)",
+                                compact_tokens(n),
+                                compact_tokens(max),
+                                pct
+                            )
+                        }
+                        (_, _, Some(pct)) => format!("{pct:.1}%"),
+                        _ => "-".to_string(),
+                    },
                 ),
                 kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
                 kv_line("data_path", s.data_path.display().to_string()),
@@ -116,6 +125,16 @@ fn kv_line(key: &'static str, value: String) -> Line<'static> {
         Span::raw("  "),
         Span::raw(value),
     ])
+}
+
+fn compact_tokens(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1e6)
+    } else if n >= 1_000 {
+        format!("{:.1}K", n as f64 / 1e3)
+    } else {
+        n.to_string()
+    }
 }
 
 fn format_duration_secs(secs: u64) -> String {

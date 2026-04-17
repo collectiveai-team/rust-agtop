@@ -446,6 +446,8 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
     let mut first_ts = summary.started_at;
     let mut last_ts = summary.last_active;
     let mut context_used_pct: Option<f64> = None;
+    let mut context_used_tokens: Option<u64> = None;
+    let mut context_window: Option<u64> = None;
 
     for_each_jsonl(path, |v| {
         if let Some(ts) = v
@@ -506,10 +508,15 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
                 .and_then(|x| x.as_u64());
             if let (Some(total), Some(window)) = (turn_total, model_context_window) {
                 let pct = (total as f64 / window as f64) * 100.0;
+                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,
                 });
+                if is_new_peak {
+                    context_used_tokens = Some(total);
+                    context_window = Some(window);
+                }
             }
 
             let last = match info.get("last_token_usage") {
@@ -553,6 +560,8 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         tool_call_count: Some(tool_call_count),
         duration_secs,
         context_used_pct,
+        context_used_tokens,
+        context_window,
     })
 }
 

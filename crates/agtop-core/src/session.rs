@@ -117,6 +117,14 @@ pub struct SessionAnalysis {
     /// window (0..=100+), when the provider exposes both values.
     #[serde(default)]
     pub context_used_pct: Option<f64>,
+    /// Raw token count at the peak-utilization turn (numerator of
+    /// `context_used_pct`). `None` when `context_used_pct` is `None`.
+    #[serde(default)]
+    pub context_used_tokens: Option<u64>,
+    /// Model context window size in tokens used to compute
+    /// `context_used_pct`. `None` when `context_used_pct` is `None`.
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
