@@ -612,6 +612,152 @@ mod tests {
         assert!(contents.contains("no session selected"));
     }
 
+    /// Click hit-testing for the bottom-panel tabs must match the
+    /// *rendered* x-range of each tab title, not just the title text
+    /// width. ratatui's `Tabs` widget pads every title with a 1-column
+    /// space on each side and places a 1-column divider between tabs
+    /// (no trailing divider). This test scans the rendered buffer for
+    /// each tab's title in *column* space (careful: dividers like '│'
+    /// are 1 column but multiple UTF-8 bytes, so naive `String::find`
+    /// would mix bytes with columns) and asserts that every
+    /// `layout.tab_cells` entry covers the entire visible title range.
+    #[test]
+    fn tab_cells_cover_rendered_titles() {
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = fixture_app();
+        let mut state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut layout))
+            .expect("draw");
+
+        let buffer = terminal.backend().buffer().clone();
+        let tab_row_y = layout.tab_bar_area.y;
+        let row_width = buffer.area.width;
+
+        // Build a diagnostic rendering of the tab row for panic messages.
+        // This may contain multi-byte chars; it's for humans, not indexing.
+        let mut row_display = String::new();
+        for x in 0..row_width {
+            let cell = buffer.cell((x, tab_row_y)).expect("cell in bounds");
+            row_display.push_str(cell.symbol());
+        }
+
+        // Find `title` in *column* space: walk each starting column, and
+        // for each byte of the (ASCII) title compare it to the single
+        // byte emitted by the corresponding cell's symbol. Tab titles
+        // are pure ASCII, so each title char occupies exactly one
+        // column whose symbol is that char's single byte.
+        for &tab in Tab::all() {
+            let title = tab.title();
+            let title_bytes = title.as_bytes();
+            let title_cols = title_bytes.len() as u16;
+            assert!(
+                title.is_ascii(),
+                "tab title '{title}' must be ASCII for this test"
+            );
+            let mut found_col: Option<u16> = None;
+            if row_width >= title_cols {
+                'outer: for x in 0..=(row_width - title_cols) {
+                    for (i, &b) in title_bytes.iter().enumerate() {
+                        let cell = buffer
+                            .cell((x + i as u16, tab_row_y))
+                            .expect("cell in bounds");
+                        let sym = cell.symbol().as_bytes();
+                        if sym != [b] {
+                            continue 'outer;
+                        }
+                    }
+                    found_col = Some(x);
+                    break;
+                }
+            }
+            let start = found_col
+                .unwrap_or_else(|| panic!("tab title '{title}' not found in row: {row_display:?}"));
+            let end = start + title_cols;
+
+            let (cell_start, cell_end, recorded_tab) = layout
+                .tab_cells
+                .iter()
+                .copied()
+                .find(|&(_, _, t)| t == tab)
+                .unwrap_or_else(|| panic!("no tab_cells entry for {tab:?}"));
+            assert_eq!(recorded_tab, tab);
+            assert!(
+                cell_start <= start && cell_end >= end,
+                "tab_cells range for {tab:?} [{cell_start},{cell_end}) does not \
+                 cover rendered title '{title}' at columns [{start},{end}) in row: {row_display:?}"
+            );
+        }
+    }
+
+    /// A click anywhere inside the Config tab's rendered title must
+    /// route through `apply_mouse` and activate the Config tab. We
+    /// click the LAST letter rather than the first: a subtly-wrong
+    /// tab_cells range can still cover the opening column by
+    /// coincidence (e.g. the buggy range [10,16) happens to include
+    /// column 15, the 'C' of Config on a 140-col terminal) but
+    /// virtually never extends to the final column of a
+    /// wider-than-expected title. Regression for the tab_cells math
+    /// off-by-one that prevented Config clicks from registering.
+    #[test]
+    fn clicking_config_tab_activates_it() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = fixture_app();
+        // Start on a tab that is NOT Config so the assertion is meaningful.
+        app.set_tab(Tab::Info);
+        let mut state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut layout))
+            .expect("draw");
+
+        // Find the rendered x of "Config" in the tab bar row.
+        let buffer = terminal.backend().buffer().clone();
+        let tab_row_y = layout.tab_bar_area.y;
+        // Find the column of the 'C' in "Config" using the same ASCII
+        // column-scan approach as `tab_cells_cover_rendered_titles` (see
+        // comment there about byte vs column pitfalls).
+        let config_title = "Config".as_bytes();
+        let row_width = buffer.area.width;
+        let mut config_x: Option<u16> = None;
+        if row_width >= config_title.len() as u16 {
+            'outer: for x in 0..=(row_width - config_title.len() as u16) {
+                for (i, &b) in config_title.iter().enumerate() {
+                    let cell = buffer
+                        .cell((x + i as u16, tab_row_y))
+                        .expect("cell in bounds");
+                    if cell.symbol().as_bytes() != [b] {
+                        continue 'outer;
+                    }
+                }
+                config_x = Some(x);
+                break;
+            }
+        }
+        let config_x = config_x.expect("Config title in row");
+
+        // Synthesise a click on the LAST letter of "Config". This is
+        // more rigorous than clicking the first letter, because a
+        // subtly-wrong tab_cells range may still cover the first
+        // column by coincidence but is far less likely to extend all
+        // the way to the final column of the title. The last letter
+        // is at column (config_x + title.len() - 1).
+        let last_col = config_x + ("Config".len() as u16) - 1;
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: last_col,
+            row: tab_row_y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        apply_mouse(&mut app, event, &layout);
+        assert_eq!(app.tab(), Tab::Config);
+    }
+
     fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
         let mut out = String::new();
         let area = buf.area;
