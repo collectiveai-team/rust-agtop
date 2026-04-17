@@ -18,8 +18,10 @@ pub mod provider;
 pub mod providers;
 pub mod session;
 
+// Flat re-exports for the most commonly used public API items.
+// Consumers may also access sub-modules directly (e.g. `agtop_core::pricing::lookup`).
 pub use error::{Error, Result};
-pub use pricing::{Plan, PlanMode};
+pub use pricing::{Plan, PlanMode, Rates};
 pub use provider::Provider;
 pub use session::{
     CostBreakdown, PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary,

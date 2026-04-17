@@ -91,6 +91,7 @@ fn provider_idx(kind: ProviderKind) -> usize {
         ProviderKind::Claude => 0,
         ProviderKind::Codex => 1,
         ProviderKind::OpenCode => 2,
+        _ => usize::MAX,
     }
 }
 
@@ -824,33 +825,32 @@ mod tests {
         cost: f64,
         tokens: u64,
     ) -> SessionAnalysis {
-        SessionAnalysis {
-            summary: SessionSummary {
-                provider,
-                subscription: None,
-                session_id: id.into(),
-                started_at: Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
-                last_active: Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
-                model: Some(model.into()),
-                cwd: Some("/tmp/proj".into()),
-                data_path: PathBuf::from(format!("/tmp/{id}.jsonl")),
-            },
-            tokens: TokenTotals {
-                input: tokens,
-                ..Default::default()
-            },
-            cost: CostBreakdown {
-                total: cost,
-                ..Default::default()
-            },
-            effective_model: Some(model.into()),
-            subagent_file_count: 0,
-            tool_call_count: None,
-            duration_secs: Some(0),
-            context_used_pct: None,
-            context_used_tokens: None,
-            context_window: None,
-        }
+        let summary = SessionSummary::new(
+            provider,
+            None,
+            id.into(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
+            Some(model.into()),
+            Some("/tmp/proj".into()),
+            PathBuf::from(format!("/tmp/{id}.jsonl")),
+        );
+        let mut token_totals = TokenTotals::default();
+        token_totals.input = tokens;
+        let mut cost_breakdown = CostBreakdown::default();
+        cost_breakdown.total = cost;
+        SessionAnalysis::new(
+            summary,
+            token_totals,
+            cost_breakdown,
+            Some(model.into()),
+            0,
+            None,
+            Some(0),
+            None,
+            None,
+            None,
+        )
     }
 
     #[test]

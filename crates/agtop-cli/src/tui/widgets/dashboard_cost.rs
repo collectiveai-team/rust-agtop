@@ -68,5 +68,6 @@ fn idx(kind: ProviderKind) -> usize {
         ProviderKind::Claude => 0,
         ProviderKind::Codex => 1,
         ProviderKind::OpenCode => 2,
+        _ => usize::MAX,
     }
 }

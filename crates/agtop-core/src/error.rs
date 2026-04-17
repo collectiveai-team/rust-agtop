@@ -11,6 +11,9 @@ pub enum Error {
     #[error("walkdir error: {0}")]
     Walk(#[from] walkdir::Error),
 
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+
     #[error("no pricing known for model '{model}' (provider: {provider})")]
     UnknownPricing { provider: String, model: String },
 

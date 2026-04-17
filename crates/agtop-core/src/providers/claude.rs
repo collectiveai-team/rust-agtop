@@ -401,7 +401,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
             ft.context_used_tokens,
             ft.context_window,
         ) {
-            if context_used_pct.map_or(true, |cur| pct > cur) {
+            if context_used_pct.is_none_or(|cur| pct > cur) {
                 context_used_pct = Some(pct);
                 context_used_tokens = Some(toks);
                 context_window = Some(win);
@@ -562,7 +562,7 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
                     + g("output_tokens");
                 let pct = (total as f64 / window as f64) * 100.0;
                 // Track raw tokens and window size at the peak-utilization turn.
-                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
+                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
                 context_used_pct = max_pct(context_used_pct, Some(pct));
                 if is_new_peak {
                     context_used_tokens = Some(total);

@@ -18,16 +18,16 @@ fn fixture_main_path() -> PathBuf {
 }
 
 fn summary_for_fixture() -> SessionSummary {
-    SessionSummary {
-        provider: ProviderKind::Claude,
-        subscription: None,
-        session_id: "deadbeef-1234-5678-9abc-def012345678".into(),
-        started_at: None,
-        last_active: None,
-        model: Some("claude-sonnet-4-5".into()),
-        cwd: Some("/tmp/test".into()),
-        data_path: fixture_main_path(),
-    }
+    SessionSummary::new(
+        ProviderKind::Claude,
+        None,
+        "deadbeef-1234-5678-9abc-def012345678".into(),
+        None,
+        None,
+        Some("claude-sonnet-4-5".into()),
+        Some("/tmp/test".into()),
+        fixture_main_path(),
+    )
 }
 
 #[test]

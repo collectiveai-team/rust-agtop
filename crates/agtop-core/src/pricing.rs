@@ -17,6 +17,7 @@ use crate::session::{CostBreakdown, ProviderKind, TokenTotals};
 
 /// Billing plan selector. `Plan` decides whether sessions are priced at
 /// retail or marked "included" for a given provider.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
     /// Standard API pricing for all providers.
@@ -28,6 +29,7 @@ pub enum Plan {
 }
 
 impl Plan {
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "retail" | "default" | "api" => Some(Self::Retail),
@@ -38,6 +40,7 @@ impl Plan {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanMode {
     Retail,
@@ -45,6 +48,7 @@ pub enum PlanMode {
 }
 
 impl Plan {
+    #[must_use]
     pub fn mode_for(self, provider: ProviderKind) -> PlanMode {
         match (self, provider) {
             (Self::Retail, _) => PlanMode::Retail,
@@ -56,6 +60,7 @@ impl Plan {
 }
 
 /// Per-model rate card. Fields denote USD per 1,000,000 tokens.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct Rates {
     pub input_per_m: f64,
@@ -251,6 +256,7 @@ fn strip_date_suffix(model: &str) -> &str {
 }
 
 /// Compute a [`CostBreakdown`] given token totals + a resolved rate card.
+#[must_use]
 pub fn compute_cost(totals: &TokenTotals, rates: &Rates, included: bool) -> CostBreakdown {
     if included {
         return CostBreakdown {

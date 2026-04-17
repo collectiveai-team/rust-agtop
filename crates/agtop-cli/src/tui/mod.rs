@@ -456,71 +456,67 @@ mod tests {
         let ts_started = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let ts_last = Utc.with_ymd_and_hms(2026, 1, 1, 10, 30, 0).unwrap();
 
-        let s1 = SessionAnalysis {
-            summary: SessionSummary {
-                provider: ProviderKind::Claude,
-                subscription: Some("Max 5x".into()),
-                session_id: "deadbeef-aaaa-bbbb-cccc-1234".into(),
-                started_at: Some(ts_started),
-                last_active: Some(ts_last),
-                model: Some("claude-opus-4-6".into()),
-                cwd: Some("/tmp/proj".into()),
-                data_path: PathBuf::from("/tmp/deadbeef.jsonl"),
-            },
-            tokens: TokenTotals {
-                input: 1_000,
-                output: 500,
-                cache_read: 20_000,
-                ..Default::default()
-            },
-            cost: CostBreakdown {
-                input: 0.003,
-                output: 0.0075,
-                cache_read: 0.010,
-                total: 0.0205,
-                included: false,
-                ..Default::default()
-            },
-            effective_model: Some("claude-opus-4-6".into()),
-            subagent_file_count: 2,
-            tool_call_count: None,
-            duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
-            context_used_pct: None,
-            context_used_tokens: None,
-            context_window: None,
-        };
+        let s1_summary = SessionSummary::new(
+            ProviderKind::Claude,
+            Some("Max 5x".into()),
+            "deadbeef-aaaa-bbbb-cccc-1234".into(),
+            Some(ts_started),
+            Some(ts_last),
+            Some("claude-opus-4-6".into()),
+            Some("/tmp/proj".into()),
+            PathBuf::from("/tmp/deadbeef.jsonl"),
+        );
+        let mut s1_tokens = TokenTotals::default();
+        s1_tokens.input = 1_000;
+        s1_tokens.output = 500;
+        s1_tokens.cache_read = 20_000;
+        let mut s1_cost = CostBreakdown::default();
+        s1_cost.input = 0.003;
+        s1_cost.output = 0.0075;
+        s1_cost.cache_read = 0.010;
+        s1_cost.total = 0.0205;
+        let s1 = SessionAnalysis::new(
+            s1_summary,
+            s1_tokens,
+            s1_cost,
+            Some("claude-opus-4-6".into()),
+            2,
+            None,
+            Some((ts_last - ts_started).num_seconds() as u64),
+            None,
+            None,
+            None,
+        );
 
-        let s2 = SessionAnalysis {
-            summary: SessionSummary {
-                provider: ProviderKind::Codex,
-                subscription: Some("ChatGPT Plus".into()),
-                session_id: "ses_gpt5".into(),
-                started_at: Some(ts_started),
-                last_active: Some(ts_last),
-                model: Some("gpt-5".into()),
-                cwd: Some("/tmp/other".into()),
-                data_path: PathBuf::from("/tmp/codex.jsonl"),
-            },
-            tokens: TokenTotals {
-                input: 2_000,
-                output: 1_000,
-                ..Default::default()
-            },
-            cost: CostBreakdown {
-                input: 0.0025,
-                output: 0.01,
-                total: 0.0125,
-                included: false,
-                ..Default::default()
-            },
-            effective_model: Some("gpt-5".into()),
-            subagent_file_count: 0,
-            tool_call_count: Some(12),
-            duration_secs: Some((ts_last - ts_started).num_seconds() as u64),
-            context_used_pct: Some(38.2),
-            context_used_tokens: Some(98_380),
-            context_window: Some(258_400),
-        };
+        let s2_summary = SessionSummary::new(
+            ProviderKind::Codex,
+            Some("ChatGPT Plus".into()),
+            "ses_gpt5".into(),
+            Some(ts_started),
+            Some(ts_last),
+            Some("gpt-5".into()),
+            Some("/tmp/other".into()),
+            PathBuf::from("/tmp/codex.jsonl"),
+        );
+        let mut s2_tokens = TokenTotals::default();
+        s2_tokens.input = 2_000;
+        s2_tokens.output = 1_000;
+        let mut s2_cost = CostBreakdown::default();
+        s2_cost.input = 0.0025;
+        s2_cost.output = 0.01;
+        s2_cost.total = 0.0125;
+        let s2 = SessionAnalysis::new(
+            s2_summary,
+            s2_tokens,
+            s2_cost,
+            Some("gpt-5".into()),
+            0,
+            Some(12),
+            Some((ts_last - ts_started).num_seconds() as u64),
+            Some(38.2),
+            Some(98_380),
+            Some(258_400),
+        );
 
         let mut app = App::new();
         app.set_sessions(vec![s1, s2]);

@@ -508,7 +508,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
                 .and_then(|x| x.as_u64());
             if let (Some(total), Some(window)) = (turn_total, model_context_window) {
                 let pct = (total as f64 / window as f64) * 100.0;
-                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
+                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,

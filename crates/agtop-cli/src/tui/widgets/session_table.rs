@@ -215,6 +215,7 @@ fn row_for<'a>(
         agtop_core::session::ProviderKind::Claude => Style::default().fg(Color::Magenta),
         agtop_core::session::ProviderKind::Codex => Style::default().fg(Color::Cyan),
         agtop_core::session::ProviderKind::OpenCode => Style::default().fg(Color::Green),
+        _ => Style::default(),
     };
 
     let cells: Vec<Cell<'a>> = visible

@@ -9,7 +9,7 @@ use crate::Result;
 /// Implementations must be `Send + Sync` so the CLI/TUI can call them from
 /// any thread. They should be cheap to construct (no filesystem work in
 /// `Default::default()` or `new`); defer real work to `list_sessions`.
-pub trait Provider: Send + Sync {
+pub trait Provider: std::fmt::Debug + Send + Sync {
     fn kind(&self) -> ProviderKind;
 
     /// Human-readable name (e.g. "Claude Code").

@@ -444,13 +444,11 @@ struct AnthropicRateLimitSnapshot {
 
 fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRateLimitSnapshot>> {
     let conn = open_db(db_path)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT data, time_created FROM message \
-             WHERE data LIKE ?1 \
-             ORDER BY time_created DESC LIMIT 1",
-        )
-        .map_err(|e| Error::Other(format!("sqlite prepare plan_usage: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT data, time_created FROM message \
+         WHERE data LIKE ?1 \
+         ORDER BY time_created DESC LIMIT 1",
+    )?;
 
     let like = "%anthropic-ratelimit-unified-5h-utilization%";
     let row = stmt
@@ -459,8 +457,7 @@ fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRate
             let time_created: i64 = row.get(1)?;
             Ok((data, time_created))
         })
-        .optional()
-        .map_err(|e| Error::Other(format!("sqlite query plan_usage: {e}")))?;
+        .optional()?;
 
     let Some((data, time_created_ms)) = row else {
         return Ok(None);
@@ -503,11 +500,10 @@ fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRate
 // ---------------------------------------------------------------------------
 
 fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
-    rusqlite::Connection::open_with_flags(
+    Ok(rusqlite::Connection::open_with_flags(
         db_path,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .map_err(|e| Error::Other(format!("sqlite open {}: {e}", db_path.display())))
+    )?)
 }
 
 fn list_sessions_sqlite(
@@ -515,13 +511,11 @@ fn list_sessions_sqlite(
     subscriptions: &HashMap<String, String>,
 ) -> Result<Vec<SessionSummary>> {
     let conn = open_db(db_path)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, directory, time_created, time_updated FROM session \
-             WHERE time_archived IS NULL OR time_archived = 0 \
-             ORDER BY time_updated DESC",
-        )
-        .map_err(|e| Error::Other(format!("sqlite prepare: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, directory, time_created, time_updated FROM session \
+         WHERE time_archived IS NULL OR time_archived = 0 \
+         ORDER BY time_updated DESC",
+    )?;
 
     let rows: Vec<SessionSummary> = stmt
         .query_map([], |row| {
@@ -530,8 +524,7 @@ fn list_sessions_sqlite(
             let created_ms: Option<i64> = row.get(2)?;
             let updated_ms: Option<i64> = row.get(3)?;
             Ok((id, cwd, created_ms, updated_ms))
-        })
-        .map_err(|e| Error::Other(format!("sqlite query: {e}")))?
+        })?
         .filter_map(|r| r.ok())
         .map(|(id, cwd, created_ms, updated_ms)| {
             let started_at = created_ms.and_then(ms_to_utc);
@@ -582,13 +575,11 @@ fn analyze_session_sqlite(
 ) -> Result<SessionAnalysis> {
     let conn = open_db(db_path)?;
 
-    let mut stmt = conn
-        .prepare(
-            "SELECT data FROM message \
-             WHERE session_id = ?1 \
-               AND json_extract(data, '$.role') = 'assistant'",
-        )
-        .map_err(|e| Error::Other(format!("sqlite prepare analyze: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT data FROM message \
+         WHERE session_id = ?1 \
+           AND json_extract(data, '$.role') = 'assistant'",
+    )?;
 
     let mut totals = TokenTotals::default();
     let mut model: Option<String> = summary.model.clone();
@@ -599,11 +590,9 @@ fn analyze_session_sqlite(
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
 
-    let rows = stmt
-        .query_map(rusqlite::params![&summary.session_id], |row| {
-            row.get::<_, String>(0)
-        })
-        .map_err(|e| Error::Other(format!("sqlite query analyze: {e}")))?;
+    let rows = stmt.query_map(rusqlite::params![&summary.session_id], |row| {
+        row.get::<_, String>(0)
+    })?;
 
     for row in rows {
         let data_str = match row {
@@ -645,7 +634,7 @@ fn analyze_session_sqlite(
                     })
                     .unwrap_or(0);
                 let pct = (turn_total as f64 / window as f64) * 100.0;
-                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
+                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,
@@ -895,7 +884,7 @@ fn analyze_opencode_session_json(
                     })
                     .unwrap_or(0);
                 let pct = (turn_total as f64 / window as f64) * 100.0;
-                let is_new_peak = context_used_pct.map_or(true, |cur| pct > cur);
+                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
                 context_used_pct = Some(match context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,

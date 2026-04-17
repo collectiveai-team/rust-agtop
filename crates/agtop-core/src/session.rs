@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Which agent produced a session.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
@@ -12,6 +13,7 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
@@ -28,6 +30,7 @@ impl std::fmt::Display for ProviderKind {
 }
 
 /// Lightweight session metadata derived from file headers/names.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub provider: ProviderKind,
@@ -49,6 +52,7 @@ pub struct SessionSummary {
 ///
 /// Fields map to the vocabulary each provider exposes; not every provider
 /// populates every field.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TokenTotals {
     pub input: u64,
@@ -63,8 +67,38 @@ pub struct TokenTotals {
     pub cache_read: u64,
 }
 
+impl SessionSummary {
+    /// Construct a [`SessionSummary`] with all fields explicitly specified.
+    ///
+    /// Prefer this over struct-literal syntax so callers remain compatible
+    /// when new (non-exhaustive) fields are added.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        provider: ProviderKind,
+        subscription: Option<String>,
+        session_id: String,
+        started_at: Option<DateTime<Utc>>,
+        last_active: Option<DateTime<Utc>>,
+        model: Option<String>,
+        cwd: Option<String>,
+        data_path: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            provider,
+            subscription,
+            session_id,
+            started_at,
+            last_active,
+            model,
+            cwd,
+            data_path,
+        }
+    }
+}
+
 impl TokenTotals {
     /// Grand total of every distinct bucket (input + output + cache activity).
+    #[must_use]
     pub fn grand_total(&self) -> u64 {
         self.input
             + self.cached_input
@@ -76,6 +110,7 @@ impl TokenTotals {
 }
 
 /// Dollar-denominated cost breakdown (USD).
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CostBreakdown {
     pub input: f64,
@@ -91,6 +126,7 @@ pub struct CostBreakdown {
 }
 
 /// Full analysis of a single session.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionAnalysis {
     pub summary: SessionSummary,
@@ -127,6 +163,79 @@ pub struct SessionAnalysis {
     pub context_window: Option<u64>,
 }
 
+impl SessionAnalysis {
+    /// Construct a [`SessionAnalysis`] with all fields explicitly specified.
+    ///
+    /// Prefer this over struct-literal syntax so callers remain compatible
+    /// when new (non-exhaustive) fields are added.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        summary: SessionSummary,
+        tokens: TokenTotals,
+        cost: CostBreakdown,
+        effective_model: Option<String>,
+        subagent_file_count: usize,
+        tool_call_count: Option<u64>,
+        duration_secs: Option<u64>,
+        context_used_pct: Option<f64>,
+        context_used_tokens: Option<u64>,
+        context_window: Option<u64>,
+    ) -> Self {
+        Self {
+            summary,
+            tokens,
+            cost,
+            effective_model,
+            subagent_file_count,
+            tool_call_count,
+            duration_secs,
+            context_used_pct,
+            context_used_tokens,
+            context_window,
+        }
+    }
+}
+
+impl PlanWindow {
+    /// Construct a [`PlanWindow`] with all fields explicitly specified.
+    pub fn new(
+        label: String,
+        utilization: Option<f64>,
+        reset_at: Option<DateTime<Utc>>,
+        reset_hint: Option<String>,
+        binding: bool,
+    ) -> Self {
+        Self {
+            label,
+            utilization,
+            reset_at,
+            reset_hint,
+            binding,
+        }
+    }
+}
+
+impl PlanUsage {
+    /// Construct a [`PlanUsage`] with all fields explicitly specified.
+    pub fn new(
+        provider: ProviderKind,
+        label: String,
+        plan_name: Option<String>,
+        windows: Vec<PlanWindow>,
+        last_limit_hit: Option<DateTime<Utc>>,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            provider,
+            label,
+            plan_name,
+            windows,
+            last_limit_hit,
+            note,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Plan usage (for the --dashboard pane)
 // ---------------------------------------------------------------------------
@@ -137,6 +246,7 @@ pub struct SessionAnalysis {
 /// the UTC time the window resets, also when available. Providers may
 /// populate only a subset of these fields; renderers must treat every
 /// field as optional.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlanWindow {
     /// Short label shown next to the gauge, e.g. "5h" or "7d".
@@ -161,6 +271,7 @@ pub struct PlanWindow {
 /// more than one auth (e.g. Claude Code on Anthropic Max AND OpenCode on
 /// the same Anthropic Max — each produces its own `PlanUsage` because the
 /// data sources are different).
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanUsage {
     pub provider: ProviderKind,
