@@ -324,23 +324,24 @@ impl App {
 
     /// Cycle sort column forward, snapping to the new column's default
     /// direction so the first press of `>` from any state lands on a
-    /// "sensible" ordering.
+    /// "sensible" ordering. Moves the cursor to the top of the new order.
     pub fn cycle_sort_column(&mut self) {
         self.sort_col = self.sort_col.next();
         self.sort_dir = self.sort_col.default_direction();
-        self.reconcile_selection();
+        self.select_first();
     }
 
-    /// Flip the sort direction (ascending ↔ descending). Useful when the
-    /// user wants "oldest first" or "cheapest first".
+    /// Flip the sort direction (ascending ↔ descending). Moves the cursor
+    /// to the top so the user immediately sees the new first row.
     pub fn flip_sort_direction(&mut self) {
         self.sort_dir = self.sort_dir.flip();
-        self.reconcile_selection();
+        self.select_first();
     }
 
     /// Sort by `col` via mouse click on a header cell.
     /// - If `col` is already the active sort column, toggle the direction.
     /// - Otherwise switch to `col` using its default direction.
+    /// In both cases the cursor jumps to the top of the new order.
     pub fn set_sort_column(&mut self, col: SortColumn) {
         if self.sort_col == col {
             self.sort_dir = self.sort_dir.flip();
@@ -348,7 +349,7 @@ impl App {
             self.sort_col = col;
             self.sort_dir = col.default_direction();
         }
-        self.reconcile_selection();
+        self.select_first();
     }
 
     pub fn next_tab(&mut self) {
