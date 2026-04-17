@@ -1,0 +1,19 @@
+[package]
+name = "agtop-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Core library for agtop: provider abstraction, session discovery, token/cost analysis for AI coding agents (Claude Code, Codex, OpenCode)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+dirs.workspace = true
+chrono.workspace = true
+walkdir.workspace = true
+tracing.workspace = true

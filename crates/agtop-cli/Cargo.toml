@@ -1,0 +1,24 @@
+[package]
+name = "agtop-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "CLI for agtop: list and inspect AI coding agent sessions with token/cost estimates."
+
+[[bin]]
+name = "agtop"
+path = "src/main.rs"
+
+[dependencies]
+agtop-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
