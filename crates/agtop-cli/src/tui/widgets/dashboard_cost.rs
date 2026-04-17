@@ -1,13 +1,13 @@
 use chrono::{Datelike, Local};
 use ratatui::{
     prelude::*,
-    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
 };
 
 use agtop_core::session::ProviderKind;
 
 use crate::tui::app::App;
+use crate::tui::theme as th;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut total_cost = 0.0f64;
@@ -46,7 +46,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Line::from(""),
         Line::from(Span::styled(
             " per agentic provider (retail estimate)",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            th::PLAN_NOTE,
         )),
         Line::from(format!(" claude    ${:>9.4}", per_provider[0])),
         Line::from(format!(" codex     ${:>9.4}", per_provider[1])),

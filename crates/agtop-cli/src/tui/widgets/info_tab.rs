@@ -4,11 +4,11 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::{
     layout::Alignment,
     prelude::*,
-    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 use crate::tui::app::App;
+use crate::tui::theme as th;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -18,7 +18,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             let msg = "(no session selected — run an agent to populate this list)";
             Paragraph::new(msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().add_modifier(Modifier::DIM))
+                .style(th::EMPTY_HINT)
                 .block(block)
         }
         Some((_, a)) => {
@@ -116,12 +116,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// without lifetime issues.
 fn kv_line(key: &'static str, value: String) -> Line<'static> {
     Line::from(vec![
-        Span::styled(
-            format!("{key:>16}"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
+        Span::styled(format!("{key:>16}"), th::INFO_KEY),
         Span::raw("  "),
         Span::raw(value),
     ])

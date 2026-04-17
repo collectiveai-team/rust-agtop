@@ -8,12 +8,13 @@ use chrono::{DateTime, Local, Utc};
 use ratatui::{
     layout::Constraint,
     prelude::*,
-    style::{Color, Modifier, Style},
+    style::Style,
     widgets::{Block, Borders, Cell, Row, Table, TableState},
 };
 
 use crate::tui::app::{App, SortColumn, SortDir};
 use crate::tui::column_config::ColumnId;
+use crate::tui::theme as th;
 
 /// Render the session table into `area`. Takes a `TableState` so scroll
 /// offset survives redraws — ratatui doesn't maintain it internally.
@@ -30,10 +31,7 @@ pub fn render(
     // Sync the widget's idea of selection with the app's.
     state.select(app.selected_idx());
 
-    let header_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
-        .add_modifier(Modifier::BOLD);
+    let header_style = th::HEADER;
 
     // Build a compact arrow so the header advertises the active sort
     // column without stealing a full column of width.
@@ -135,12 +133,7 @@ pub fn render(
     let table = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
+        .row_highlight_style(th::SELECTED)
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(table, area, state);
@@ -201,21 +194,19 @@ fn row_for<'a>(
 
     // Color the cost cell for quick at-a-glance reading:
     let cost_style = if c.included {
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::DIM)
+        th::COST_INCLUDED
     } else if c.total >= 5.0 {
-        Style::default().fg(Color::Yellow)
+        th::COST_HIGH
     } else {
-        Style::default()
+        Style::new()
     };
 
     // Provider color: cheap "tag" for eye-tracking.
     let provider_style = match s.provider {
-        agtop_core::session::ProviderKind::Claude => Style::default().fg(Color::Magenta),
-        agtop_core::session::ProviderKind::Codex => Style::default().fg(Color::Cyan),
-        agtop_core::session::ProviderKind::OpenCode => Style::default().fg(Color::Green),
-        _ => Style::default(),
+        agtop_core::session::ProviderKind::Claude => th::PROVIDER_CLAUDE,
+        agtop_core::session::ProviderKind::Codex => th::PROVIDER_CODEX,
+        agtop_core::session::ProviderKind::OpenCode => th::PROVIDER_OPENCODE,
+        _ => Style::new(),
     };
 
     let cells: Vec<Cell<'a>> = visible

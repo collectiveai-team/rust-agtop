@@ -9,6 +9,7 @@ pub mod app;
 pub mod column_config;
 mod events;
 mod refresh;
+pub mod theme;
 pub mod widgets;
 
 use std::io;
@@ -29,10 +30,11 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::*,
-    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph, Tabs},
     Terminal,
 };
+
+use theme as th;
 
 use agtop_core::pricing::Plan;
 use agtop_core::Provider;
@@ -56,6 +58,10 @@ struct UiLayout {
     /// Each entry: `(x_start, x_end_exclusive, SortColumn)`.
     /// Populated by `widgets::session_table::render`.
     header_cols: Vec<(u16, u16, app::SortColumn)>,
+    /// Absolute terminal x-ranges for each tab-bar tab button.
+    /// Each entry: `(x_start, x_end_exclusive, Tab)`.
+    /// Populated by `render_bottom_panel` after measuring actual title widths.
+    tab_cells: Vec<(u16, u16, Tab)>,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -155,26 +161,31 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
 /// is sourced from the `UiLayout` captured during the previous render.
 fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
     match event.kind {
-        // ── Scroll wheel anywhere ─────────────────────────────────────────
-        MouseEventKind::ScrollDown => app.move_selection(3),
-        MouseEventKind::ScrollUp => app.move_selection(-3),
+        // ── Scroll wheel — only when the cursor is over the table area ────
+        MouseEventKind::ScrollDown => {
+            if rect_contains(layout.table_area, event.column, event.row) {
+                app.move_selection(3);
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if rect_contains(layout.table_area, event.column, event.row) {
+                app.move_selection(-3);
+            }
+        }
 
         // ── Left-click ────────────────────────────────────────────────────
         MouseEventKind::Down(MouseButton::Left) => {
             let (col, row) = (event.column, event.row);
 
-            // Click on the tab bar → cycle to the clicked tab.
+            // Click on the tab bar → activate the tab under the cursor.
+            // We use the pixel-accurate ranges recorded during render so
+            // the hit-test is correct regardless of tab title length.
             if rect_contains(layout.tab_bar_area, col, row) {
-                let x_offset = col.saturating_sub(layout.tab_bar_area.x) as usize;
-                // Tab titles are rendered with a "│" divider between them.
-                // "Info"=4 chars, "│"=1, "Cost"=4, "│"=1, "Config"=6.
-                // Thresholds: 0..4 = Info, 5..9 = Cost, 10+ = Config.
-                if x_offset < 5 {
-                    app.set_tab(Tab::Info);
-                } else if x_offset < 10 {
-                    app.set_tab(Tab::Cost);
-                } else {
-                    app.set_tab(Tab::Config);
+                for &(x_start, x_end, tab) in &layout.tab_cells {
+                    if col >= x_start && col < x_end {
+                        app.set_tab(tab);
+                        break;
+                    }
                 }
                 return;
             }
@@ -310,12 +321,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         sel,
         app.last_error().unwrap_or(""),
     );
-    let p = Paragraph::new(status).style(
-        Style::default()
-            .bg(Color::DarkGray)
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    );
+    let p = Paragraph::new(status).style(th::STATUS_BAR);
     frame.render_widget(p, area);
 }
 
@@ -333,13 +339,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
         .iter()
         .map(|t| {
             if *t == app.tab() {
-                Line::from(Span::styled(
-                    t.title(),
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
+                Line::from(Span::styled(t.title(), th::TAB_ACTIVE))
             } else {
                 Line::from(t.title())
             }
@@ -355,6 +355,17 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
         .block(Block::default().borders(Borders::NONE))
         .divider("│");
 
+    // Compute pixel-accurate hit-test ranges for each tab button.
+    // Tabs render as: title0 + "│" + title1 + "│" + title2, flush-left.
+    // Each divider is 1 terminal column wide.
+    layout.tab_cells.clear();
+    let mut x = rows[0].x;
+    for &tab in Tab::all() {
+        let w = tab.title().chars().count() as u16;
+        layout.tab_cells.push((x, x + w, tab));
+        x += w + 1; // +1 for the "│" divider
+    }
+
     frame.render_widget(tab_bar, rows[0]);
 
     match app.tab() {
@@ -368,7 +379,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let (text, style) = match app.mode() {
         InputMode::Filter => (
             format!("/{}_  (Enter=confirm, Esc=clear)", app.filter()),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            th::FOOTER_FILTER,
         ),
         InputMode::Normal => (
             concat!(
@@ -376,7 +387,7 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 "g/G:top/bot  PgUp/PgDn:10"
             )
             .to_string(),
-            Style::default().fg(Color::Gray),
+            th::FOOTER_NORMAL,
         ),
     };
     let p = Paragraph::new(text).style(style);
@@ -428,7 +439,12 @@ fn install_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         // Best-effort terminal restore so the backtrace is readable.
+        // Pop keyboard-enhancement flags first: kitty-protocol terminals
+        // keep them active until explicitly popped, corrupting subsequent
+        // programs if we leave them pushed after a panic.
         let _ = disable_raw_mode();
+        let mut stderr = io::stderr();
+        let _ = execute!(stderr, PopKeyboardEnhancementFlags);
         let mut stdout = io::stdout();
         let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
         hook(info);

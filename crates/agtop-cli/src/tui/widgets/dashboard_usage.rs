@@ -2,7 +2,6 @@ use chrono::Utc;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     prelude::*,
-    style::{Color, Modifier, Style},
     symbols,
     widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
 };
@@ -10,6 +9,7 @@ use ratatui::{
 use agtop_core::session::ProviderKind;
 
 use crate::tui::app::{App, CHART_WINDOW_MINS};
+use crate::tui::theme as th;
 
 const N_BUCKETS: usize = 60;
 
@@ -64,19 +64,19 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .name("claude")
             .marker(symbols::Marker::Dot)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Blue))
+            .style(th::CHART_CLAUDE)
             .data(&pts_claude),
         Dataset::default()
             .name("codex")
             .marker(symbols::Marker::Dot)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Green))
+            .style(th::CHART_CODEX)
             .data(&pts_codex),
         Dataset::default()
             .name("opencode")
             .marker(symbols::Marker::Dot)
             .graph_type(GraphType::Line)
-            .style(Style::default().fg(Color::Magenta))
+            .style(th::CHART_OPENCODE)
             .data(&pts_opencode),
     ];
 
@@ -101,10 +101,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         compact(current[1]),
         compact(current[2])
     );
-    frame.render_widget(
-        Paragraph::new(summary).style(Style::default().fg(Color::Gray).add_modifier(Modifier::DIM)),
-        rows[1],
-    );
+    frame.render_widget(Paragraph::new(summary).style(th::CHART_SUMMARY), rows[1]);
 }
 
 fn compact(n: u64) -> String {

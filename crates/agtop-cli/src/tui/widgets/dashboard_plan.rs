@@ -1,11 +1,11 @@
 use chrono::Utc;
 use ratatui::{
     prelude::*,
-    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
 };
 
 use crate::tui::app::App;
+use crate::tui::theme as th;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -14,16 +14,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     if app.plan_usage().is_empty() {
         lines.push(Line::from(Span::styled(
             "(no plan usage data)",
-            Style::default().add_modifier(Modifier::DIM),
+            th::PLAN_EMPTY,
         )));
     } else {
         for pu in app.plan_usage() {
-            lines.push(Line::from(Span::styled(
-                pu.label.clone(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )));
+            lines.push(Line::from(Span::styled(pu.label.clone(), th::PLAN_LABEL)));
 
             for w in &pu.windows {
                 let pct = w.utilization.map(|u| format!("{:>3.0}%", u * 100.0));
@@ -53,10 +48,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             }
 
             if let Some(note) = &pu.note {
-                lines.push(Line::from(Span::styled(
-                    format!("  {note}"),
-                    Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-                )));
+                lines.push(Line::from(Span::styled(format!("  {note}"), th::PLAN_NOTE)));
             }
 
             lines.push(Line::from(""));

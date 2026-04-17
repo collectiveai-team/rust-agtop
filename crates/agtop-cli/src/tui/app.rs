@@ -6,6 +6,7 @@
 //! without a terminal backend. The rendering layer in
 //! [`super::widgets`] consumes an [`App`] snapshot via shared refs.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 
 use chrono::{DateTime, Utc};
@@ -280,6 +281,11 @@ pub struct App {
     column_config: ColumnConfig,
     /// Selected row index in the Config tab column list.
     config_cursor: usize,
+    /// Cached sorted+filtered view: indices into `self.sessions`.
+    /// `None` means stale; recomputed lazily on the next `view()` call.
+    /// Interior mutability so `view()` stays `&self` (required by all
+    /// widget render functions that borrow `App` immutably).
+    view_cache: RefCell<Option<Vec<usize>>>,
 }
 
 impl Default for App {
@@ -307,6 +313,7 @@ impl App {
             plan_usage: Vec::new(),
             column_config: ColumnConfig::load(),
             config_cursor: 0,
+            view_cache: RefCell::new(None),
         }
     }
 
@@ -402,22 +409,53 @@ impl App {
     /// widget should render. Returns `Vec<&SessionAnalysis>` so we avoid
     /// cloning the underlying data on every draw; the borrow is valid
     /// until `App` is next mutated.
+    ///
+    /// The result is cached (as indices into `self.sessions`) behind
+    /// `view_cache` and recomputed only when the cache is explicitly
+    /// invalidated by a mutation method. Typically 4–5 callers per frame
+    /// all hit the cache after the first one.
     pub fn view(&self) -> Vec<&SessionAnalysis> {
-        let mut v: Vec<&SessionAnalysis> = self
-            .sessions
+        // Populate the cache if stale.
+        if self.view_cache.borrow().is_none() {
+            // Build a (index, &SessionAnalysis) list, filter, sort, then
+            // keep only the indices. All operations are safe — no raw pointers.
+            let mut indexed: Vec<(usize, &SessionAnalysis)> = self
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| matches_filter(a, &self.filter))
+                .collect();
+            // Sort by the same key as sort_view but operating on the indexed tuples.
+            indexed.sort_by(|(_, a), (_, b)| {
+                let ord = sort_key(a, b, self.sort_col);
+                match self.sort_dir {
+                    SortDir::Asc => ord,
+                    SortDir::Desc => ord.reverse(),
+                }
+            });
+            let indices: Vec<usize> = indexed.into_iter().map(|(i, _)| i).collect();
+            *self.view_cache.borrow_mut() = Some(indices);
+        }
+        self.view_cache
+            .borrow()
+            .as_ref()
+            .unwrap()
             .iter()
-            .filter(|a| matches_filter(a, &self.filter))
-            .collect();
-        sort_view(&mut v, self.sort_col, self.sort_dir);
-        v
+            .map(|&i| &self.sessions[i])
+            .collect()
     }
 
     /// Convenience: the count of sessions currently visible.
+    #[inline]
     pub fn view_len(&self) -> usize {
-        self.sessions
-            .iter()
-            .filter(|a| matches_filter(a, &self.filter))
-            .count()
+        // Re-use cached view to avoid double sort+filter.
+        self.view().len()
+    }
+
+    /// Mark the view cache stale. Must be called after every mutation
+    /// that can change which sessions are visible or their order.
+    fn invalidate_view_cache(&self) {
+        *self.view_cache.borrow_mut() = None;
     }
 
     /// Total session count, pre-filter.
@@ -469,6 +507,7 @@ impl App {
         self.plan_usage = plan_usage;
         self.refresh_count = self.refresh_count.saturating_add(1);
         self.last_error = None;
+        self.invalidate_view_cache();
         self.reconcile_selection();
     }
 
@@ -535,6 +574,7 @@ impl App {
     pub fn cycle_sort_column(&mut self) {
         self.sort_col = self.sort_col.next();
         self.sort_dir = self.sort_col.default_direction();
+        self.invalidate_view_cache();
         self.select_first();
     }
 
@@ -542,6 +582,7 @@ impl App {
     /// to the top so the user immediately sees the new first row.
     pub fn flip_sort_direction(&mut self) {
         self.sort_dir = self.sort_dir.flip();
+        self.invalidate_view_cache();
         self.select_first();
     }
 
@@ -556,6 +597,7 @@ impl App {
             self.sort_col = col;
             self.sort_dir = col.default_direction();
         }
+        self.invalidate_view_cache();
         self.select_first();
     }
 
@@ -590,16 +632,19 @@ impl App {
     pub fn clear_filter(&mut self) {
         self.filter.clear();
         self.mode = InputMode::Normal;
+        self.invalidate_view_cache();
         self.reconcile_selection();
     }
 
     pub fn push_filter_char(&mut self, c: char) {
         self.filter.push(c.to_ascii_lowercase());
+        self.invalidate_view_cache();
         self.reconcile_selection();
     }
 
     pub fn pop_filter_char(&mut self) {
         self.filter.pop();
+        self.invalidate_view_cache();
         self.reconcile_selection();
     }
 
@@ -694,42 +739,33 @@ fn matches_filter(a: &SessionAnalysis, filter_lower: &str) -> bool {
         .any(|hay| hay.to_ascii_lowercase().contains(filter_lower))
 }
 
-/// In-place sort by the user's chosen column + direction. Stable so
-/// secondary ordering (mtime-desc from `discover_all`) is preserved
-/// within groups.
-fn sort_view(view: &mut [&SessionAnalysis], col: SortColumn, dir: SortDir) {
+/// Compare two sessions by `col`, returning the ordering for ascending
+/// direction. Callers reverse for descending.
+fn sort_key(a: &SessionAnalysis, b: &SessionAnalysis, col: SortColumn) -> std::cmp::Ordering {
     use std::cmp::Ordering;
-    view.sort_by(|a, b| {
-        let ord = match col {
-            SortColumn::LastActive => a.summary.last_active.cmp(&b.summary.last_active),
-            SortColumn::Provider => {
-                let p = a.summary.provider.as_str().cmp(b.summary.provider.as_str());
-                if p == Ordering::Equal {
-                    a.summary.session_id.cmp(&b.summary.session_id)
-                } else {
-                    p
-                }
+    match col {
+        SortColumn::LastActive => a.summary.last_active.cmp(&b.summary.last_active),
+        SortColumn::Provider => {
+            let p = a.summary.provider.as_str().cmp(b.summary.provider.as_str());
+            if p == Ordering::Equal {
+                a.summary.session_id.cmp(&b.summary.session_id)
+            } else {
+                p
             }
-            SortColumn::Started => a.summary.started_at.cmp(&b.summary.started_at),
-            SortColumn::Model => {
-                cmp_opt_str(a.summary.model.as_deref(), b.summary.model.as_deref())
-            }
-            SortColumn::Cost => a
-                .cost
-                .total
-                .partial_cmp(&b.cost.total)
-                .unwrap_or(Ordering::Equal),
-            SortColumn::Tokens => grand_total(&a.tokens).cmp(&grand_total(&b.tokens)),
-            SortColumn::OutputTokens => a.tokens.output.cmp(&b.tokens.output),
-            SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
-            SortColumn::ToolCalls => cmp_opt_u64(a.tool_call_count, b.tool_call_count),
-            SortColumn::Duration => cmp_opt_u64(a.duration_secs, b.duration_secs),
-        };
-        match dir {
-            SortDir::Asc => ord,
-            SortDir::Desc => ord.reverse(),
         }
-    });
+        SortColumn::Started => a.summary.started_at.cmp(&b.summary.started_at),
+        SortColumn::Model => cmp_opt_str(a.summary.model.as_deref(), b.summary.model.as_deref()),
+        SortColumn::Cost => a
+            .cost
+            .total
+            .partial_cmp(&b.cost.total)
+            .unwrap_or(Ordering::Equal),
+        SortColumn::Tokens => grand_total(&a.tokens).cmp(&grand_total(&b.tokens)),
+        SortColumn::OutputTokens => a.tokens.output.cmp(&b.tokens.output),
+        SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
+        SortColumn::ToolCalls => cmp_opt_u64(a.tool_call_count, b.tool_call_count),
+        SortColumn::Duration => cmp_opt_u64(a.duration_secs, b.duration_secs),
+    }
 }
 
 /// Treat `None` as "sorts after everything" regardless of direction.

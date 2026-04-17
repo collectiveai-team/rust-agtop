@@ -12,11 +12,11 @@
 use ratatui::{
     layout::Alignment,
     prelude::*,
-    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
 };
 
 use crate::tui::app::App;
+use crate::tui::theme as th;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default()
@@ -31,12 +31,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Cell::from("COLUMN"),
         Cell::from("DESCRIPTION"),
     ])
-    .style(
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    .style(th::HEADER)
     .height(1);
 
     let rows: Vec<Row> = col_cfg
@@ -46,17 +41,14 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .map(|(i, entry)| {
             let check = if entry.visible { "[x]" } else { "[ ]" };
             let check_style = if entry.visible {
-                Style::default().fg(Color::Green)
+                th::CONFIG_CHECKED
             } else {
-                Style::default().fg(Color::DarkGray)
+                th::CONFIG_UNCHECKED
             };
             let row_style = if i == cursor {
-                Style::default()
-                    .bg(Color::Blue)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+                th::SELECTED
             } else {
-                Style::default()
+                ratatui::style::Style::new()
             };
             Row::new(vec![
                 Cell::from(check).style(check_style),
@@ -87,12 +79,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .row_highlight_style(
-            Style::default()
-                .bg(Color::Blue)
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )
+        .row_highlight_style(th::SELECTED)
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(table, area, &mut state);

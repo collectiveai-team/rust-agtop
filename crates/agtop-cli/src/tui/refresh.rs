@@ -11,6 +11,7 @@
 //! (`analyze_all`) is synchronous, so we wrap it in `spawn_blocking` to
 //! keep the runtime reactor unblocked.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,12 +42,26 @@ pub enum RefreshMsg {
 }
 
 /// Handle returned to the UI. Holding this alive keeps the worker
-/// running; dropping it shuts the runtime down cleanly via the
-/// internal cancel token.
+/// running; dropping it sets the shutdown flag and then drops the
+/// tokio runtime (which waits for any in-flight `spawn_blocking` task
+/// to complete before tearing down).
 pub struct RefreshHandle {
     rx: watch::Receiver<RefreshMsg>,
     manual_tx: watch::Sender<u64>,
+    /// Signals the worker loop to stop after the current iteration.
+    /// Set to `true` before we drop the runtime so the worker doesn't
+    /// start another `analyze_all` call while the runtime is shutting down.
+    shutdown: Arc<AtomicBool>,
     _runtime: tokio::runtime::Runtime,
+}
+
+impl Drop for RefreshHandle {
+    fn drop(&mut self) {
+        // Signal the worker to stop after its current `spawn_blocking`
+        // finishes. This prevents a new `analyze_all` from starting
+        // while the runtime is being torn down.
+        self.shutdown.store(true, Ordering::Release);
+    }
 }
 
 impl RefreshHandle {
@@ -119,6 +134,11 @@ pub fn spawn(
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
 
     let providers_arc = providers.clone();
+    // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
+    // worker knows not to start another `analyze_all` iteration after
+    // its current one finishes.
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown_worker = Arc::clone(&shutdown);
 
     // Spawn the worker on the runtime. We use `spawn_blocking` for the
     // CPU/IO-bound `analyze_all` so timers keep ticking.
@@ -128,6 +148,11 @@ pub fn spawn(
         let mut generation: u64 = 0;
         let mut manual_rx = manual_rx;
         loop {
+            // Check shutdown flag before starting any new analysis.
+            if shutdown_worker.load(Ordering::Acquire) {
+                break;
+            }
+
             generation = generation.wrapping_add(1);
             let providers_inner = providers_arc.clone();
             let result = tokio::task::spawn_blocking(move || {
@@ -154,6 +179,8 @@ pub fn spawn(
             }
 
             // Wait for either the tick deadline or a manual trigger.
+            // Also bail immediately if the shutdown flag was set while
+            // we were sleeping.
             tokio::select! {
                 _ = tokio::time::sleep(interval) => {}
                 changed = manual_rx.changed() => {
@@ -168,6 +195,7 @@ pub fn spawn(
     Ok(RefreshHandle {
         rx,
         manual_tx,
+        shutdown,
         _runtime: runtime,
     })
 }
