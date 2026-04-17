@@ -5,9 +5,9 @@ members = ["crates/agtop-core", "crates/agtop-cli"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-only"
-authors = ["rust-agtop contributors"]
-repository = "https://github.com/anomalyco/rust-agtop"
+license = "MIT"
+authors = ["jedzill4"]
+repository = "https://github.com/collectiveai-team/rust-agtop"
 rust-version = "1.75"
 
 [workspace.dependencies]
@@ -24,8 +24,17 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Used by agtop-core to fetch LiteLLM pricing JSON. Minimal sync HTTP
 # client with rustls — no tokio, no OpenSSL, no async runtime pulled in.
-ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+ureq = { version = "3", default-features = false, features = [
+    "rustls",
+    "json",
+] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
 
 [profile.release]
 lto = "thin"

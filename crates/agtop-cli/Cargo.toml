@@ -12,6 +12,9 @@ description = "CLI for agtop: list and inspect AI coding agent sessions with tok
 name = "agtop"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 agtop-core.workspace = true
 serde.workspace = true

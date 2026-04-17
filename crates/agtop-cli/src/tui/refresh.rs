@@ -51,7 +51,7 @@ pub struct RefreshHandle {
 
 impl RefreshHandle {
     /// Non-blocking peek at the latest message. Returns `None` if
-    /// nothing new has arrived since the last call. Use [`has_changed`]
+    /// nothing new has arrived since the last call. Use [`watch::Receiver::has_changed`]
     /// first to avoid redundant cloning on hot paths.
     pub fn try_recv(&mut self) -> Option<RefreshMsg> {
         if self.rx.has_changed().unwrap_or(false) {

@@ -2,3 +2,11 @@
 **/*.rs.bk
 Cargo.lock.bak
 .DS_Store
+.ruff_cache/
+
+# .agents
+# opencode.jsonc
+TODO
+
+# never ignore or try to remove this. superpower docs are not allow to be commited
+docs/superpowers

@@ -8,10 +8,12 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Core library for agtop: provider abstraction, session discovery, token/cost analysis for AI coding agents (Claude Code, Codex, OpenCode)."
 
+[lints]
+workspace = true
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
 thiserror.workspace = true
 dirs.workspace = true
 chrono.workspace = true
