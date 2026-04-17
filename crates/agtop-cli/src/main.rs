@@ -69,7 +69,9 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    init_logging(cli.verbose);
+    // TUI mode = bare `agtop` with no --list / --json / --watch.
+    let tui_mode = !cli.json && !cli.list && !cli.watch;
+    init_logging(cli.verbose, tui_mode);
 
     let plan = Plan::parse(&cli.plan)
         .with_context(|| format!("unknown plan '{}'; try retail|max|included", cli.plan))?;
@@ -258,8 +260,43 @@ fn setup_pricing(refresh: bool, disable: bool) {
     // handle the on-disk read at first use.
 }
 
-fn init_logging(verbose: bool) {
+fn init_logging(verbose: bool, tui_mode: bool) {
     use tracing_subscriber::{fmt, EnvFilter};
+
+    // In TUI mode the alternate screen occupies the whole terminal; any
+    // log lines written to stderr corrupt the ratatui rendering and make
+    // the UI unusable.  Unless the caller overrides via RUST_LOG, we
+    // silence everything.  With --verbose we redirect to a temp file so
+    // the user can `tail` it without affecting the TUI.
+    if tui_mode && std::env::var("RUST_LOG").is_err() {
+        if verbose {
+            // Redirect info-level logs to a temp file so the TUI stays clean.
+            // Users can `tail -f /tmp/agtop.log` in a separate terminal.
+            let log_path = std::env::temp_dir().join("agtop.log");
+            if let Ok(file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_path)
+            {
+                // std::fs::File implements MakeWriter (each call clones the fd).
+                let filter = EnvFilter::new("info");
+                let _ = fmt()
+                    .with_env_filter(filter)
+                    .with_writer(file)
+                    .try_init();
+                return;
+            }
+        }
+        // No --verbose and no RUST_LOG: install an off filter so zero log
+        // output reaches stderr (and therefore the TUI screen).
+        let filter = EnvFilter::new("off");
+        let _ = fmt()
+            .with_env_filter(filter)
+            .with_writer(std::io::stderr)
+            .try_init();
+        return;
+    }
+
     let default = if verbose { "info" } else { "warn" };
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
     let _ = fmt()
