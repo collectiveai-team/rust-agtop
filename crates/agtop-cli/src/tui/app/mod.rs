@@ -6,190 +6,40 @@
 //! without a terminal backend. The rendering layer in
 //! [`super::widgets`] consumes an [`App`] snapshot via shared refs.
 
+mod cost;
+mod filter;
+mod history;
+mod sort;
+
+// ---------------------------------------------------------------------------
+// Public re-exports (keep the external API stable)
+// ---------------------------------------------------------------------------
+
+pub use cost::cost_rows;
+pub use history::{UsageHistory, UsagePoint, CHART_WINDOW_MINS};
+pub use sort::{SortColumn, SortDir};
+
+use filter::matches_filter;
+use history::provider_idx;
+use sort::sort_key;
+
 use std::cell::RefCell;
-use std::collections::VecDeque;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 
-use agtop_core::session::{CostBreakdown, ProviderKind, SessionAnalysis, TokenTotals};
+use agtop_core::session::SessionAnalysis;
 
 use super::column_config::ColumnConfig;
 
 // ---------------------------------------------------------------------------
-// Rolling usage history (for dashboard charts)
+// UI mode / Tab / InputMode
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
-pub struct UsagePoint {
-    pub ts: DateTime<Utc>,
-    pub tokens_by_provider: [u64; 3],
-}
-
-#[derive(Debug, Default)]
-pub struct UsageHistory {
-    points: VecDeque<UsagePoint>,
-}
-
-pub const CHART_WINDOW_MINS: i64 = 60;
-const RETENTION_SECS: i64 = CHART_WINDOW_MINS * 60 * 2;
-
-impl UsageHistory {
-    pub fn push(&mut self, point: UsagePoint) {
-        let cutoff = point.ts - chrono::Duration::seconds(RETENTION_SECS);
-        self.points.push_back(point);
-        while self.points.front().is_some_and(|p| p.ts < cutoff) {
-            self.points.pop_front();
-        }
-    }
-
-    pub fn points(&self) -> &VecDeque<UsagePoint> {
-        &self.points
-    }
-
-    pub fn buckets_by_provider(
-        &self,
-        now: DateTime<Utc>,
-        n_buckets: usize,
-        provider: ProviderKind,
-    ) -> Vec<u64> {
-        self.buckets_by_provider_idx(now, n_buckets, provider_idx(provider))
-    }
-
-    fn buckets_by_provider_idx(
-        &self,
-        now: DateTime<Utc>,
-        n_buckets: usize,
-        provider_idx: usize,
-    ) -> Vec<u64> {
-        if n_buckets == 0 {
-            return Vec::new();
-        }
-        let window_secs = CHART_WINDOW_MINS * 60;
-        let bucket_secs = (window_secs / n_buckets as i64).max(1);
-        let window_start = now - chrono::Duration::seconds(window_secs);
-        let mut out = vec![0u64; n_buckets];
-
-        for p in &self.points {
-            if p.ts < window_start {
-                continue;
-            }
-            let age_secs = (now - p.ts).num_seconds().max(0);
-            let bucket_from_end = (age_secs / bucket_secs) as usize;
-            if bucket_from_end >= n_buckets {
-                continue;
-            }
-            let bucket = n_buckets - 1 - bucket_from_end;
-            let v = p.tokens_by_provider[provider_idx];
-            out[bucket] = out[bucket].max(v);
-        }
-
-        out
-    }
-}
-
-fn provider_idx(kind: ProviderKind) -> usize {
-    match kind {
-        ProviderKind::Claude => 0,
-        ProviderKind::Codex => 1,
-        ProviderKind::OpenCode => 2,
-        _ => usize::MAX,
-    }
-}
-
+/// Top-level rendering mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
     Classic,
     Dashboard,
-}
-
-/// Columns the user can sort the session table by. Cycles via `F6` / `>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortColumn {
-    /// Last-active timestamp (descending = most recent first). Default.
-    LastActive,
-    /// Provider name, then session id (ascending, alphabetical).
-    Provider,
-    /// Session started-at timestamp (descending = newest first).
-    Started,
-    /// Model string (ascending). Unknowns sort last.
-    Model,
-    /// Total dollar cost (descending). Included sessions count as 0.
-    Cost,
-    /// Grand-total token count (descending).
-    Tokens,
-    /// Output-only token count (descending).
-    OutputTokens,
-    /// Cache token total (read + write, descending).
-    CacheTokens,
-    /// Number of tool calls (descending). None sorts last.
-    ToolCalls,
-    /// Session wall-clock duration in seconds (descending). None sorts last.
-    Duration,
-}
-
-impl SortColumn {
-    /// Column immediately after `self` in the cycle order. Wraps around.
-    pub fn next(self) -> Self {
-        match self {
-            Self::LastActive => Self::Provider,
-            Self::Provider => Self::Started,
-            Self::Started => Self::Model,
-            Self::Model => Self::Cost,
-            Self::Cost => Self::Tokens,
-            Self::Tokens => Self::OutputTokens,
-            Self::OutputTokens => Self::CacheTokens,
-            Self::CacheTokens => Self::ToolCalls,
-            Self::ToolCalls => Self::Duration,
-            Self::Duration => Self::LastActive,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::LastActive => "last-active",
-            Self::Provider => "provider",
-            Self::Started => "started",
-            Self::Model => "model",
-            Self::Cost => "cost",
-            Self::Tokens => "tokens",
-            Self::OutputTokens => "output",
-            Self::CacheTokens => "cache",
-            Self::ToolCalls => "tool-calls",
-            Self::Duration => "duration",
-        }
-    }
-
-    /// The natural / most-useful direction for the column. LastActive,
-    /// Cost, and Tokens read best from high-to-low; Provider/Model read
-    /// best alphabetically. Users can flip with the `>` prefix key.
-    pub fn default_direction(self) -> SortDir {
-        match self {
-            Self::LastActive
-            | Self::Started
-            | Self::Cost
-            | Self::Tokens
-            | Self::OutputTokens
-            | Self::CacheTokens
-            | Self::ToolCalls
-            | Self::Duration => SortDir::Desc,
-            Self::Provider | Self::Model => SortDir::Asc,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDir {
-    Asc,
-    Desc,
-}
-
-impl SortDir {
-    pub fn flip(self) -> Self {
-        match self {
-            Self::Asc => Self::Desc,
-            Self::Desc => Self::Asc,
-        }
-    }
 }
 
 /// Bottom-panel tab selector.
@@ -230,14 +80,18 @@ impl Tab {
     }
 }
 
-/// What the keyboard is currently doing. In `Normal`, all bindings are
-/// active. In `Filter`, printable characters append to the filter buffer
-/// and Enter/Esc return to `Normal`.
+/// Keyboard input mode. In `Normal`, all bindings are active. In `Filter`,
+/// printable characters append to the filter buffer and Enter/Esc return
+/// to `Normal`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Filter,
 }
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 /// Top-level TUI state.
 #[derive(Debug)]
@@ -247,8 +101,6 @@ pub struct App {
     /// vector after assignment; sorting happens on the view list.
     sessions: Vec<SessionAnalysis>,
     /// Index into `view` for the highlighted row, or `None` when empty.
-    /// Stored as `Option<usize>` so the "no selection" state is explicit
-    /// rather than an implicit 0.
     selected_idx: Option<usize>,
     /// Session id that *was* selected before the last refresh. Used to
     /// re-find the same row after a background update changes the order
@@ -265,11 +117,9 @@ pub struct App {
     mode: InputMode,
     /// Set to true by the event loop when the user wants to quit.
     should_quit: bool,
-    /// Monotonic refresh counter. Incremented each time a fresh snapshot
-    /// is swapped in; useful for status-bar footers and tests.
+    /// Monotonic refresh counter.
     refresh_count: u64,
-    /// Last error we want to surface in the footer (e.g. refresh
-    /// failure). Cleared on the next successful refresh.
+    /// Last error to surface in the footer. Cleared on the next successful refresh.
     last_error: Option<String>,
     /// Classic table/tabs view vs btop-like dashboard.
     ui_mode: UiMode,
@@ -405,27 +255,21 @@ impl App {
         }
     }
 
-    /// Build the sorted + filtered view of sessions that the table
-    /// widget should render. Returns `Vec<&SessionAnalysis>` so we avoid
-    /// cloning the underlying data on every draw; the borrow is valid
-    /// until `App` is next mutated.
+    /// Build the sorted + filtered view of sessions that the table widget
+    /// should render.  Returns `Vec<&SessionAnalysis>` so we avoid cloning
+    /// the underlying data on every draw.
     ///
     /// The result is cached (as indices into `self.sessions`) behind
     /// `view_cache` and recomputed only when the cache is explicitly
-    /// invalidated by a mutation method. Typically 4–5 callers per frame
-    /// all hit the cache after the first one.
+    /// invalidated by a mutation method.
     pub fn view(&self) -> Vec<&SessionAnalysis> {
-        // Populate the cache if stale.
         if self.view_cache.borrow().is_none() {
-            // Build a (index, &SessionAnalysis) list, filter, sort, then
-            // keep only the indices. All operations are safe — no raw pointers.
             let mut indexed: Vec<(usize, &SessionAnalysis)> = self
                 .sessions
                 .iter()
                 .enumerate()
                 .filter(|(_, a)| matches_filter(a, &self.filter))
                 .collect();
-            // Sort by the same key as sort_view but operating on the indexed tuples.
             indexed.sort_by(|(_, a), (_, b)| {
                 let ord = sort_key(a, b, self.sort_col);
                 match self.sort_dir {
@@ -448,7 +292,6 @@ impl App {
     /// Convenience: the count of sessions currently visible.
     #[inline]
     pub fn view_len(&self) -> usize {
-        // Re-use cached view to avoid double sort+filter.
         self.view().len()
     }
 
@@ -464,8 +307,7 @@ impl App {
     }
 
     /// Return the selected row as `(index_in_view, SessionAnalysis)` or
-    /// `None` when the list is empty. Walks the view so the caller does
-    /// not need to recompute it.
+    /// `None` when the list is empty.
     pub fn selected(&self) -> Option<(usize, &SessionAnalysis)> {
         let view = self.view();
         let idx = self.selected_idx?;
@@ -478,9 +320,7 @@ impl App {
 
     // ---- mutations ---------------------------------------------------------
 
-    /// Replace the underlying session list with a fresh snapshot. Tries
-    /// to preserve the cursor on whichever session was selected before
-    /// by matching on `session_id`; otherwise clamps to a valid row.
+    /// Replace the underlying session list with a fresh snapshot.
     #[allow(dead_code)]
     pub fn set_sessions(&mut self, sessions: Vec<SessionAnalysis>) {
         self.set_snapshot(sessions, self.plan_usage.clone());
@@ -569,8 +409,7 @@ impl App {
     }
 
     /// Cycle sort column forward, snapping to the new column's default
-    /// direction so the first press of `>` from any state lands on a
-    /// "sensible" ordering. Moves the cursor to the top of the new order.
+    /// direction. Moves the cursor to the top of the new order.
     pub fn cycle_sort_column(&mut self) {
         self.sort_col = self.sort_col.next();
         self.sort_dir = self.sort_col.default_direction();
@@ -578,8 +417,7 @@ impl App {
         self.select_first();
     }
 
-    /// Flip the sort direction (ascending ↔ descending). Moves the cursor
-    /// to the top so the user immediately sees the new first row.
+    /// Flip the sort direction. Moves the cursor to the top.
     pub fn flip_sort_direction(&mut self) {
         self.sort_dir = self.sort_dir.flip();
         self.invalidate_view_cache();
@@ -589,7 +427,6 @@ impl App {
     /// Sort by `col` via mouse click on a header cell.
     /// - If `col` is already the active sort column, toggle the direction.
     /// - Otherwise, switch to `col` using its default direction.
-    ///   In both cases the cursor jumps to the top of the new order.
     pub fn set_sort_column(&mut self, col: SortColumn) {
         if self.sort_col == col {
             self.sort_dir = self.sort_dir.flip();
@@ -609,16 +446,13 @@ impl App {
         self.tab = self.tab.cycle_back();
     }
 
-    /// Directly set the active tab. Currently only used from tests and
-    /// prefs-restore paths; kept in the public API so the upcoming UI
-    /// prefs persistence (v0.2 follow-up) can reinstate saved state.
+    /// Directly set the active tab.
     #[allow(dead_code)]
     pub fn set_tab(&mut self, tab: Tab) {
         self.tab = tab;
     }
 
-    /// Enter filter-input mode. Preserves any existing filter string so
-    /// `/` + Enter is a quick "edit current filter" gesture.
+    /// Enter filter-input mode.
     pub fn enter_filter_mode(&mut self) {
         self.mode = InputMode::Filter;
     }
@@ -678,9 +512,6 @@ impl App {
     /// to put the cursor back on the same session_id the user selected.
     /// If that session is no longer visible, clamp the cursor into range.
     fn reconcile_selection(&mut self) {
-        // Resolve all view-dependent values before touching `self`
-        // again; otherwise the borrow checker (correctly) rejects the
-        // follow-up writes because `view` still borrows `self`.
         let (new_idx, new_sticky) = {
             let view = self.view();
             if view.is_empty() {
@@ -715,142 +546,14 @@ impl App {
     }
 }
 
-/// Does `a` match the current text filter? Empty filter → match all.
-/// The filter is lowercased by `push_filter_char`; we lowercase the
-/// haystack fields inline. We match against session id (short + full),
-/// model, effective_model, cwd, provider name, and subscription, which covers the
-/// cases users actually search for.
-fn matches_filter(a: &SessionAnalysis, filter_lower: &str) -> bool {
-    if filter_lower.is_empty() {
-        return true;
-    }
-    let s = &a.summary;
-    let candidates: [Option<&str>; 6] = [
-        Some(s.session_id.as_str()),
-        s.model.as_deref(),
-        a.effective_model.as_deref(),
-        s.cwd.as_deref(),
-        Some(s.provider.as_str()),
-        s.subscription.as_deref(),
-    ];
-    candidates
-        .iter()
-        .flatten()
-        .any(|hay| hay.to_ascii_lowercase().contains(filter_lower))
-}
-
-/// Compare two sessions by `col`, returning the ordering for ascending
-/// direction. Callers reverse for descending.
-fn sort_key(a: &SessionAnalysis, b: &SessionAnalysis, col: SortColumn) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match col {
-        SortColumn::LastActive => a.summary.last_active.cmp(&b.summary.last_active),
-        SortColumn::Provider => {
-            let p = a.summary.provider.as_str().cmp(b.summary.provider.as_str());
-            if p == Ordering::Equal {
-                a.summary.session_id.cmp(&b.summary.session_id)
-            } else {
-                p
-            }
-        }
-        SortColumn::Started => a.summary.started_at.cmp(&b.summary.started_at),
-        SortColumn::Model => cmp_opt_str(a.summary.model.as_deref(), b.summary.model.as_deref()),
-        SortColumn::Cost => a
-            .cost
-            .total
-            .partial_cmp(&b.cost.total)
-            .unwrap_or(Ordering::Equal),
-        SortColumn::Tokens => grand_total(&a.tokens).cmp(&grand_total(&b.tokens)),
-        SortColumn::OutputTokens => a.tokens.output.cmp(&b.tokens.output),
-        SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
-        SortColumn::ToolCalls => cmp_opt_u64(a.tool_call_count, b.tool_call_count),
-        SortColumn::Duration => cmp_opt_u64(a.duration_secs, b.duration_secs),
-    }
-}
-
-/// Treat `None` as "sorts after everything" regardless of direction.
-fn cmp_opt_u64(a: Option<u64>, b: Option<u64>) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match (a, b) {
-        (Some(x), Some(y)) => x.cmp(&y),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-/// Treat `None` as "sorts after everything" regardless of direction so
-/// unknown-model rows never fight for the top slot.
-fn cmp_opt_str(a: Option<&str>, b: Option<&str>) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    match (a, b) {
-        (Some(x), Some(y)) => x.cmp(y),
-        (Some(_), None) => Ordering::Less,
-        (None, Some(_)) => Ordering::Greater,
-        (None, None) => Ordering::Equal,
-    }
-}
-
-fn grand_total(t: &TokenTotals) -> u64 {
-    t.grand_total()
-}
-
-fn cache_total(t: &TokenTotals) -> u64 {
-    t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input
-}
-
-/// Small helper used by the Cost tab to format a single row uniformly.
-/// Lives here (rather than in widgets) so it's unit-testable without a
-/// backend.
-pub fn cost_row(label: &'static str, tokens: u64, dollars: f64) -> (&'static str, String, String) {
-    (label, format_tokens(tokens), format_dollars(dollars))
-}
-
-fn format_tokens(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.2}G", n as f64 / 1e9)
-    } else if n >= 1_000_000 {
-        format!("{:.2}M", n as f64 / 1e6)
-    } else if n >= 1_000 {
-        format!("{:.2}K", n as f64 / 1e3)
-    } else {
-        n.to_string()
-    }
-}
-
-fn format_dollars(d: f64) -> String {
-    if d == 0.0 {
-        "-".into()
-    } else {
-        // Four decimal places everywhere — session costs are typically
-        // in the $0.001–$10 range, so a uniform width keeps columns
-        // aligned without hiding sub-cent figures.
-        format!("${:.4}", d)
-    }
-}
-
-/// Public render-helper: the cost tab needs a predictable set of rows,
-/// in a predictable order, whether or not every token bucket is
-/// populated. Returning them from a pure function keeps the widget
-/// trivial and snapshot-testable.
-pub fn cost_rows(
-    tokens: &TokenTotals,
-    cost: &CostBreakdown,
-) -> Vec<(&'static str, String, String)> {
-    vec![
-        cost_row("input", tokens.input, cost.input),
-        cost_row("cached_input", tokens.cached_input, cost.cached_input),
-        cost_row("output", tokens.output, cost.output),
-        cost_row("cache_write_5m", tokens.cache_write_5m, cost.cache_write_5m),
-        cost_row("cache_write_1h", tokens.cache_write_1h, cost.cache_write_1h),
-        cost_row("cache_read", tokens.cache_read, cost.cache_read),
-    ]
-}
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{ProviderKind, SessionSummary};
+    use agtop_core::session::{CostBreakdown, ProviderKind, SessionSummary, TokenTotals};
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
 
@@ -985,12 +688,11 @@ mod tests {
             sample("b", ProviderKind::Claude, "claude-opus-4-6", 3.0, 200),
             sample("c", ProviderKind::Claude, "claude-opus-4-6", 2.0, 300),
         ]);
-        // Default column is LastActive; cycle forward to Cost.
         while app.sort_col() != SortColumn::Cost {
             app.cycle_sort_column();
         }
         let view = app.view();
-        assert_eq!(view[0].summary.session_id, "b"); // highest cost first
+        assert_eq!(view[0].summary.session_id, "b");
         assert_eq!(view[2].summary.session_id, "a");
     }
 
@@ -1034,11 +736,9 @@ mod tests {
             sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
             sample("c", ProviderKind::OpenCode, "gpt-5", 3.0, 300),
         ]);
-        app.move_selection(1); // select "b"
+        app.move_selection(1);
         assert_eq!(app.selected().unwrap().1.summary.session_id, "b");
 
-        // Simulate an updated snapshot where the order changes and a new
-        // row is prepended. Selection should stay pinned to "b".
         app.set_sessions(vec![
             sample("z", ProviderKind::Claude, "claude-opus-4-6", 5.0, 500),
             sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
@@ -1057,7 +757,7 @@ mod tests {
             sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
             sample("c", ProviderKind::OpenCode, "gpt-5", 3.0, 300),
         ]);
-        app.move_selection(2); // select "c"
+        app.move_selection(2);
         app.set_sessions(vec![sample(
             "a",
             ProviderKind::Claude,

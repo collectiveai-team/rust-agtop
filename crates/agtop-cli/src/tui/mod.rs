@@ -36,6 +36,7 @@ use ratatui::{
 
 use theme as th;
 
+use crate::fmt;
 use agtop_core::pricing::Plan;
 use agtop_core::Provider;
 
@@ -306,7 +307,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 i + 1,
                 app.view_len(),
                 a.summary.provider.as_str(),
-                short_id(&a.summary.session_id)
+                fmt::short_id(&a.summary.session_id)
             )
         })
         .unwrap_or_else(|| "[--]".into());
@@ -392,14 +393,6 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let p = Paragraph::new(text).style(style);
     frame.render_widget(p, area);
-}
-
-fn short_id(id: &str) -> String {
-    if id.starts_with("ses_") {
-        id[..id.len().min(10)].to_string()
-    } else {
-        id.chars().take(8).collect()
-    }
 }
 
 // ---------------------------------------------------------------------------

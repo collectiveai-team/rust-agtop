@@ -8,6 +8,7 @@ use ratatui::{
 
 use agtop_core::session::ProviderKind;
 
+use crate::fmt;
 use crate::tui::app::{App, CHART_WINDOW_MINS};
 use crate::tui::theme as th;
 
@@ -97,21 +98,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .unwrap_or([0, 0, 0]);
     let summary = format!(
         " now: claude {} /m · codex {} /m · opencode {} /m ",
-        compact(current[0]),
-        compact(current[1]),
-        compact(current[2])
+        fmt::compact(current[0]),
+        fmt::compact(current[1]),
+        fmt::compact(current[2])
     );
     frame.render_widget(Paragraph::new(summary).style(th::CHART_SUMMARY), rows[1]);
-}
-
-fn compact(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}G", n as f64 / 1e9)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1e6)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1e3)
-    } else {
-        n.to_string()
-    }
 }

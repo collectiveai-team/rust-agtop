@@ -3,6 +3,7 @@
 //! Default mode is an interactive ratatui TUI (see [`tui`]). `--list`
 //! and `--json` remain one-shot non-interactive paths for scripting.
 
+mod fmt;
 mod tui;
 
 use anyhow::{Context, Result};
@@ -359,9 +360,11 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
                     format!("{:.4}", c.total)
                 };
                 (
-                    compact(t.input),
-                    compact(t.output),
-                    compact(t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input),
+                    fmt::compact(t.input),
+                    fmt::compact(t.output),
+                    fmt::compact(
+                        t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input,
+                    ),
                     cost,
                 )
             }
@@ -373,7 +376,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             ),
         };
 
-        let mut short_session = short_id(&s.session_id);
+        let mut short_session = fmt::short_id(&s.session_id);
         // Flag Claude sessions that folded in subagent sidechains:
         // "20cb0a50+2" = 2 subagent files merged. Only appears when > 0.
         if let Some(a) = a {
@@ -386,21 +389,21 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
         let cwd = s.cwd.clone().unwrap_or_else(|| "-".into());
         let started = s
             .started_at
-            .map(format_local_datetime)
+            .map(fmt::format_local_datetime)
             .unwrap_or_else(|| "-".into());
         let age = s
             .last_active
-            .map(|t| relative_age(t, now))
+            .map(|t| fmt::relative_age(t, now))
             .unwrap_or_else(|| "-".into());
         println!(
             "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
             s.provider.as_str(),
-            fit(&subscription, 16),
-            fit(&short_session, 10),
-            fit(&started, 16),
-            fit(&age, 4),
-            fit(&model, 20),
-            fit(&shorten_path(&cwd), 18),
+            fmt::fit(&subscription, 16),
+            fmt::fit(&short_session, 10),
+            fmt::fit(&started, 16),
+            fmt::fit(&age, 4),
+            fmt::fit(&model, 20),
+            fmt::fit(&fmt::shorten_path(&cwd), 18),
             input,
             output,
             cache,
@@ -425,9 +428,9 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
     println!(
         "totals: {} sessions  in={}  out={}  cache={}  cost=${:.4} (billed)  incl.sessions={}",
         analyses.len(),
-        compact(totals.tokens.input),
-        compact(totals.tokens.output),
-        compact(
+        fmt::compact(totals.tokens.input),
+        fmt::compact(totals.tokens.output),
+        fmt::compact(
             totals.tokens.cache_read
                 + totals.tokens.cache_write_5m
                 + totals.tokens.cache_write_1h
@@ -436,79 +439,6 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
         totals.cost_total_billed,
         totals.included_sessions
     );
-}
-
-/// Format a UTC timestamp as a short local datetime: "YYYY-MM-DD HH:MM".
-/// Uses the system's local timezone so the output is meaningful to the user.
-fn format_local_datetime(ts: DateTime<Utc>) -> String {
-    use chrono::Local;
-    ts.with_timezone(&Local)
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
-}
-
-/// htop/agtop-style relative age. Mirrors the original index.js helper.
-fn relative_age(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = (now - ts).num_seconds().max(0);
-    if secs < 60 {
-        return "now".into();
-    }
-    if secs < 3600 {
-        return format!("{}m", secs / 60);
-    }
-    if secs < 86_400 {
-        return format!("{}h", secs / 3600);
-    }
-    if secs < 604_800 {
-        return format!("{}d", secs / 86_400);
-    }
-    if secs < 2_592_000 {
-        return format!("{}w", secs / 604_800);
-    }
-    if secs < 31_536_000 {
-        return format!("{}mo", secs / 2_592_000);
-    }
-    format!("{}y", secs / 31_536_000)
-}
-
-fn compact(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}G", n as f64 / 1e9)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1e6)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1e3)
-    } else {
-        n.to_string()
-    }
-}
-
-fn short_id(id: &str) -> String {
-    // Claude: full UUID → first 8 chars. Codex: full UUID → first 8 chars.
-    // OpenCode: ses_<id> → keep full (already short).
-    if id.starts_with("ses_") {
-        return id[..id.len().min(10)].to_string();
-    }
-    id.chars().take(8).collect()
-}
-
-fn fit(s: &str, w: usize) -> String {
-    if s.chars().count() <= w {
-        format!("{:<w$}", s, w = w)
-    } else {
-        let mut t: String = s.chars().take(w.saturating_sub(1)).collect();
-        t.push('…');
-        t
-    }
-}
-
-fn shorten_path(p: &str) -> String {
-    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_string)) {
-        if let Some(rest) = p.strip_prefix(&home) {
-            return format!("~{}", rest);
-        }
-    }
-    p.to_string()
 }
 
 // ---------------------------------------------------------------------------

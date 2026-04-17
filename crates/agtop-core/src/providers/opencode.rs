@@ -568,51 +568,49 @@ fn first_message_identity_sqlite(
     .unwrap_or((None, None))
 }
 
-fn analyze_session_sqlite(
-    summary: &SessionSummary,
-    plan: Plan,
-    db_path: &Path,
-) -> Result<SessionAnalysis> {
-    let conn = open_db(db_path)?;
+// ---------------------------------------------------------------------------
+// Turn accumulator — shared by SQLite and JSON analysis paths
+// ---------------------------------------------------------------------------
 
-    let mut stmt = conn.prepare(
-        "SELECT data FROM message \
-         WHERE session_id = ?1 \
-           AND json_extract(data, '$.role') = 'assistant'",
-    )?;
+/// Accumulates token totals, cost, and context-window metrics across the
+/// assistant-role messages of a single OpenCode session.  Both the SQLite
+/// path and the legacy JSON path iterate over `serde_json::Value` objects
+/// that have the same schema; only the *source* of those values differs.
+struct TurnAccumulator {
+    totals: TokenTotals,
+    model: Option<String>,
+    cost_reported: f64,
+    saw: bool,
+    tool_call_count: u64,
+    context_used_pct: Option<f64>,
+    context_used_tokens: Option<u64>,
+    context_window: Option<u64>,
+}
 
-    let mut totals = TokenTotals::default();
-    let mut model: Option<String> = summary.model.clone();
-    let mut cost_reported: f64 = 0.0;
-    let mut saw = false;
-    let mut tool_call_count: u64 = 0;
-    let mut context_used_pct: Option<f64> = None;
-    let mut context_used_tokens: Option<u64> = None;
-    let mut context_window: Option<u64> = None;
+impl TurnAccumulator {
+    fn new(initial_model: Option<String>) -> Self {
+        Self {
+            totals: TokenTotals::default(),
+            model: initial_model,
+            cost_reported: 0.0,
+            saw: false,
+            tool_call_count: 0,
+            context_used_pct: None,
+            context_used_tokens: None,
+            context_window: None,
+        }
+    }
 
-    let rows = stmt.query_map(rusqlite::params![&summary.session_id], |row| {
-        row.get::<_, String>(0)
-    })?;
-
-    for row in rows {
-        let data_str = match row {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-        let v: serde_json::Value = match serde_json::from_str(&data_str) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        if model.is_none() {
+    /// Ingest one assistant-role message value.
+    fn process_turn(&mut self, v: &serde_json::Value) {
+        if self.model.is_none() {
             if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
-                model = Some(m.to_string());
+                self.model = Some(m.to_string());
             }
         }
         if v.get("finish").and_then(|x| x.as_str()) == Some("tool-calls") {
-            tool_call_count += 1;
+            self.tool_call_count += 1;
         }
-
         if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
             if let Some(window) =
                 pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
@@ -634,78 +632,118 @@ fn analyze_session_sqlite(
                     })
                     .unwrap_or(0);
                 let pct = (turn_total as f64 / window as f64) * 100.0;
-                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
-                context_used_pct = Some(match context_used_pct {
+                let is_new_peak = self.context_used_pct.is_none_or(|cur| pct > cur);
+                self.context_used_pct = Some(match self.context_used_pct {
                     Some(cur) if cur >= pct => cur,
                     _ => pct,
                 });
                 if is_new_peak {
-                    context_used_tokens = Some(turn_total);
-                    context_window = Some(window);
+                    self.context_used_tokens = Some(turn_total);
+                    self.context_window = Some(window);
                 }
             }
         }
         if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
-            cost_reported += c;
+            self.cost_reported += c;
         }
         if let Some(t) = v.get("tokens") {
-            saw = true;
+            self.saw = true;
             let g = |k: &str| t.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-            totals.input += g("input");
-            totals.output += g("output");
-            totals.reasoning_output += g("reasoning");
+            self.totals.input += g("input");
+            self.totals.output += g("output");
+            self.totals.reasoning_output += g("reasoning");
             if let Some(cache) = t.get("cache") {
-                totals.cache_read += cache.get("read").and_then(|x| x.as_u64()).unwrap_or(0);
-                totals.cache_write_5m += cache.get("write").and_then(|x| x.as_u64()).unwrap_or(0);
+                self.totals.cache_read += cache.get("read").and_then(|x| x.as_u64()).unwrap_or(0);
+                self.totals.cache_write_5m +=
+                    cache.get("write").and_then(|x| x.as_u64()).unwrap_or(0);
             }
         }
     }
 
-    if !saw {
-        return Err(Error::NoUsage(summary.session_id.clone()));
-    }
-    totals.cached_input = totals.cache_read;
-
-    let included = matches!(plan.mode_for(ProviderKind::OpenCode), PlanMode::Included);
-    let cost = match model
-        .as_deref()
-        .and_then(|m| pricing::lookup(ProviderKind::OpenCode, m))
-    {
-        Some(rates) => pricing::compute_cost(&totals, &rates, included),
-        None => {
-            if included {
-                Default::default()
-            } else {
-                crate::session::CostBreakdown {
-                    total: cost_reported,
-                    output: cost_reported,
-                    ..Default::default()
-                }
-            }
+    /// Finalise and build a `SessionAnalysis`.  Returns `Err(NoUsage)` when
+    /// no token-bearing turns were seen.
+    fn finish(mut self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
+        if !self.saw {
+            return Err(Error::NoUsage(summary.session_id.clone()));
         }
-    };
+        self.totals.cached_input = self.totals.cache_read;
 
-    Ok(SessionAnalysis {
-        summary: summary.clone(),
-        tokens: totals,
-        cost,
-        effective_model: model,
-        subagent_file_count: 0,
-        tool_call_count: Some(tool_call_count),
-        duration_secs: summary
-            .started_at
-            .zip(summary.last_active)
-            .and_then(|(start, end)| {
-                if end >= start {
-                    Some((end - start).num_seconds() as u64)
+        let included = matches!(plan.mode_for(ProviderKind::OpenCode), PlanMode::Included);
+        let cost = match self
+            .model
+            .as_deref()
+            .and_then(|m| pricing::lookup(ProviderKind::OpenCode, m))
+        {
+            Some(rates) => pricing::compute_cost(&self.totals, &rates, included),
+            None => {
+                if included {
+                    Default::default()
                 } else {
-                    None
+                    crate::session::CostBreakdown {
+                        total: self.cost_reported,
+                        output: self.cost_reported,
+                        ..Default::default()
+                    }
                 }
-            }),
-        context_used_pct,
-        context_used_tokens,
-        context_window,
-    })
+            }
+        };
+
+        Ok(SessionAnalysis {
+            summary: summary.clone(),
+            tokens: self.totals,
+            cost,
+            effective_model: self.model,
+            subagent_file_count: 0,
+            tool_call_count: Some(self.tool_call_count),
+            duration_secs: summary
+                .started_at
+                .zip(summary.last_active)
+                .and_then(|(start, end)| {
+                    if end >= start {
+                        Some((end - start).num_seconds() as u64)
+                    } else {
+                        None
+                    }
+                }),
+            context_used_pct: self.context_used_pct,
+            context_used_tokens: self.context_used_tokens,
+            context_window: self.context_window,
+        })
+    }
+}
+
+fn analyze_session_sqlite(
+    summary: &SessionSummary,
+    plan: Plan,
+    db_path: &Path,
+) -> Result<SessionAnalysis> {
+    let conn = open_db(db_path)?;
+
+    let mut stmt = conn.prepare(
+        "SELECT data FROM message \
+         WHERE session_id = ?1 \
+           AND json_extract(data, '$.role') = 'assistant'",
+    )?;
+
+    let mut acc = TurnAccumulator::new(summary.model.clone());
+
+    let rows = stmt.query_map(rusqlite::params![&summary.session_id], |row| {
+        row.get::<_, String>(0)
+    })?;
+
+    for row in rows {
+        let data_str = match row {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let v: serde_json::Value = match serde_json::from_str(&data_str) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        acc.process_turn(&v);
+    }
+
+    acc.finish(summary, plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -833,14 +871,7 @@ fn analyze_opencode_session_json(
         return Err(Error::NoUsage(summary.session_id.clone()));
     }
 
-    let mut totals = TokenTotals::default();
-    let mut model: Option<String> = summary.model.clone();
-    let mut cost_reported: f64 = 0.0;
-    let mut saw = false;
-    let mut tool_call_count: u64 = 0;
-    let mut context_used_pct: Option<f64> = None;
-    let mut context_used_tokens: Option<u64> = None;
-    let mut context_window: Option<u64> = None;
+    let mut acc = TurnAccumulator::new(summary.model.clone());
 
     let entries = fs::read_dir(&msg_dir)?;
     for f in entries.flatten() {
@@ -855,107 +886,10 @@ fn analyze_opencode_session_json(
         if v.get("role").and_then(|x| x.as_str()) != Some("assistant") {
             continue;
         }
-        if model.is_none() {
-            if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
-                model = Some(m.to_string());
-            }
-        }
-        if v.get("finish").and_then(|x| x.as_str()) == Some("tool-calls") {
-            tool_call_count += 1;
-        }
-        if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
-            if let Some(window) =
-                pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
-            {
-                let turn_total = v
-                    .get("tokens")
-                    .map(|t| {
-                        t.get("input").and_then(|x| x.as_u64()).unwrap_or(0)
-                            + t.get("output").and_then(|x| x.as_u64()).unwrap_or(0)
-                            + t.get("reasoning").and_then(|x| x.as_u64()).unwrap_or(0)
-                            + t.get("cache")
-                                .and_then(|c| c.get("read"))
-                                .and_then(|x| x.as_u64())
-                                .unwrap_or(0)
-                            + t.get("cache")
-                                .and_then(|c| c.get("write"))
-                                .and_then(|x| x.as_u64())
-                                .unwrap_or(0)
-                    })
-                    .unwrap_or(0);
-                let pct = (turn_total as f64 / window as f64) * 100.0;
-                let is_new_peak = context_used_pct.is_none_or(|cur| pct > cur);
-                context_used_pct = Some(match context_used_pct {
-                    Some(cur) if cur >= pct => cur,
-                    _ => pct,
-                });
-                if is_new_peak {
-                    context_used_tokens = Some(turn_total);
-                    context_window = Some(window);
-                }
-            }
-        }
-        if let Some(c) = v.get("cost").and_then(|x| x.as_f64()) {
-            cost_reported += c;
-        }
-        if let Some(t) = v.get("tokens") {
-            saw = true;
-            let g = |k: &str| t.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-            totals.input += g("input");
-            totals.output += g("output");
-            totals.reasoning_output += g("reasoning");
-            if let Some(cache) = t.get("cache") {
-                totals.cache_read += cache.get("read").and_then(|x| x.as_u64()).unwrap_or(0);
-                totals.cache_write_5m += cache.get("write").and_then(|x| x.as_u64()).unwrap_or(0);
-            }
-        }
+        acc.process_turn(&v);
     }
 
-    if !saw {
-        return Err(Error::NoUsage(summary.session_id.clone()));
-    }
-    totals.cached_input = totals.cache_read;
-
-    let included = matches!(plan.mode_for(ProviderKind::OpenCode), PlanMode::Included);
-    let cost = match model
-        .as_deref()
-        .and_then(|m| pricing::lookup(ProviderKind::OpenCode, m))
-    {
-        Some(rates) => pricing::compute_cost(&totals, &rates, included),
-        None => {
-            if included {
-                Default::default()
-            } else {
-                crate::session::CostBreakdown {
-                    total: cost_reported,
-                    output: cost_reported,
-                    ..Default::default()
-                }
-            }
-        }
-    };
-
-    Ok(SessionAnalysis {
-        summary: summary.clone(),
-        tokens: totals,
-        cost,
-        effective_model: model,
-        subagent_file_count: 0,
-        tool_call_count: Some(tool_call_count),
-        duration_secs: summary
-            .started_at
-            .zip(summary.last_active)
-            .and_then(|(start, end)| {
-                if end >= start {
-                    Some((end - start).num_seconds() as u64)
-                } else {
-                    None
-                }
-            }),
-        context_used_pct,
-        context_used_tokens,
-        context_window,
-    })
+    acc.finish(summary, plan)
 }
 
 #[cfg(test)]

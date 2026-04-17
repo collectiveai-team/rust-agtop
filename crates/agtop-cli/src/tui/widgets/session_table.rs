@@ -4,7 +4,7 @@
 //! lives in [`crate::tui::app`]. This module just turns the app
 //! snapshot into ratatui widgets.
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use ratatui::{
     layout::Constraint,
     prelude::*,
@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Cell, Row, Table, TableState},
 };
 
+use crate::fmt;
 use crate::tui::app::{App, SortColumn, SortDir};
 use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
@@ -169,22 +170,22 @@ fn row_for<'a>(
 
     let started = s
         .started_at
-        .map(format_local_datetime)
+        .map(fmt::format_local_datetime)
         .unwrap_or_else(|| "-".into());
     let age = s
         .last_active
-        .map(|ts| relative_age(ts, now))
+        .map(|ts| fmt::relative_age(ts, now))
         .unwrap_or_else(|| "-".into());
     let model = s.model.clone().unwrap_or_else(|| "?".into());
     let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
-    let cwd = shorten_path(s.cwd.as_deref().unwrap_or("-"));
+    let cwd = fmt::shorten_path(s.cwd.as_deref().unwrap_or("-"));
     let cost_str = if c.included {
         "incl".to_string()
     } else {
         format!("{:.4}", c.total)
     };
     let short = {
-        let mut id = short_id(&s.session_id);
+        let mut id = fmt::short_id(&s.session_id);
         if a.subagent_file_count > 0 {
             id.push_str(&format!("+{}", a.subagent_file_count));
         }
@@ -219,9 +220,9 @@ fn row_for<'a>(
             ColumnId::Age => Cell::from(age.clone()),
             ColumnId::Model => Cell::from(model.clone()),
             ColumnId::Cwd => Cell::from(cwd.clone()),
-            ColumnId::Tokens => Cell::from(compact(t.input + t.output + cache_total)),
-            ColumnId::OutputTokens => Cell::from(compact(t.output)),
-            ColumnId::CacheTokens => Cell::from(compact(cache_total)),
+            ColumnId::Tokens => Cell::from(fmt::compact(t.input + t.output + cache_total)),
+            ColumnId::OutputTokens => Cell::from(fmt::compact(t.output)),
+            ColumnId::CacheTokens => Cell::from(fmt::compact(cache_total)),
             ColumnId::Cost => Cell::from(cost_str.clone()).style(cost_style),
             ColumnId::ToolCalls => Cell::from(
                 a.tool_call_count
@@ -230,78 +231,11 @@ fn row_for<'a>(
             ),
             ColumnId::Duration => Cell::from(
                 a.duration_secs
-                    .map(format_duration_compact)
+                    .map(fmt::format_duration_compact)
                     .unwrap_or_else(|| "-".into()),
             ),
         })
         .collect();
 
     Row::new(cells)
-}
-
-fn format_local_datetime(ts: DateTime<Utc>) -> String {
-    ts.with_timezone(&Local)
-        .format("%Y-%m-%d %H:%M")
-        .to_string()
-}
-
-fn relative_age(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = (now - ts).num_seconds().max(0);
-    if secs < 60 {
-        return "now".into();
-    }
-    if secs < 3600 {
-        return format!("{}m", secs / 60);
-    }
-    if secs < 86_400 {
-        return format!("{}h", secs / 3600);
-    }
-    if secs < 604_800 {
-        return format!("{}d", secs / 86_400);
-    }
-    if secs < 2_592_000 {
-        return format!("{}w", secs / 604_800);
-    }
-    if secs < 31_536_000 {
-        return format!("{}mo", secs / 2_592_000);
-    }
-    format!("{}y", secs / 31_536_000)
-}
-
-fn compact(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{:.1}G", n as f64 / 1e9)
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1e6)
-    } else if n >= 1_000 {
-        format!("{:.1}K", n as f64 / 1e3)
-    } else {
-        n.to_string()
-    }
-}
-
-fn format_duration_compact(secs: u64) -> String {
-    if secs >= 3600 {
-        format!("{}h{}m", secs / 3600, (secs % 3600) / 60)
-    } else if secs >= 60 {
-        format!("{}m{}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
-}
-
-fn short_id(id: &str) -> String {
-    if id.starts_with("ses_") {
-        return id[..id.len().min(10)].to_string();
-    }
-    id.chars().take(8).collect()
-}
-
-fn shorten_path(p: &str) -> String {
-    if let Some(home) = dirs::home_dir().and_then(|h| h.to_str().map(str::to_string)) {
-        if let Some(rest) = p.strip_prefix(&home) {
-            return format!("~{}", rest);
-        }
-    }
-    p.to_string()
 }
