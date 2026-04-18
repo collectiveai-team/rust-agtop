@@ -329,3 +329,122 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], 
     let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(p, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agtop_core::session::{PlanUsage, PlanWindow, ProviderKind};
+
+    fn make_pu(label: &str, plan_name: Option<&str>) -> PlanUsage {
+        PlanUsage::new(
+            ProviderKind::Claude,
+            label.to_string(),
+            plan_name.map(|s| s.to_string()),
+            Vec::new(),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn canonical_name_prefers_plan_name() {
+        let pu = make_pu("Claude Code · Max 5x", Some("max_5x"));
+        assert_eq!(canonical_name(&pu), "max_5x");
+    }
+
+    #[test]
+    fn canonical_name_strips_via_suffix() {
+        let pu = make_pu("Max 5x via Claude Code", None);
+        assert_eq!(canonical_name(&pu), "Max 5x");
+    }
+
+    #[test]
+    fn canonical_name_strips_agent_prefix() {
+        let pu = make_pu("Claude Code · Max 5x", None);
+        assert_eq!(canonical_name(&pu), "Max 5x");
+    }
+
+    #[test]
+    fn canonical_name_strips_opencode_prefix() {
+        let pu = make_pu("OpenCode · anthropic (Max)", None);
+        assert_eq!(canonical_name(&pu), "anthropic (Max)");
+    }
+
+    #[test]
+    fn merge_deduplicates_same_subscription() {
+        let pu1 = make_pu("Max 5x via Claude Code", None);
+        let pu2 = make_pu("Max 5x via OpenCode", None);
+        let plans = [pu1, pu2];
+        let merged = merge_plans(&plans);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].subscription_name, "Max 5x");
+    }
+
+    #[test]
+    fn merge_keeps_two_different_subscriptions() {
+        let pu1 = make_pu("Max 5x via Claude Code", None);
+        let pu2 = make_pu("ChatGPT Plus", None);
+        let plans = [pu1, pu2];
+        let merged = merge_plans(&plans);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_window_dedup_keeps_newer_reset() {
+        use chrono::TimeZone;
+
+        let t1 = Utc.with_ymd_and_hms(2026, 4, 18, 10, 0, 0).unwrap();
+        let t2 = Utc.with_ymd_and_hms(2026, 4, 18, 12, 0, 0).unwrap();
+
+        let mut pu1 = make_pu("Max via Claude Code", None);
+        pu1.windows.push(PlanWindow::new(
+            "5h".to_string(),
+            Some(0.5),
+            Some(t1),
+            None,
+            false,
+        ));
+
+        let mut pu2 = make_pu("Max via OpenCode", None);
+        pu2.windows.push(PlanWindow::new(
+            "5h".to_string(),
+            Some(0.7),
+            Some(t2),
+            None,
+            false,
+        ));
+
+        let plans = [pu1, pu2];
+        let merged = merge_plans(&plans);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].windows.len(), 1);
+        // t2 is more recent, so the window with utilization 0.7 should be kept.
+        assert!((merged[0].windows[0].utilization.unwrap() - 0.7).abs() < 1e-9);
+    }
+
+    #[test]
+    fn bar_style_green_below_30() {
+        assert_eq!(bar_style(Some(0.29)), th::PLAN_BAR_GREEN);
+        assert_eq!(bar_style(Some(0.0)), th::PLAN_BAR_GREEN);
+    }
+
+    #[test]
+    fn bar_style_yellow_30_to_80() {
+        assert_eq!(bar_style(Some(0.30)), th::PLAN_BAR_YELLOW);
+        assert_eq!(bar_style(Some(0.79)), th::PLAN_BAR_YELLOW);
+    }
+
+    #[test]
+    fn bar_style_red_at_or_above_80() {
+        assert_eq!(bar_style(Some(0.80)), th::PLAN_BAR_RED);
+        assert_eq!(bar_style(Some(1.0)), th::PLAN_BAR_RED);
+    }
+
+    #[test]
+    fn bar_spans_correct_char_counts() {
+        let [filled, empty] = bar_spans(Some(0.5), 10);
+        // 50% of 10 = 5 filled, 5 empty.
+        assert_eq!(filled.content.chars().count(), 5);
+        assert_eq!(empty.content.chars().count(), 5);
+    }
+}
