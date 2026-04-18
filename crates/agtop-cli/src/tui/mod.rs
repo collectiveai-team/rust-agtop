@@ -63,6 +63,24 @@ struct UiLayout {
     /// Each entry: `(x_start, x_end_exclusive, Tab)`.
     /// Populated by `render_bottom_panel` after measuring actual title widths.
     tab_cells: Vec<(u16, u16, Tab)>,
+    /// The one-row tab bar area for the Cost Summary sub-tab in the dashboard.
+    cost_tab_bar_area: Rect,
+    /// Absolute terminal x-ranges for each Cost Summary sub-tab button.
+    /// Each entry: `(x_start, x_end_exclusive, CostTab)`.
+    /// Populated by `dashboard_cost::render`.
+    cost_tab_cells: Vec<(u16, u16, app::CostTab)>,
+    /// The single-row area that holds the period toggle ("total" / "month").
+    /// Used for both row-range and x-range hit-testing.
+    cost_period_row_area: Rect,
+    /// Click ranges for the "total" / "month" period toggle labels.
+    /// Each entry: `(x_start, x_end_exclusive, CostPeriod)`.
+    cost_period_cells: Vec<(u16, u16, app::CostPeriod)>,
+    /// Full area of the Cost Summary panel (for scroll-wheel hit-testing).
+    cost_panel_area: Rect,
+    /// Number of data rows in the current breakdown (for scroll clamping).
+    cost_row_count: usize,
+    /// Number of visible data rows in the current breakdown (for scroll clamping).
+    cost_visible_rows: usize,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -162,14 +180,19 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
 /// is sourced from the `UiLayout` captured during the previous render.
 fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
     match event.kind {
-        // ── Scroll wheel — only when the cursor is over the table area ────
+        // ── Scroll wheel ──────────────────────────────────────────────────
         MouseEventKind::ScrollDown => {
-            if rect_contains(layout.table_area, event.column, event.row) {
+            if rect_contains(layout.cost_panel_area, event.column, event.row) {
+                // cost panel takes priority; table area may overlap in classic mode
+                app.scroll_cost_down(2, layout.cost_row_count, layout.cost_visible_rows);
+            } else if rect_contains(layout.table_area, event.column, event.row) {
                 app.move_selection(3);
             }
         }
         MouseEventKind::ScrollUp => {
-            if rect_contains(layout.table_area, event.column, event.row) {
+            if rect_contains(layout.cost_panel_area, event.column, event.row) {
+                app.scroll_cost_up(2);
+            } else if rect_contains(layout.table_area, event.column, event.row) {
                 app.move_selection(-3);
             }
         }
@@ -177,6 +200,33 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
         // ── Left-click ────────────────────────────────────────────────────
         MouseEventKind::Down(MouseButton::Left) => {
             let (col, row) = (event.column, event.row);
+
+            // Click on the Cost Summary period toggle row ("total" / "month").
+            // Use the precise row Rect so clicks on the tab bar below don't
+            // accidentally trigger the period check.
+            if rect_contains(layout.cost_period_row_area, col, row) {
+                for &(x_start, x_end, period) in &layout.cost_period_cells {
+                    if col >= x_start && col < x_end {
+                        app.set_cost_period(period);
+                        return;
+                    }
+                }
+                // Click landed on the period row but not on a label — consume
+                // the event so it doesn't fall through to the session table.
+                return;
+            }
+
+            // Click on the Cost Summary sub-tab bar (dashboard mode).
+            if rect_contains(layout.cost_tab_bar_area, col, row) {
+                for &(x_start, x_end, tab) in &layout.cost_tab_cells {
+                    if col >= x_start && col < x_end {
+                        app.set_cost_tab(tab);
+                        return;
+                    }
+                }
+                // Click on the tab bar area but not on a tab title — consume.
+                return;
+            }
 
             // Click on the tab bar → activate the tab under the cursor.
             // We use the pixel-accurate ranges recorded during render so
@@ -290,7 +340,18 @@ fn render_dashboard(
         .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(outer[2]);
     widgets::dashboard_plan::render(frame, mid[0], app);
-    widgets::dashboard_cost::render(frame, mid[1], app);
+    widgets::dashboard_cost::render(
+        frame,
+        mid[1],
+        app,
+        &mut layout.cost_tab_bar_area,
+        &mut layout.cost_tab_cells,
+        &mut layout.cost_period_row_area,
+        &mut layout.cost_period_cells,
+        &mut layout.cost_panel_area,
+        &mut layout.cost_row_count,
+        &mut layout.cost_visible_rows,
+    );
 
     layout.table_area = outer[3];
     layout.tab_bar_area = Rect::default();
@@ -628,6 +689,46 @@ mod tests {
         assert!(contents.contains("no session selected"));
     }
 
+    #[test]
+    fn renders_dashboard_with_plan_usage() {
+        use agtop_core::session::{PlanUsage, PlanWindow};
+
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.toggle_ui_mode(); // switch to Dashboard
+
+        let reset_at = Utc.with_ymd_and_hms(2026, 4, 18, 13, 0, 0).unwrap();
+        let windows = vec![
+            PlanWindow::new("5h".into(), Some(0.71), Some(reset_at), None, true),
+            PlanWindow::new("7d".into(), Some(0.18), Some(reset_at), None, false),
+        ];
+        let plan_usage = vec![PlanUsage::new(
+            ProviderKind::Claude,
+            "Max 5x via Claude Code".into(),
+            Some("Max 5x".into()),
+            windows,
+            None,
+            None,
+        )];
+        app.set_snapshot(vec![], plan_usage);
+
+        let mut state = ratatui::widgets::TableState::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
+            .expect("draw");
+
+        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        assert!(
+            contents.contains("Subscription Details"),
+            "panel title missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Max 5x"),
+            "subscription name missing:\n{contents}"
+        );
+    }
+
     /// Click hit-testing for the bottom-panel tabs must match the
     /// *rendered* x-range of each tab title, not just the title text
     /// width. ratatui's `Tabs` widget pads every title with a 1-column
@@ -772,6 +873,83 @@ mod tests {
         };
         apply_mouse(&mut app, event, &layout);
         assert_eq!(app.tab(), Tab::Config);
+    }
+
+    /// Clicking each sortable column header must activate that column's sort.
+    /// We scan the rendered buffer to find the actual rendered x of each label
+    /// and simulate a click at that position, verifying the correct SortColumn fires.
+    #[test]
+    fn clicking_sortable_header_sorts_by_correct_column() {
+        use crate::tui::app::SortColumn;
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        // Test at multiple widths to catch off-by-one in right-anchored columns.
+        for &width in &[140u16, 160, 180, 200] {
+            let backend = TestBackend::new(width, 30);
+            let mut terminal = Terminal::new(backend).unwrap();
+            let app = fixture_app();
+            let mut state = ratatui::widgets::TableState::default();
+            let mut layout = UiLayout::default();
+            terminal
+                .draw(|f| render(f, &app, &mut state, &mut layout))
+                .expect("draw");
+
+            let buffer = terminal.backend().buffer().clone();
+            let header_y = layout.table_area.y + 1;
+            let row_width = buffer.area.width;
+
+            // Map of rendered label text → expected SortColumn
+            let cases: &[(&[u8], SortColumn)] = &[
+                (b"PROVIDER", SortColumn::Provider),
+                (b"STARTED", SortColumn::Started),
+                (b"AGE", SortColumn::LastActive),
+                (b"MODEL", SortColumn::Model),
+                (b"TOK", SortColumn::Tokens),
+                (b"OUT", SortColumn::OutputTokens),
+                (b"CACHE", SortColumn::CacheTokens),
+                (b"COST$", SortColumn::Cost),
+            ];
+
+            for &(label, expected_col) in cases {
+                // Find rendered x of this label
+                let mut found_x: Option<u16> = None;
+                'search: for x in 0..=(row_width.saturating_sub(label.len() as u16)) {
+                    for (i, &b) in label.iter().enumerate() {
+                        if buffer
+                            .cell((x + i as u16, header_y))
+                            .unwrap()
+                            .symbol()
+                            .as_bytes()
+                            != [b]
+                        {
+                            continue 'search;
+                        }
+                    }
+                    found_x = Some(x);
+                    break;
+                }
+                let label_x = match found_x {
+                    Some(x) => x,
+                    None => continue, // column hidden at this width
+                };
+
+                let mut app2 = fixture_app();
+                let event = MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: label_x,
+                    row: header_y,
+                    modifiers: crossterm::event::KeyModifiers::NONE,
+                };
+                apply_mouse(&mut app2, event, &layout);
+                assert_eq!(
+                    app2.sort_col(),
+                    expected_col,
+                    "width={width}: clicking '{}' header at x={label_x} should sort by {expected_col:?}, got {:?}",
+                    std::str::from_utf8(label).unwrap(),
+                    app2.sort_col()
+                );
+            }
+        }
     }
 
     fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
