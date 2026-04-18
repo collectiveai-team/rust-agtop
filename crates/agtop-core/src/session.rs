@@ -10,6 +10,10 @@ pub enum ProviderKind {
     Claude,
     Codex,
     OpenCode,
+    Copilot,
+    GeminiCli,
+    Cursor,
+    Antigravity,
 }
 
 impl ProviderKind {
@@ -19,6 +23,10 @@ impl ProviderKind {
             Self::Claude => "claude",
             Self::Codex => "codex",
             Self::OpenCode => "opencode",
+            Self::Copilot => "copilot",
+            Self::GeminiCli => "gemini-cli",
+            Self::Cursor => "cursor",
+            Self::Antigravity => "antigravity",
         }
     }
 }
@@ -293,4 +301,18 @@ pub struct PlanUsage {
     /// Free-form note rendered below the gauges, e.g. "waiting for
     /// backend data" when the schema slot exists but is null.
     pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderKind;
+
+    #[test]
+    fn provider_kind_deserializes_new_variants() {
+        for raw in ["copilot", "gemini-cli", "cursor", "antigravity"] {
+            let kind: ProviderKind = serde_json::from_str(&format!("\"{raw}\""))
+                .expect("new provider kind should deserialize");
+            assert_eq!(kind.as_str(), raw);
+        }
+    }
 }
