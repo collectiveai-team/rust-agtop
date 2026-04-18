@@ -454,6 +454,13 @@ impl App {
 
         self.sessions = sessions;
         self.plan_usage = plan_usage;
+        // Clamp plan_selected so it never points past the end of the new vec.
+        let plan_len = self.plan_usage.len();
+        if plan_len == 0 {
+            self.plan_selected = 0;
+        } else {
+            self.plan_selected = self.plan_selected.min(plan_len - 1);
+        }
         self.refresh_count = self.refresh_count.saturating_add(1);
         self.last_error = None;
         self.invalidate_view_cache();
@@ -978,5 +985,47 @@ mod tests {
         assert_eq!(app.refresh_count(), 1);
         app.set_sessions(vec![]);
         assert_eq!(app.refresh_count(), 2);
+    }
+
+    #[test]
+    fn plan_select_next_increments() {
+        let mut app = App::new();
+        app.plan_select_next(3);
+        assert_eq!(app.plan_selected(), 1);
+    }
+
+    #[test]
+    fn plan_select_next_clamps_at_end() {
+        let mut app = App::new();
+        app.plan_select_next(1); // list of 1, already at max
+        assert_eq!(app.plan_selected(), 0);
+        app.plan_select_next(2); // moves to 1
+        assert_eq!(app.plan_selected(), 1);
+        app.plan_select_next(2); // already at max (index 1 = last in list of 2)
+        assert_eq!(app.plan_selected(), 1);
+    }
+
+    #[test]
+    fn plan_select_next_noop_when_empty() {
+        let mut app = App::new();
+        app.plan_select_next(0);
+        assert_eq!(app.plan_selected(), 0);
+    }
+
+    #[test]
+    fn plan_select_prev_clamps_at_zero() {
+        let mut app = App::new();
+        app.plan_select_prev();
+        assert_eq!(app.plan_selected(), 0);
+    }
+
+    #[test]
+    fn plan_select_prev_decrements() {
+        let mut app = App::new();
+        app.plan_select_next(3);
+        app.plan_select_next(3);
+        assert_eq!(app.plan_selected(), 2);
+        app.plan_select_prev();
+        assert_eq!(app.plan_selected(), 1);
     }
 }
