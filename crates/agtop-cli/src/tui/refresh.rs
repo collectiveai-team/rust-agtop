@@ -150,8 +150,7 @@ pub fn spawn(
         // `generation` (also matches the message field name).
         let mut generation: u64 = 0;
         let mut manual_rx = manual_rx;
-        let mut session_cache: HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)> =
-            HashMap::new();
+        let mut session_cache: SessionCache = HashMap::new();
         loop {
             // Check shutdown flag before starting any new analysis.
             if shutdown_worker.load(Ordering::Acquire) {
@@ -217,6 +216,9 @@ pub fn spawn(
     })
 }
 
+/// Cache entry: (last_active timestamp, pre-computed analysis).
+type SessionCache = HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>;
+
 /// Like `analyze_all_from_summaries` but skips sessions whose
 /// `last_active` timestamp hasn't changed since the previous refresh,
 /// reusing the cached `SessionAnalysis` instead.
@@ -228,11 +230,8 @@ fn cached_analyze_all(
     providers: &[Arc<dyn Provider>],
     summaries: &[agtop_core::session::SessionSummary],
     plan: agtop_core::pricing::Plan,
-    mut cache: HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>,
-) -> (
-    Vec<SessionAnalysis>,
-    HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>,
-) {
+    mut cache: SessionCache,
+) -> (Vec<SessionAnalysis>, SessionCache) {
     use std::collections::HashSet;
 
     // Remove entries for sessions that no longer exist.
