@@ -263,6 +263,7 @@ fn prefix_candidates(provider: ProviderKind, model: &str) -> Vec<String> {
         ProviderKind::Codex => {
             out.push(format!("openai/{}", model));
         }
+        _ => {}
     }
     out
 }
