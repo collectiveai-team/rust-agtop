@@ -183,6 +183,10 @@ pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     let table: &[(&str, Rates)] = match provider {
         ProviderKind::Codex => CODEX_RATES,
         ProviderKind::Claude | ProviderKind::OpenCode => CLAUDE_RATES,
+        ProviderKind::GeminiCli => GEMINI_RATES,
+        ProviderKind::Copilot => COPILOT_RATES,
+        ProviderKind::Cursor => CURSOR_RATES,
+        ProviderKind::Antigravity => return None,
     };
     if let Some((_, r)) = table.iter().find(|(k, _)| *k == model) {
         return Some(*r);
@@ -203,7 +207,7 @@ pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     if best.is_some() {
         return best;
     }
-    // OpenCode frequently reports `provider/model`; retry with the suffix.
+    // OpenCode / Cursor frequently report `provider/model`; retry with the suffix.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
             return builtin_lookup(provider, suffix);
@@ -242,6 +246,25 @@ fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
                 None
             }
         }
+        ProviderKind::GeminiCli => {
+            if model.starts_with("gemini-2.5") {
+                Some(1_048_576) // 1M tokens
+            } else if model.starts_with("gemini-2.0") || model.starts_with("gemini-1.5") {
+                Some(1_048_576)
+            } else {
+                None
+            }
+        }
+        ProviderKind::Copilot | ProviderKind::Cursor => {
+            // These proxy OpenAI models; context window varies but 128k is a
+            // safe lower-bound for GPT-4.1/4o class models.
+            if model.starts_with("gpt-4") || model.starts_with("o3") || model.starts_with("o4") {
+                Some(128_000)
+            } else {
+                None
+            }
+        }
+        ProviderKind::Antigravity => None,
     }
 }
 
@@ -331,6 +354,50 @@ const CLAUDE_RATES: &[(&str, Rates)] = &[
     // Haiku 4.x family
     ("claude-haiku-4-5", Rates::claude(1.0, 1.25, 2.0, 0.1, 5.0)),
     ("claude-haiku-4.5", Rates::claude(1.0, 1.25, 2.0, 0.1, 5.0)),
+];
+
+/// Gemini CLI model rates (USD per million tokens, April 2026 pricing).
+/// Input/output only — Gemini CLI does not expose cache-write buckets.
+const GEMINI_RATES: &[(&str, Rates)] = &[
+    // Gemini 2.5 Flash (thinking)
+    ("gemini-2.5-flash", Rates::codex(0.15, 0.0375, 0.60)),
+    (
+        "gemini-2.5-flash-thinking",
+        Rates::codex(0.15, 0.0375, 3.50),
+    ),
+    // Gemini 2.5 Pro
+    ("gemini-2.5-pro", Rates::codex(1.25, 0.31, 10.0)),
+    // Gemini 2.0 Flash
+    ("gemini-2.0-flash", Rates::codex(0.10, 0.025, 0.40)),
+    ("gemini-2.0-flash-lite", Rates::codex(0.075, 0.02, 0.30)),
+    // Gemini 1.5 Pro / Flash (older sessions)
+    ("gemini-1.5-pro", Rates::codex(1.25, 0.31, 5.0)),
+    ("gemini-1.5-flash", Rates::codex(0.075, 0.02, 0.30)),
+];
+
+/// Copilot model rates — proxied OpenAI/Anthropic models at retail pricing.
+/// Copilot does not expose token counts locally, so these rates are used
+/// only if a future data source provides per-session token counts.
+const COPILOT_RATES: &[(&str, Rates)] = &[
+    ("gpt-4.1", Rates::codex(2.0, 0.50, 8.0)),
+    ("gpt-4o", Rates::codex(2.5, 1.25, 10.0)),
+    ("gpt-4o-mini", Rates::codex(0.15, 0.075, 0.60)),
+    ("o3", Rates::codex(10.0, 2.5, 40.0)),
+    ("o4-mini", Rates::codex(1.1, 0.275, 4.4)),
+    ("copilot/auto", Rates::codex(2.0, 0.50, 8.0)),
+];
+
+/// Cursor proxies various models; rates match retail pricing.
+const CURSOR_RATES: &[(&str, Rates)] = &[
+    ("gpt-4.1", Rates::codex(2.0, 0.50, 8.0)),
+    ("gpt-4o", Rates::codex(2.5, 1.25, 10.0)),
+    (
+        "claude-sonnet-4-5",
+        Rates::claude(3.0, 3.75, 6.0, 0.3, 15.0),
+    ),
+    ("claude-opus-4-5", Rates::claude(5.0, 6.25, 10.0, 0.5, 25.0)),
+    ("cursor-small", Rates::codex(0.10, 0.025, 0.30)),
+    ("cursor-fast", Rates::codex(2.0, 0.50, 8.0)),
 ];
 
 #[cfg(test)]
