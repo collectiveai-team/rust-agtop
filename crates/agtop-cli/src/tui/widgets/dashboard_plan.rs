@@ -59,8 +59,8 @@ fn merge_plans(usages: &[PlanUsage]) -> Vec<MergedPlan<'_>> {
         std::collections::HashMap::new();
 
     for pu in usages {
-        let key = canonical_name(pu).to_lowercase();
         let display = canonical_name(pu);
+        let key = display.to_lowercase();
 
         if !map.contains_key(&key) {
             order.push(key.clone());
@@ -202,8 +202,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(inner);
 
-    render_list(frame, panes[0], &merged, app.plan_selected());
-    render_details(frame, panes[1], &merged, app.plan_selected());
+    // Clamp selected against merged list length (raw count may exceed merged count).
+    let selected = app.plan_selected().min(merged.len().saturating_sub(1));
+
+    render_list(frame, panes[0], &merged, selected);
+    render_details(frame, panes[1], &merged, selected);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,9 +225,9 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], sel
             let util = mp
                 .windows
                 .iter()
-                .filter(|w| w.reset_at.is_some())
-                .min_by_key(|w| w.reset_at.unwrap())
-                .and_then(|w| w.utilization)
+                .filter_map(|w| w.reset_at.map(|t| (t, w.utilization)))
+                .min_by_key(|(t, _)| *t)
+                .and_then(|(_, util)| util)
                 .or_else(|| mp.windows.iter().find_map(|w| w.utilization));
 
             let pct_str = util
@@ -280,6 +283,8 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], 
     lines.push(Line::from(""));
 
     for w in &mp.windows {
+        // Note: `w.binding` is not displayed here; windows are ordered by reset_at
+        // so the binding window typically appears first naturally.
         // Label + percentage on one line, right-aligned pct.
         let pct_str = w
             .utilization
