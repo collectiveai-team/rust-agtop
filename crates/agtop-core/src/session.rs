@@ -11,6 +11,7 @@ pub enum ProviderKind {
     Codex,
     OpenCode,
     Copilot,
+    #[serde(rename = "gemini-cli")]
     GeminiCli,
     Cursor,
     Antigravity,
@@ -308,8 +309,17 @@ mod tests {
     use super::ProviderKind;
 
     #[test]
-    fn provider_kind_deserializes_new_variants() {
-        for raw in ["copilot", "gemini-cli", "cursor", "antigravity"] {
+    fn provider_kind_serde_strings_match_display() {
+        for (kind, raw) in [
+            (ProviderKind::Copilot, "copilot"),
+            (ProviderKind::GeminiCli, "gemini-cli"),
+            (ProviderKind::Cursor, "cursor"),
+            (ProviderKind::Antigravity, "antigravity"),
+        ] {
+            assert_eq!(
+                serde_json::to_string(&kind).expect("new provider kind should serialize"),
+                format!("\"{raw}\"")
+            );
             let kind: ProviderKind = serde_json::from_str(&format!("\"{raw}\""))
                 .expect("new provider kind should deserialize");
             assert_eq!(kind.as_str(), raw);
