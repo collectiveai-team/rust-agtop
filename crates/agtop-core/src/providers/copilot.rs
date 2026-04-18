@@ -8,8 +8,10 @@
 //! an OAuth token found in `~/.config/gh/hosts.yml` or
 //! `~/.config/github-copilot/hosts.json`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 use crate::error::Result;
@@ -24,11 +26,24 @@ use crate::session::{
 /// Quota API cache TTL.
 const QUOTA_CACHE_SECS: u64 = 300;
 
+/// Data extracted from a single Copilot session JSON that is needed by
+/// both `list_sessions` and `analyze`. Stored in a provider-level cache
+/// so the file is parsed exactly once per refresh cycle.
+#[derive(Debug, Clone)]
+struct CopilotParsed {
+    tool_call_count: Option<u64>,
+    duration_secs: Option<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CopilotProvider {
     pub workspace_storage_root: PathBuf,
     pub gh_hosts_path: PathBuf,
     pub vim_hosts_path: PathBuf,
+    /// Parsed data from the last `list_sessions` call, keyed by session
+    /// file path. Shared via `Arc<RwLock<…>>` so `Clone` shares the cache
+    /// (correct — provider instances are shared across threads via `Arc`).
+    cache: Arc<RwLock<HashMap<PathBuf, CopilotParsed>>>,
 }
 
 impl Default for CopilotProvider {
@@ -51,6 +66,7 @@ impl Default for CopilotProvider {
                 .join(".config")
                 .join("github-copilot")
                 .join("hosts.json"),
+            cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -98,8 +114,13 @@ impl Provider for CopilotProvider {
                     Some(s) => s.to_string(),
                     None => continue,
                 };
-                match parse_chat_session(&path, stem) {
-                    Ok(s) => out.push(s),
+                match parse_session_all(&path, stem) {
+                    Ok((summary, parsed)) => {
+                        if let Ok(mut guard) = self.cache.write() {
+                            guard.insert(path.clone(), parsed);
+                        }
+                        out.push(summary);
+                    }
                     Err(e) => {
                         tracing::debug!(path = %path.display(), error = %e, "skip copilot session");
                     }
@@ -114,7 +135,17 @@ impl Provider for CopilotProvider {
         // Token counts are not available from Copilot local files.
         // Return zero-cost analysis with whatever metadata we have.
         let path = &summary.data_path;
-        let (tool_call_count, duration_secs) = parse_session_metadata(path);
+
+        // Fast path: use data cached by the preceding `list_sessions` call.
+        // One file read per session per refresh instead of two.
+        let (tool_call_count, duration_secs) = self
+            .cache
+            .read()
+            .ok()
+            .and_then(|guard| guard.get(path).cloned())
+            .map(|p| (p.tool_call_count, p.duration_secs))
+            // Fallback: re-read the file (tests or list_sessions was skipped).
+            .unwrap_or_else(|| parse_session_metadata(path));
 
         Ok(SessionAnalysis::new(
             summary.clone(),
@@ -150,12 +181,19 @@ impl Provider for CopilotProvider {
     }
 }
 
-fn parse_chat_session(path: &std::path::Path, session_id: String) -> Result<SessionSummary> {
+/// Read a Copilot session JSON file exactly once and return both the
+/// lightweight `SessionSummary` fields and the `CopilotParsed` extras
+/// needed by `analyze`. Keeps file I/O to a single read per session.
+fn parse_session_all(
+    path: &std::path::Path,
+    session_id: String,
+) -> Result<(SessionSummary, CopilotParsed)> {
     let bytes = fs::read(path)?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
 
     let mut model: Option<String> = None;
-    let mut last_elapsed_ms: Option<u64> = None;
+    let mut tool_calls: u64 = 0;
+    let mut total_elapsed_ms: u64 = 0;
 
     if let Some(requests) = v.get("requests").and_then(|r| r.as_array()) {
         for req in requests {
@@ -166,26 +204,28 @@ fn parse_chat_session(path: &std::path::Path, session_id: String) -> Result<Sess
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
             }
+            if let Some(rounds) = req
+                .pointer("/result/metadata/toolCallRounds")
+                .and_then(|r| r.as_array())
+            {
+                tool_calls += rounds.len() as u64;
+            }
             if let Some(elapsed) = req
                 .pointer("/result/timings/totalElapsed")
                 .and_then(|x| x.as_u64())
             {
-                last_elapsed_ms = Some(last_elapsed_ms.unwrap_or(0) + elapsed);
+                total_elapsed_ms += elapsed;
             }
         }
     }
 
     let last_active = mtime(path);
-    // Copilot doesn't store session start time in the JSON; use mtime minus elapsed as a proxy.
-    let started_at = match (last_active, last_elapsed_ms) {
-        (Some(end), Some(ms)) => {
-            let duration = chrono::Duration::milliseconds(ms as i64);
-            Some(end - duration)
-        }
+    let started_at = match (last_active, total_elapsed_ms > 0) {
+        (Some(end), true) => Some(end - chrono::Duration::milliseconds(total_elapsed_ms as i64)),
         _ => last_active,
     };
 
-    Ok(SessionSummary::new(
+    let summary = SessionSummary::new(
         ProviderKind::Copilot,
         None, // subscription set by list_sessions caller if available
         session_id,
@@ -198,7 +238,21 @@ fn parse_chat_session(path: &std::path::Path, session_id: String) -> Result<Sess
         None,
         None,
         None,
-    ))
+    );
+    let parsed = CopilotParsed {
+        tool_call_count: if tool_calls > 0 {
+            Some(tool_calls)
+        } else {
+            None
+        },
+        duration_secs: if total_elapsed_ms > 0 {
+            Some(total_elapsed_ms / 1000)
+        } else {
+            None
+        },
+    };
+
+    Ok((summary, parsed))
 }
 
 fn parse_session_metadata(path: &std::path::Path) -> (Option<u64>, Option<u64>) {
@@ -431,6 +485,7 @@ mod tests {
             workspace_storage_root: std::path::PathBuf::from("/no/such/path"),
             gh_hosts_path: std::path::PathBuf::from("/no/such/hosts.yml"),
             vim_hosts_path: std::path::PathBuf::from("/no/such/hosts.json"),
+            ..CopilotProvider::default()
         };
         assert!(p.list_sessions().unwrap().is_empty());
     }
@@ -461,6 +516,7 @@ mod tests {
             workspace_storage_root: td.path.clone(),
             gh_hosts_path: std::path::PathBuf::from("/no/such/hosts.yml"),
             vim_hosts_path: std::path::PathBuf::from("/no/such/hosts.json"),
+            ..CopilotProvider::default()
         };
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
@@ -496,5 +552,41 @@ mod tests {
         .unwrap();
         let token = read_gh_token(&std::path::PathBuf::from("/no/such"), &hosts);
         assert_eq!(token.as_deref(), Some("ghu_vimtoken"));
+    }
+
+    #[test]
+    fn analyze_uses_parse_cache_not_disk() {
+        let td = TestDir::new("cache");
+        let session_dir = td.path.join("ws1").join("chatSessions");
+        fs::create_dir_all(&session_dir).unwrap();
+        let session_file = session_dir.join("cached-session-id.json");
+        let content = r#"{
+            "version": 3,
+            "requests": [{
+                "requestId": "r1",
+                "modelId": "copilot/gpt-4.1",
+                "result": {
+                    "timings": {"firstProgress": 10, "totalElapsed": 2000},
+                    "metadata": {"toolCallRounds": [1, 2]}
+                }
+            }]
+        }"#;
+        fs::write(&session_file, content).unwrap();
+
+        let p = CopilotProvider {
+            workspace_storage_root: td.path.clone(),
+            gh_hosts_path: std::path::PathBuf::from("/no"),
+            vim_hosts_path: std::path::PathBuf::from("/no"),
+            ..CopilotProvider::default()
+        };
+
+        // list_sessions fills the cache
+        let sessions = p.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+
+        // Delete the file — analyze must still work from cache
+        fs::remove_file(&session_file).unwrap();
+        let analysis = p.analyze(&sessions[0], Plan::Retail).unwrap();
+        assert_eq!(analysis.tool_call_count, Some(2));
     }
 }
