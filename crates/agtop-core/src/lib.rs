@@ -30,12 +30,16 @@ pub use session::{
 
 use std::sync::Arc;
 
-/// Return the default set of providers (Claude Code, Codex, OpenCode).
+/// Return the default set of providers.
 pub fn default_providers() -> Vec<Arc<dyn Provider>> {
     vec![
         Arc::new(providers::claude::ClaudeProvider::default()),
         Arc::new(providers::codex::CodexProvider::default()),
         Arc::new(providers::opencode::OpenCodeProvider::default()),
+        Arc::new(providers::copilot::CopilotProvider::default()),
+        Arc::new(providers::gemini_cli::GeminiCliProvider::default()),
+        Arc::new(providers::cursor::CursorProvider::default()),
+        Arc::new(providers::antigravity::AntigravityProvider::default()),
     ]
 }
 
@@ -63,9 +67,18 @@ pub fn discover_all(providers: &[Arc<dyn Provider>]) -> Vec<SessionSummary> {
 /// the partial result. Empty vec means "no provider had anything to
 /// report" — not a fatal condition.
 pub fn plan_usage_all(providers: &[Arc<dyn Provider>]) -> Vec<PlanUsage> {
+    let sessions = discover_all(providers);
+    plan_usage_all_from_summaries(providers, &sessions)
+}
+
+/// Collect plan-usage snapshots using already-discovered session summaries.
+pub fn plan_usage_all_from_summaries(
+    providers: &[Arc<dyn Provider>],
+    sessions: &[SessionSummary],
+) -> Vec<PlanUsage> {
     let mut out = Vec::new();
     for p in providers {
-        match p.plan_usage() {
+        match p.plan_usage_with_sessions(sessions) {
             Ok(entries) => out.extend(entries),
             Err(e) => {
                 tracing::warn!(provider = p.kind().as_str(), error = %e, "plan_usage failed")
