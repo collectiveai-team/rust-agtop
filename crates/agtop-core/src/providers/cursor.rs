@@ -159,10 +159,10 @@ fn parse_cursor_transcript(
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
+        seen += 1;
         if seen > 50 {
             return;
         }
-        seen += 1;
 
         if model.is_none() {
             if let Some(m) = v.get("modelId").and_then(|x| x.as_str()) {
@@ -353,6 +353,9 @@ mod tests {
     #[test]
     fn normalize_plan_names() {
         assert_eq!(normalize_cursor_plan("PRO"), "Pro");
+        assert_eq!(normalize_cursor_plan("PRO_PLUS"), "Pro+");
+        assert_eq!(normalize_cursor_plan("ULTRA"), "Ultra");
+        assert_eq!(normalize_cursor_plan("FREE"), "Free");
         assert_eq!(normalize_cursor_plan("FREE_TRIAL"), "Free Trial");
         assert_eq!(normalize_cursor_plan("ENTERPRISE"), "Enterprise");
         assert_eq!(normalize_cursor_plan("unknown_tier"), "unknown_tier");
