@@ -122,6 +122,14 @@ fn ms_to_utc(ms: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(ms).single()
 }
 
+fn state_from_opencode_message(v: &serde_json::Value) -> Option<(String, String)> {
+    match v.get("finish").and_then(|x| x.as_str()) {
+        Some("tool-calls") => Some(("waiting".to_string(), "finish=tool-calls".to_string())),
+        Some("stop") => Some(("stopped".to_string(), "finish=stop".to_string())),
+        _ => None,
+    }
+}
+
 fn read_json(path: &Path) -> Result<serde_json::Value> {
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
@@ -970,6 +978,7 @@ fn list_sessions_sqlite(
             let started_at = created_ms.and_then(ms_to_utc);
             let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
             let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
+            let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
             let subscription =
                 resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
             SessionSummary {
@@ -980,12 +989,33 @@ fn list_sessions_sqlite(
                 last_active,
                 model,
                 cwd,
+                state,
+                state_detail,
+                model_effort: None,
+                model_effort_detail: None,
                 data_path: db_path.to_path_buf(),
             }
         })
         .collect();
 
     Ok(rows)
+}
+
+fn latest_message_state_sqlite(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> (Option<String>, Option<String>) {
+    conn.query_row(
+        "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created DESC LIMIT 1",
+        rusqlite::params![session_id],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+    .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+    .and_then(|value| state_from_opencode_message(&value))
+    .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
 }
 
 fn first_message_identity_sqlite(
@@ -1257,6 +1287,7 @@ fn summarize_opencode_session_json(
         .join("message")
         .join(&session_id);
     let (model, provider_id) = first_message_identity_json(&msg_dir);
+    let (state, state_detail) = latest_message_state_json(&msg_dir);
     let subscription =
         resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
 
@@ -1268,8 +1299,47 @@ fn summarize_opencode_session_json(
         last_active: updated.or(created),
         model,
         cwd,
+        state,
+        state_detail,
+        model_effort: None,
+        model_effort_detail: None,
         data_path: session_file.to_path_buf(),
     })
+}
+
+fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
+    if !dir_exists(msg_dir) {
+        return (None, None);
+    }
+
+    let mut latest: Option<(std::time::SystemTime, serde_json::Value)> = None;
+    let entries = match fs::read_dir(msg_dir) {
+        Ok(entries) => entries,
+        Err(_) => return (None, None),
+    };
+    for f in entries.flatten() {
+        let p = f.path();
+        if p.extension().map(|e| e != "json").unwrap_or(true) {
+            continue;
+        }
+        let Ok(meta) = fs::metadata(&p) else {
+            continue;
+        };
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(value) = read_json(&p) else {
+            continue;
+        };
+        match &latest {
+            Some((cur_modified, _)) if *cur_modified >= modified => {}
+            _ => latest = Some((modified, value)),
+        }
+    }
+
+    latest
+        .and_then(|(_, value)| state_from_opencode_message(&value))
+        .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
 }
 
 fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
@@ -1532,6 +1602,15 @@ mod tests {
     }
 
     #[test]
+    fn finish_tool_calls_maps_to_waiting() {
+        let v = serde_json::json!({ "finish": "tool-calls" });
+        assert_eq!(
+            state_from_opencode_message(&v),
+            Some(("waiting".to_string(), "finish=tool-calls".to_string()))
+        );
+    }
+
+    #[test]
     fn live_plan_usage_for_anthropic_oauth_parses_usage_windows() {
         let auth_entry = serde_json::json!({
             "type": "oauth",
@@ -1770,6 +1849,10 @@ mod tests {
             Some("claude-opus-4-7".to_string()),
             None,
             PathBuf::from("/tmp/claude"),
+            None,
+            None,
+            None,
+            None,
         );
         let opencode = SessionSummary::new(
             ProviderKind::OpenCode,
@@ -1780,6 +1863,10 @@ mod tests {
             Some("anthropic/claude-sonnet-4-6".to_string()),
             None,
             PathBuf::from("/tmp/opencode"),
+            None,
+            None,
+            None,
+            None,
         );
         let codex = SessionSummary::new(
             ProviderKind::Codex,
@@ -1790,6 +1877,10 @@ mod tests {
             Some("gpt-5.4".to_string()),
             None,
             PathBuf::from("/tmp/codex"),
+            None,
+            None,
+            None,
+            None,
         );
 
         let latest = latest_relevant_session_activity("anthropic", &[claude, opencode, codex]);
@@ -1810,6 +1901,10 @@ mod tests {
             Some("gpt-5.4".to_string()),
             None,
             PathBuf::from("/tmp/codex"),
+            None,
+            None,
+            None,
+            None,
         );
         let opencode = SessionSummary::new(
             ProviderKind::OpenCode,
@@ -1820,6 +1915,10 @@ mod tests {
             Some("openai/gpt-5.4".to_string()),
             None,
             PathBuf::from("/tmp/opencode"),
+            None,
+            None,
+            None,
+            None,
         );
         let latest = latest_relevant_session_activity("openai", &[codex, opencode]);
         assert_eq!(

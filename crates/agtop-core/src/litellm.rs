@@ -547,6 +547,14 @@ mod tests {
     }
 
     #[test]
+    fn prefix_candidates_ignore_unmapped_providers() {
+        assert!(prefix_candidates(ProviderKind::Copilot, "gpt-4.1").is_empty());
+        assert!(prefix_candidates(ProviderKind::GeminiCli, "gemini-2.5-pro").is_empty());
+        assert!(prefix_candidates(ProviderKind::Cursor, "claude-sonnet-4-5").is_empty());
+        assert!(prefix_candidates(ProviderKind::Antigravity, "sonnet").is_empty());
+    }
+
+    #[test]
     fn index_ignores_missing_input_cost() {
         let idx = PricingIndex::from_json(&serde_json::json!({
             "deprecated-model": {

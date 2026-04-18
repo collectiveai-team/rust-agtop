@@ -194,6 +194,10 @@ fn parse_chat_session(path: &std::path::Path, session_id: String) -> Result<Sess
         model,
         None, // cwd — workspace hash not reversible
         path.to_path_buf(),
+        None,
+        None,
+        None,
+        None,
     ))
 }
 

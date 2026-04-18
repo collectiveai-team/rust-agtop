@@ -253,6 +253,10 @@ fn parse_gemini_session(
         global_model,
         cwd,
         path.to_path_buf(),
+        None,
+        None,
+        None,
+        None,
     ))
 }
 

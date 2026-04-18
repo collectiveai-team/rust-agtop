@@ -199,6 +199,10 @@ fn parse_cursor_transcript(
         model,
         cwd,
         path.to_path_buf(),
+        None,
+        None,
+        None,
+        None,
     ))
 }
 

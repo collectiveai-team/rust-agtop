@@ -167,6 +167,12 @@ fn row_for<'a>(
         .last_active
         .map(|ts| fmt::relative_age(ts, now))
         .unwrap_or_else(|| "-".into());
+    let last_active_abs = s
+        .last_active
+        .map(fmt::format_local_datetime)
+        .unwrap_or_else(|| "-".into());
+    let state = s.state.clone().unwrap_or_else(|| "-".into());
+    let effort = s.model_effort.clone().unwrap_or_else(|| "-".into());
     let model = s.model.clone().unwrap_or_else(|| "?".into());
     let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
     let cwd = fmt::shorten_path(s.cwd.as_deref().unwrap_or("-"));
@@ -225,6 +231,9 @@ fn row_for<'a>(
                     .map(fmt::format_duration_compact)
                     .unwrap_or_else(|| "-".into()),
             ),
+            ColumnId::LastActive => Cell::from(last_active_abs.clone()),
+            ColumnId::State => Cell::from(state.clone()),
+            ColumnId::Effort => Cell::from(effort.clone()),
         })
         .collect();
 

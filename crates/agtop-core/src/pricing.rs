@@ -436,6 +436,15 @@ mod tests {
     }
 
     #[test]
+    fn builtin_lookup_antigravity_has_no_rates() {
+        // Antigravity has no built-in rate table.
+        assert!(builtin_lookup(ProviderKind::Antigravity, "sonnet").is_none());
+        // Copilot, GeminiCli, and Cursor now have real rate tables.
+        assert!(builtin_lookup(ProviderKind::Copilot, "gpt-4.1").is_some());
+        assert!(builtin_lookup(ProviderKind::GeminiCli, "gemini-2.5-pro").is_some());
+    }
+
+    #[test]
     fn compute_cost_retail() {
         let totals = TokenTotals {
             input: 1_000_000,

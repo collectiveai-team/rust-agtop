@@ -196,6 +196,24 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn state_from_claude_record(v: &serde_json::Value) -> Option<(String, String)> {
+    match v
+        .get("message")
+        .and_then(|m| m.get("stop_reason"))
+        .and_then(|x| x.as_str())
+    {
+        Some("tool_use") => Some((
+            "waiting".to_string(),
+            "assistant.stop_reason=tool_use".to_string(),
+        )),
+        Some("end_turn") => Some((
+            "stopped".to_string(),
+            "assistant.stop_reason=end_turn".to_string(),
+        )),
+        _ => None,
+    }
+}
+
 /// Enumerate `<projects_root>/<slug>/<uuid>.jsonl` files and return them
 /// sorted by mtime descending.
 fn list_transcript_files_by_mtime_desc(projects_root: &Path) -> Vec<PathBuf> {
@@ -336,6 +354,8 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut earliest: Option<DateTime<Utc>> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
+    let mut state: Option<String> = None;
+    let mut state_detail: Option<String> = None;
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
@@ -369,6 +389,10 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
                 }
             }
         }
+        if let Some((next_state, detail)) = state_from_claude_record(v) {
+            state = Some(next_state);
+            state_detail = Some(detail);
+        }
     })?;
 
     let last_active = mtime(path).or(earliest);
@@ -381,6 +405,10 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
+        state,
+        state_detail,
+        model_effort: None,
+        model_effort_detail: None,
         data_path: path.to_path_buf(),
     })
 }
@@ -740,6 +768,20 @@ mod tests {
             serde_json::from_str(r#"{"input_tokens":1,"cache_creation_input_tokens":9}"#).unwrap();
         let s = snapshot_from_usage(&v);
         assert_eq!(s.cache_write_5m, 9);
+    }
+
+    #[test]
+    fn assistant_stop_reason_tool_use_maps_to_waiting() {
+        let v = serde_json::json!({
+            "message": { "stop_reason": "tool_use" }
+        });
+        assert_eq!(
+            state_from_claude_record(&v),
+            Some((
+                "waiting".to_string(),
+                "assistant.stop_reason=tool_use".to_string(),
+            ))
+        );
     }
 
     // ---------------- plan_usage tests ----------------

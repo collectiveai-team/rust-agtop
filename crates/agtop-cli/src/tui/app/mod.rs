@@ -734,6 +734,10 @@ mod tests {
             Some(model.into()),
             Some("/tmp/proj".into()),
             PathBuf::from(format!("/tmp/{id}.jsonl")),
+            None,
+            None,
+            None,
+            None,
         );
         let mut token_totals = TokenTotals::default();
         token_totals.input = tokens;

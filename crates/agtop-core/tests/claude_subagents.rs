@@ -27,6 +27,10 @@ fn summary_for_fixture() -> SessionSummary {
         Some("claude-sonnet-4-5".into()),
         Some("/tmp/test".into()),
         fixture_main_path(),
+        None,
+        None,
+        None,
+        None,
     )
 }
 

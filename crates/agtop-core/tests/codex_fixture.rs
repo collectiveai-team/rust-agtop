@@ -133,6 +133,69 @@ fn write_codex_fixture(dir: &std::path::Path) -> PathBuf {
     path
 }
 
+fn write_codex_metadata_fixture(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("rollout-2026-04-17T10-00-00-metadata.jsonl");
+    let session_meta = serde_json::json!({
+        "type": "session_meta",
+        "timestamp": "2026-04-17T10:00:00Z",
+        "payload": {
+            "session_id": "metadata-session",
+            "cwd": "/tmp/test-project",
+            "model": "codex-mini-latest"
+        }
+    });
+    let turn_context = serde_json::json!({
+        "type": "turn_context",
+        "payload": {
+            "model": "codex-mini-latest",
+            "effort": "high",
+            "collaboration_mode": {
+                "settings": { "reasoning_effort": "high" }
+            }
+        }
+    });
+    let waiting_call = serde_json::json!({
+        "type": "response_item",
+        "timestamp": "2026-04-17T10:00:05Z",
+        "payload": { "type": "function_call", "name": "exec_command" }
+    });
+
+    let mut content = String::new();
+    for v in &[session_meta, turn_context, waiting_call] {
+        content.push_str(&serde_json::to_string(v).unwrap());
+        content.push('\n');
+    }
+    fs::write(&path, content).expect("write metadata fixture");
+    path
+}
+
+#[test]
+fn codex_fixture_extracts_effort_and_waiting_state() {
+    let tmp = TmpDir::new("metadata");
+    let fixture_path = write_codex_metadata_fixture(tmp.0.as_path());
+    let provider = CodexProvider {
+        sessions_root: tmp.0.clone(),
+        auth_path: tmp.0.join("auth.json"),
+    };
+
+    let sessions = provider.list_sessions().expect("list_sessions");
+    let summary = sessions
+        .into_iter()
+        .find(|s| s.data_path == fixture_path)
+        .expect("fixture summary");
+
+    assert_eq!(summary.model_effort.as_deref(), Some("high"));
+    assert_eq!(
+        summary.model_effort_detail.as_deref(),
+        Some("turn_context.effort")
+    );
+    assert_eq!(summary.state.as_deref(), Some("waiting"));
+    assert_eq!(
+        summary.state_detail.as_deref(),
+        Some("response_item:function_call")
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -151,6 +214,10 @@ fn codex_fixture_token_counts_are_summed() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
+        None,
+        None,
+        None,
+        None,
     );
 
     let provider = CodexProvider {
@@ -185,6 +252,10 @@ fn codex_fixture_tool_call_count() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
+        None,
+        None,
+        None,
+        None,
     );
 
     let provider = CodexProvider {
@@ -217,6 +288,10 @@ fn codex_fixture_duration_from_timestamps() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
+        None,
+        None,
+        None,
+        None,
     );
 
     let provider = CodexProvider {
@@ -250,6 +325,10 @@ fn codex_fixture_retail_cost_is_positive() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
+        None,
+        None,
+        None,
+        None,
     );
 
     let provider = CodexProvider {

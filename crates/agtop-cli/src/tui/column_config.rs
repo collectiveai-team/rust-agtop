@@ -24,6 +24,9 @@ pub enum ColumnId {
     Cost,
     ToolCalls,
     Duration,
+    LastActive,
+    State,
+    Effort,
 }
 
 impl ColumnId {
@@ -43,6 +46,9 @@ impl ColumnId {
             ColumnId::Cost,
             ColumnId::ToolCalls,
             ColumnId::Duration,
+            ColumnId::LastActive,
+            ColumnId::State,
+            ColumnId::Effort,
         ]
     }
 
@@ -61,6 +67,9 @@ impl ColumnId {
             ColumnId::Cost => "COST$",
             ColumnId::ToolCalls => "TOOLS",
             ColumnId::Duration => "DUR",
+            ColumnId::LastActive => "LAST ACTIVE",
+            ColumnId::State => "STATE",
+            ColumnId::Effort => "EFFORT",
         }
     }
 
@@ -79,6 +88,9 @@ impl ColumnId {
             ColumnId::Cost => "Dollar cost",
             ColumnId::ToolCalls => "Tool call count",
             ColumnId::Duration => "Session duration",
+            ColumnId::LastActive => "Last active timestamp",
+            ColumnId::State => "Session workflow state",
+            ColumnId::Effort => "Model reasoning effort",
         }
     }
 
@@ -98,6 +110,9 @@ impl ColumnId {
             ColumnId::Cost => Some(10),
             ColumnId::ToolCalls => Some(6),
             ColumnId::Duration => Some(8),
+            ColumnId::LastActive => Some(16),
+            ColumnId::State => Some(10),
+            ColumnId::Effort => Some(8),
         }
     }
 
@@ -117,6 +132,9 @@ impl ColumnId {
             ColumnId::Cost => Some(SortColumn::Cost),
             ColumnId::ToolCalls => Some(SortColumn::ToolCalls),
             ColumnId::Duration => Some(SortColumn::Duration),
+            ColumnId::LastActive => Some(SortColumn::LastActive),
+            ColumnId::State => None,
+            ColumnId::Effort => None,
         }
     }
 

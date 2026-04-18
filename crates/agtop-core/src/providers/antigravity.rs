@@ -100,6 +100,10 @@ impl Provider for AntigravityProvider {
                     None,     // model
                     None,     // cwd
                     self.state_db.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
                 )
             })
             .collect();
