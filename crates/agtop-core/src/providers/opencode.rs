@@ -194,8 +194,8 @@ fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
         if provider_id == "anthropic" {
             out.push(PlanUsage {
                 provider: ProviderKind::OpenCode,
-                label: "OpenCode · Anthropic (Max)".to_string(),
-                plan_name: Some("Max".to_string()),
+                label: "OpenCode · Max 5x".to_string(),
+                plan_name: Some("Max 5x".to_string()),
                 windows: anthropic_windows.clone(),
                 last_limit_hit: anthropic_last_limit_hit,
                 note: anthropic_note.clone(),
@@ -287,7 +287,7 @@ fn subscription_label_for_provider(
     };
 
     match (provider_id, auth_kind) {
-        ("anthropic", AuthKind::Oauth) => Some("Anthropic Max".to_string()),
+        ("anthropic", AuthKind::Oauth) => Some("Max 5x".to_string()),
         ("anthropic", AuthKind::Api) => Some("Anthropic API key".to_string()),
         ("openai", AuthKind::Oauth) => {
             read_openai_plan_name(auth_entry).or_else(|| Some("ChatGPT (OAuth)".to_string()))
@@ -994,7 +994,7 @@ mod tests {
         let out = provider.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
-        assert_eq!(pu.plan_name.as_deref(), Some("Max"));
+        assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
         assert_eq!(pu.windows.len(), 2);
 
         let w5 = pu.windows.iter().find(|w| w.label == "5h").expect("5h");
@@ -1066,9 +1066,9 @@ mod tests {
         assert_eq!(out.len(), 3);
         let anthropic = out
             .iter()
-            .find(|pu| pu.label == "OpenCode · Anthropic (Max)")
+            .find(|pu| pu.label == "OpenCode · Max 5x")
             .expect("anthropic card");
-        assert_eq!(anthropic.plan_name.as_deref(), Some("Max"));
+        assert_eq!(anthropic.plan_name.as_deref(), Some("Max 5x"));
         assert_eq!(
             anthropic.note.as_deref(),
             Some("no recent rate-limit snapshot")
@@ -1105,7 +1105,7 @@ mod tests {
         let subscriptions = read_subscriptions(&tmp.path);
         assert_eq!(
             subscriptions.get("anthropic").map(String::as_str),
-            Some("Anthropic Max")
+            Some("Max 5x")
         );
         assert_eq!(
             subscriptions.get("openai").map(String::as_str),
@@ -1124,7 +1124,7 @@ mod tests {
     #[test]
     fn resolve_subscription_prefers_provider_id_over_model_name() {
         let mut subscriptions = HashMap::new();
-        subscriptions.insert("anthropic".to_string(), "Anthropic Max".to_string());
+        subscriptions.insert("anthropic".to_string(), "Max 5x".to_string());
         subscriptions.insert("openai".to_string(), "ChatGPT Plus".to_string());
 
         let got = resolve_subscription(

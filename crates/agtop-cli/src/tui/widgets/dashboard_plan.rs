@@ -366,8 +366,8 @@ mod tests {
 
     #[test]
     fn canonical_name_strips_opencode_prefix() {
-        let pu = make_pu("OpenCode · anthropic (Max)", None);
-        assert_eq!(canonical_name(&pu), "anthropic (Max)");
+        let pu = make_pu("OpenCode · Max 5x", None);
+        assert_eq!(canonical_name(&pu), "Max 5x");
     }
 
     #[test]
