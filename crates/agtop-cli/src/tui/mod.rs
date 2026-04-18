@@ -344,13 +344,15 @@ fn render_dashboard(
         frame,
         mid[1],
         app,
-        &mut layout.cost_tab_bar_area,
-        &mut layout.cost_tab_cells,
-        &mut layout.cost_period_row_area,
-        &mut layout.cost_period_cells,
-        &mut layout.cost_panel_area,
-        &mut layout.cost_row_count,
-        &mut layout.cost_visible_rows,
+        widgets::dashboard_cost::CostRenderOut {
+            tab_bar_area: &mut layout.cost_tab_bar_area,
+            tab_cells: &mut layout.cost_tab_cells,
+            period_row_area: &mut layout.cost_period_row_area,
+            period_cells: &mut layout.cost_period_cells,
+            cost_panel_area: &mut layout.cost_panel_area,
+            cost_row_count: &mut layout.cost_row_count,
+            cost_visible_rows: &mut layout.cost_visible_rows,
+        },
     );
 
     layout.table_area = outer[3];
