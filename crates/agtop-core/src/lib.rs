@@ -88,16 +88,21 @@ pub fn plan_usage_all_from_summaries(
     out
 }
 
-/// Analyze every discovered session (tokens + cost).
-pub fn analyze_all(providers: &[Arc<dyn Provider>], plan: Plan) -> Vec<SessionAnalysis> {
-    let summaries = discover_all(providers);
+/// Analyze sessions using already-discovered summaries (tokens + cost).
+/// Prefer this over [`analyze_all`] when you already hold the summaries
+/// to avoid a redundant `discover_all` call.
+pub fn analyze_all_from_summaries(
+    providers: &[Arc<dyn Provider>],
+    summaries: &[SessionSummary],
+    plan: Plan,
+) -> Vec<SessionAnalysis> {
     let mut out = Vec::with_capacity(summaries.len());
     for summary in summaries {
         let provider = match providers.iter().find(|p| p.kind() == summary.provider) {
             Some(p) => p,
             None => continue,
         };
-        match provider.analyze(&summary, plan) {
+        match provider.analyze(summary, plan) {
             Ok(a) => out.push(a),
             Err(e) => tracing::warn!(
                 session = summary.session_id.as_str(),
@@ -107,4 +112,93 @@ pub fn analyze_all(providers: &[Arc<dyn Provider>], plan: Plan) -> Vec<SessionAn
         }
     }
     out
+}
+
+/// Analyze every discovered session (tokens + cost).
+///
+/// If you already have the summaries from [`discover_all`], call
+/// [`analyze_all_from_summaries`] instead to avoid the duplicate
+/// `discover_all` scan.
+pub fn analyze_all(providers: &[Arc<dyn Provider>], plan: Plan) -> Vec<SessionAnalysis> {
+    let summaries = discover_all(providers);
+    analyze_all_from_summaries(providers, &summaries, plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn analyze_all_from_summaries_is_consistent_with_analyze_all() {
+        // Empty provider list → both functions return empty vec
+        let providers: Vec<Arc<dyn Provider>> = vec![];
+        let summaries = discover_all(&providers);
+        let via_from_summaries = analyze_all_from_summaries(&providers, &summaries, Plan::Retail);
+        let via_analyze_all = analyze_all(&providers, Plan::Retail);
+        assert_eq!(via_from_summaries.len(), via_analyze_all.len());
+    }
+
+    #[test]
+    fn analyze_all_from_summaries_uses_precomputed_summaries() {
+        #[derive(Debug)]
+        struct MockProvider;
+
+        impl Provider for MockProvider {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Claude
+            }
+
+            fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+                Ok(vec![SessionSummary::new(
+                    ProviderKind::Claude,
+                    None,
+                    "test-session-1".to_string(),
+                    None,
+                    None,
+                    Some("claude-3-5-sonnet".to_string()),
+                    None,
+                    PathBuf::from("/tmp/test-session.jsonl"),
+                    None,
+                    None,
+                    None,
+                    None,
+                )])
+            }
+
+            fn analyze(&self, summary: &SessionSummary, _plan: Plan) -> Result<SessionAnalysis> {
+                Ok(SessionAnalysis::new(
+                    summary.clone(),
+                    TokenTotals {
+                        input: 42,
+                        ..TokenTotals::default()
+                    },
+                    CostBreakdown::default(),
+                    None,
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ))
+            }
+        }
+
+        let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(MockProvider)];
+
+        // discover_all should return the one summary from MockProvider
+        let summaries = discover_all(&providers);
+        assert_eq!(summaries.len(), 1, "expected one summary from MockProvider");
+        assert_eq!(summaries[0].session_id, "test-session-1");
+
+        // analyze_all_from_summaries should use those summaries and return one analysis
+        let analyses = analyze_all_from_summaries(&providers, &summaries, Plan::Retail);
+        assert_eq!(analyses.len(), 1, "expected one analysis");
+        assert_eq!(
+            analyses[0].tokens.input, 42,
+            "expected the mock's token count"
+        );
+        assert_eq!(analyses[0].summary.session_id, "test-session-1");
+    }
 }
