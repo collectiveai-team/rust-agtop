@@ -1,0 +1,29 @@
+ideas:
+    ☐ its possible to relate sessions ? subagents calls from a parent session
+    ☐ could we track PIDs of sessions ? to relate them to the process tree and get more info about them ?
+
+columns/info:
+    ☐ model effort
+    ☐ last active message time
+    ☐ state (live, active, stopped), also waiting (waiting for input: sking permissions, question, etc)
+    ☐ interactions: total, agent, user
+
+fixes:
+    ✔ on tabs the mouse dont work consistenlly, son some tab yes, on other not. @done(26-04-17 22:39)
+    ✔ config tab dont allow reorder columns @done(26-04-17 22:40)
+
+panes:
+    usage view:
+        ☐ fix plan usage view
+
+    cost summary:
+        ✔ global @done(26-04-17 23:25)
+        ✔ per subscription @done(26-04-17 23:25)
+        ✔ per provider @done(26-04-17 23:25)
+
+Providers:
+    ✔ copilot (vscode) @done(26-04-18)
+    ✔ gemini-cli @done(26-04-18)
+    ✔ cursor @done(26-04-18)
+    ✔ antigravity @done(26-04-18)
+
