@@ -11,14 +11,15 @@
 //! (`analyze_all`) is synchronous, so we wrap it in `spawn_blocking` to
 //! keep the runtime reactor unblocked.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use agtop_core::pricing::Plan;
-use agtop_core::{
-    analyze_all_from_summaries, discover_all, plan_usage_all_from_summaries, Provider,
-};
+use agtop_core::session::SessionAnalysis;
+use agtop_core::{discover_all, plan_usage_all_from_summaries, Provider};
+use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
 /// Message the UI consumes from the refresh task.
@@ -149,6 +150,8 @@ pub fn spawn(
         // `generation` (also matches the message field name).
         let mut generation: u64 = 0;
         let mut manual_rx = manual_rx;
+        let mut session_cache: HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)> =
+            HashMap::new();
         loop {
             // Check shutdown flag before starting any new analysis.
             if shutdown_worker.load(Ordering::Acquire) {
@@ -157,23 +160,34 @@ pub fn spawn(
 
             generation = generation.wrapping_add(1);
             let providers_inner = providers_arc.clone();
+            // Move the cache into the blocking task; recover it in the result.
+            let cache_in = std::mem::take(&mut session_cache);
             let result = tokio::task::spawn_blocking(move || {
                 let summaries = discover_all(&providers_inner);
-                let analyses = analyze_all_from_summaries(&providers_inner, &summaries, plan);
+                let (analyses, cache_out) =
+                    cached_analyze_all(&providers_inner, &summaries, plan, cache_in);
                 let plan_usage = plan_usage_all_from_summaries(&providers_inner, &summaries);
-                (analyses, plan_usage)
+                (analyses, plan_usage, cache_out)
             })
             .await;
             let msg = match result {
-                Ok((analyses, plan_usage)) => RefreshMsg::Snapshot {
-                    generation,
-                    analyses,
-                    plan_usage,
-                },
-                Err(e) => RefreshMsg::Error {
-                    generation,
-                    message: format!("analyze_all panicked: {e}"),
-                },
+                Ok((analyses, plan_usage, cache_out)) => {
+                    session_cache = cache_out;
+                    RefreshMsg::Snapshot {
+                        generation,
+                        analyses,
+                        plan_usage,
+                    }
+                }
+                Err(e) => {
+                    // Cache was moved into the panicking task and is lost.
+                    // session_cache is already an empty HashMap (from mem::take),
+                    // so the next cycle rebuilds cleanly.
+                    RefreshMsg::Error {
+                        generation,
+                        message: format!("analyze_all panicked: {e}"),
+                    }
+                }
             };
             // `send` only errors when all receivers are dropped, which
             // means the UI is gone and we should exit.
@@ -201,6 +215,63 @@ pub fn spawn(
         shutdown,
         _runtime: runtime,
     })
+}
+
+/// Like `analyze_all_from_summaries` but skips sessions whose
+/// `last_active` timestamp hasn't changed since the previous refresh,
+/// reusing the cached `SessionAnalysis` instead.
+///
+/// Returns the new analyses vec and the updated cache (to be stored by
+/// the caller for the next cycle). Prunes cache entries for sessions no
+/// longer present in `summaries`.
+fn cached_analyze_all(
+    providers: &[Arc<dyn Provider>],
+    summaries: &[agtop_core::session::SessionSummary],
+    plan: agtop_core::pricing::Plan,
+    mut cache: HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>,
+) -> (
+    Vec<SessionAnalysis>,
+    HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>,
+) {
+    use std::collections::HashSet;
+
+    // Remove entries for sessions that no longer exist.
+    let live_ids: HashSet<&str> = summaries.iter().map(|s| s.session_id.as_str()).collect();
+    cache.retain(|id, _| live_ids.contains(id.as_str()));
+
+    let mut out = Vec::with_capacity(summaries.len());
+
+    for summary in summaries {
+        // Cache hit: session unchanged since last refresh.
+        if let Some((cached_ts, cached_analysis)) = cache.get(&summary.session_id) {
+            if *cached_ts == summary.last_active {
+                out.push(cached_analysis.clone());
+                continue;
+            }
+        }
+
+        // Cache miss or stale: re-analyze.
+        let provider = match providers.iter().find(|p| p.kind() == summary.provider) {
+            Some(p) => p,
+            None => continue,
+        };
+        match provider.analyze(summary, plan) {
+            Ok(analysis) => {
+                cache.insert(
+                    summary.session_id.clone(),
+                    (summary.last_active, analysis.clone()),
+                );
+                out.push(analysis);
+            }
+            Err(e) => tracing::warn!(
+                session = summary.session_id.as_str(),
+                error = %e,
+                "analyze failed"
+            ),
+        }
+    }
+
+    (out, cache)
 }
 
 #[cfg(test)]
