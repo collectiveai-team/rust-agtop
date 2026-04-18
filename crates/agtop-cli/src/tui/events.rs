@@ -435,6 +435,13 @@ mod tests {
         };
         app.set_snapshot(Vec::new(), vec![make_pu("Sub A"), make_pu("Sub B")]);
 
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        assert_eq!(
+            app.plan_selected(),
+            1,
+            "j in Dashboard should increment plan_selected"
+        );
+
         apply_key(&mut app, press(KeyCode::Char('k')));
         assert_eq!(
             app.plan_selected(),
