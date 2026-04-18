@@ -447,4 +447,30 @@ mod tests {
         assert_eq!(filled.content.chars().count(), 5);
         assert_eq!(empty.content.chars().count(), 5);
     }
+
+    #[test]
+    fn bar_style_none_is_dim() {
+        assert_eq!(bar_style(None), th::PLAN_NOTE);
+    }
+
+    #[test]
+    fn canonical_name_passthrough_when_no_prefix_or_suffix() {
+        let pu = make_pu("Pro Plan", None);
+        assert_eq!(canonical_name(&pu), "Pro Plan");
+    }
+
+    #[test]
+    fn canonical_name_empty_plan_name_falls_through_to_label() {
+        // plan_name is Some("") — should fall through to label stripping.
+        let pu = make_pu("Claude Code · Max 5x", Some(""));
+        assert_eq!(canonical_name(&pu), "Max 5x");
+    }
+
+    #[test]
+    fn bar_spans_rounding() {
+        // 33% of 10 = 3.3 → rounds to 3 filled, 7 empty.
+        let [filled, empty] = bar_spans(Some(0.33), 10);
+        assert_eq!(filled.content.chars().count(), 3);
+        assert_eq!(empty.content.chars().count(), 7);
+    }
 }
