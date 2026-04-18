@@ -99,6 +99,21 @@ pub const PLAN_NOTE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier:
 /// Dimmed text used when no plan data is available.
 pub const PLAN_EMPTY: Style = Style::new().add_modifier(Modifier::DIM);
 
+/// Filled portion of a usage bar when utilization < 30 % (safe).
+pub const PLAN_BAR_GREEN: Style = Style::new().fg(Color::Green);
+
+/// Filled portion of a usage bar when utilization is 30–80 % (caution).
+pub const PLAN_BAR_YELLOW: Style = Style::new().fg(Color::Yellow);
+
+/// Filled portion of a usage bar when utilization ≥ 80 % (critical).
+pub const PLAN_BAR_RED: Style = Style::new().fg(Color::Red);
+
+/// Highlighted / selected row in the subscription list.
+pub const PLAN_SELECTED: Style = Style::new()
+    .fg(Color::Black)
+    .bg(Color::Cyan)
+    .add_modifier(Modifier::BOLD);
+
 // ── Footer ────────────────────────────────────────────────────────────────
 
 /// Footer text when filter mode is active.
