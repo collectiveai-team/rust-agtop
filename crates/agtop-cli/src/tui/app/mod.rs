@@ -441,7 +441,7 @@ impl App {
         sessions: Vec<SessionAnalysis>,
         plan_usage: Vec<agtop_core::PlanUsage>,
     ) {
-        let mut tokens_by_provider = [0u64; 3];
+        let mut tokens_by_provider = [0u64; 7];
         for a in &sessions {
             let idx = provider_idx(a.summary.provider);
             let tok = a.tokens.grand_total();

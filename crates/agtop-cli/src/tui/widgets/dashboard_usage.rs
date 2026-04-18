@@ -95,7 +95,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .points()
         .back()
         .map(|p| p.tokens_by_provider)
-        .unwrap_or([0, 0, 0]);
+        .unwrap_or([0, 0, 0, 0, 0, 0, 0]);
     let summary = format!(
         " now: claude {} /m · codex {} /m · opencode {} /m ",
         fmt::compact(current[0]),

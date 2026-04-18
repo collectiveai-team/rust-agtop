@@ -25,7 +25,7 @@ const RETENTION_SECS: i64 = CHART_WINDOW_MINS * 60 * 2;
 #[derive(Debug, Clone)]
 pub struct UsagePoint {
     pub ts: DateTime<Utc>,
-    pub tokens_by_provider: [u64; 3],
+    pub tokens_by_provider: [u64; 7],
 }
 
 /// Bounded ring-buffer of [`UsagePoint`]s used to draw the spark / line charts
@@ -105,6 +105,10 @@ pub(super) fn provider_idx(kind: ProviderKind) -> usize {
         ProviderKind::Claude => 0,
         ProviderKind::Codex => 1,
         ProviderKind::OpenCode => 2,
-        _ => usize::MAX,
+        ProviderKind::Copilot => 3,
+        ProviderKind::GeminiCli => 4,
+        ProviderKind::Cursor => 5,
+        ProviderKind::Antigravity => 6,
+        _ => 0, // fallback for any future variants; accumulate into Claude bucket
     }
 }
