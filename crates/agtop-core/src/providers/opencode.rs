@@ -11,10 +11,13 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::OptionalExtension;
+use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
@@ -23,6 +26,10 @@ use crate::providers::util::dir_exists;
 use crate::session::{
     PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
 };
+
+const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_LIVE_USAGE_RESPONSE_BYTES: usize = 256 * 1024;
+const LIVE_USAGE_REFRESH_COOLDOWN: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeProvider {
@@ -99,7 +106,11 @@ impl Provider for OpenCodeProvider {
     }
 
     fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
-        Ok(collect_plan_usage(&self.storage_root))
+        Ok(collect_plan_usage(&self.storage_root, &[]))
+    }
+
+    fn plan_usage_with_sessions(&self, sessions: &[SessionSummary]) -> Result<Vec<PlanUsage>> {
+        Ok(collect_plan_usage(&self.storage_root, sessions))
     }
 }
 
@@ -120,9 +131,10 @@ fn read_json(path: &Path) -> Result<serde_json::Value> {
 // Plan usage
 // ---------------------------------------------------------------------------
 
-fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
+fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<PlanUsage> {
     let subscriptions = read_subscriptions(storage_root);
     let auth_kinds = read_auth_kinds(storage_root);
+    let auth_entries = read_auth_entries(storage_root);
     let db_path = storage_root.join("opencode.db");
 
     let mut oauth_providers: Vec<String> = auth_kinds
@@ -191,7 +203,34 @@ fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
 
     let mut out = Vec::new();
     for provider_id in oauth_providers {
+        let live_usage = auth_entries
+            .get(&provider_id)
+            .and_then(|entry| {
+                live_plan_usage_for_provider_cached(
+                    storage_root,
+                    &provider_id,
+                    entry,
+                    sessions,
+                    Utc::now(),
+                    http_get_json,
+                )
+                .ok()
+            })
+            .flatten();
+
         if provider_id == "anthropic" {
+            if let Some(live) = live_usage {
+                out.push(PlanUsage {
+                    provider: ProviderKind::OpenCode,
+                    label: format!("OpenCode · {}", live.plan_name),
+                    plan_name: Some(live.plan_name),
+                    windows: live.windows,
+                    last_limit_hit: anthropic_last_limit_hit,
+                    note: anthropic_note.clone(),
+                });
+                continue;
+            }
+
             out.push(PlanUsage {
                 provider: ProviderKind::OpenCode,
                 label: "OpenCode · Max 5x".to_string(),
@@ -199,6 +238,19 @@ fn collect_plan_usage(storage_root: &Path) -> Vec<PlanUsage> {
                 windows: anthropic_windows.clone(),
                 last_limit_hit: anthropic_last_limit_hit,
                 note: anthropic_note.clone(),
+            });
+            continue;
+        }
+
+        if let Some(live) = live_usage {
+            let plan_name = live.plan_name;
+            out.push(PlanUsage {
+                provider: ProviderKind::OpenCode,
+                label: format!("OpenCode · {plan_name}"),
+                plan_name: Some(plan_name),
+                windows: live.windows,
+                last_limit_hit: None,
+                note: None,
             });
             continue;
         }
@@ -253,6 +305,18 @@ fn read_auth_kinds(storage_root: &Path) -> HashMap<String, AuthKind> {
 }
 
 fn read_subscriptions(storage_root: &Path) -> HashMap<String, String> {
+    let entries = read_auth_entries(storage_root);
+    let mut out = HashMap::new();
+    for (provider_id, entry) in entries {
+        let Some(label) = subscription_label_for_provider(&provider_id, &entry) else {
+            continue;
+        };
+        out.insert(provider_id, label);
+    }
+    out
+}
+
+fn read_auth_entries(storage_root: &Path) -> HashMap<String, serde_json::Value> {
     let auth_path = storage_root.join("auth.json");
     let raw = match fs::read_to_string(&auth_path) {
         Ok(s) => s,
@@ -268,12 +332,388 @@ fn read_subscriptions(storage_root: &Path) -> HashMap<String, String> {
 
     let mut out = HashMap::new();
     for (provider_id, entry) in obj {
-        let Some(label) = subscription_label_for_provider(provider_id, entry) else {
-            continue;
-        };
-        out.insert(provider_id.to_string(), label);
+        out.insert(provider_id.to_string(), entry.clone());
     }
     out
+}
+
+#[derive(Debug, Clone)]
+struct LivePlanUsage {
+    plan_name: String,
+    windows: Vec<PlanWindow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LivePlanUsageCache {
+    plan_name: String,
+    windows: Vec<PlanWindow>,
+    #[serde(default)]
+    last_fetch_attempt_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    last_fetch_success_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    last_activity_seen_at: Option<DateTime<Utc>>,
+}
+
+fn live_plan_usage_for_provider<F>(
+    provider_id: &str,
+    auth_entry: &serde_json::Value,
+    http_get_json: F,
+) -> std::result::Result<Option<LivePlanUsage>, String>
+where
+    F: FnOnce(&str, Vec<(String, String)>) -> std::result::Result<serde_json::Value, String>,
+{
+    let access_token = auth_entry
+        .get("access")
+        .and_then(|x| x.as_str())
+        .or_else(|| auth_entry.get("token").and_then(|x| x.as_str()));
+    let Some(access_token) = access_token else {
+        return Ok(None);
+    };
+
+    match provider_id {
+        "anthropic" => {
+            let payload = http_get_json(
+                "https://api.anthropic.com/api/oauth/usage",
+                vec![
+                    (
+                        "Authorization".to_string(),
+                        format!("Bearer {access_token}"),
+                    ),
+                    ("anthropic-beta".to_string(), "oauth-2025-04-20".to_string()),
+                ],
+            )?;
+            Ok(Some(parse_anthropic_live_plan_usage(&payload)))
+        }
+        "github-copilot" => {
+            let payload = http_get_json(
+                "https://api.github.com/copilot_internal/user",
+                vec![
+                    ("Authorization".to_string(), format!("token {access_token}")),
+                    ("Accept".to_string(), "application/json".to_string()),
+                    ("Editor-Version".to_string(), "vscode/1.96.2".to_string()),
+                    ("X-Github-Api-Version".to_string(), "2025-04-01".to_string()),
+                ],
+            )?;
+            Ok(Some(parse_copilot_live_plan_usage(&payload)))
+        }
+        _ => Ok(None),
+    }
+}
+
+fn live_plan_usage_for_provider_cached<F>(
+    storage_root: &Path,
+    provider_id: &str,
+    auth_entry: &serde_json::Value,
+    sessions: &[SessionSummary],
+    now: DateTime<Utc>,
+    http_get_json: F,
+) -> std::result::Result<Option<LivePlanUsage>, String>
+where
+    F: FnOnce(&str, Vec<(String, String)>) -> std::result::Result<serde_json::Value, String>,
+{
+    let cache = read_live_plan_usage_cache(storage_root, provider_id);
+    let latest_activity = latest_relevant_session_activity(provider_id, sessions);
+    if !should_refresh_live_plan_usage(now, latest_activity, cache.as_ref()) {
+        return Ok(cache.map(|cached| cached.into_live_usage()));
+    }
+
+    match live_plan_usage_for_provider(provider_id, auth_entry, http_get_json) {
+        Ok(Some(live)) => {
+            let cached = LivePlanUsageCache {
+                plan_name: live.plan_name.clone(),
+                windows: live.windows.clone(),
+                last_fetch_attempt_at: Some(now),
+                last_fetch_success_at: Some(now),
+                last_activity_seen_at: latest_activity,
+            };
+            write_live_plan_usage_cache(storage_root, provider_id, &cached);
+            Ok(Some(live))
+        }
+        Ok(None) => Ok(None),
+        Err(err) => {
+            if let Some(mut cached) = cache {
+                cached.last_fetch_attempt_at = Some(now);
+                write_live_plan_usage_cache(storage_root, provider_id, &cached);
+                return Ok(Some(cached.into_live_usage()));
+            }
+            Err(err)
+        }
+    }
+}
+
+impl LivePlanUsageCache {
+    fn into_live_usage(self) -> LivePlanUsage {
+        LivePlanUsage {
+            plan_name: self.plan_name,
+            windows: self.windows,
+        }
+    }
+}
+
+fn should_refresh_live_plan_usage(
+    now: DateTime<Utc>,
+    latest_activity: Option<DateTime<Utc>>,
+    cache: Option<&LivePlanUsageCache>,
+) -> bool {
+    let Some(cache) = cache else {
+        return true;
+    };
+
+    let cooldown_elapsed = cache
+        .last_fetch_attempt_at
+        .map(|ts| (now - ts).to_std().unwrap_or_default() >= LIVE_USAGE_REFRESH_COOLDOWN)
+        .unwrap_or(true);
+
+    let activity_advanced = match (latest_activity, cache.last_activity_seen_at) {
+        (Some(latest), Some(seen)) => latest > seen,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+
+    cooldown_elapsed && activity_advanced
+}
+
+fn latest_relevant_session_activity(
+    provider_id: &str,
+    sessions: &[SessionSummary],
+) -> Option<DateTime<Utc>> {
+    sessions
+        .iter()
+        .filter(|summary| session_matches_live_usage_provider(summary, provider_id))
+        .filter_map(session_activity_timestamp)
+        .max()
+}
+
+fn session_activity_timestamp(summary: &SessionSummary) -> Option<DateTime<Utc>> {
+    summary.last_active.or(summary.started_at)
+}
+
+fn session_matches_live_usage_provider(summary: &SessionSummary, provider_id: &str) -> bool {
+    match provider_id {
+        "anthropic" => {
+            summary.provider == ProviderKind::Claude
+                || subscription_matches(summary.subscription.as_deref(), &["max"])
+                || model_matches_family(summary.model.as_deref(), "anthropic")
+        }
+        "openai" => {
+            summary.provider == ProviderKind::Codex
+                || subscription_matches(summary.subscription.as_deref(), &["chatgpt"])
+                || model_matches_family(summary.model.as_deref(), "openai")
+        }
+        "github-copilot" => {
+            subscription_matches(
+                summary.subscription.as_deref(),
+                &["github copilot", "copilot"],
+            ) || model_matches_family(summary.model.as_deref(), "github-copilot")
+        }
+        _ => false,
+    }
+}
+
+fn subscription_matches(subscription: Option<&str>, needles: &[&str]) -> bool {
+    let Some(subscription) = subscription else {
+        return false;
+    };
+    let subscription = subscription.to_ascii_lowercase();
+    needles.iter().any(|needle| subscription.contains(needle))
+}
+
+fn model_matches_family(model: Option<&str>, family: &str) -> bool {
+    let Some(model) = model else {
+        return false;
+    };
+    let model = model.to_ascii_lowercase();
+    match family {
+        "anthropic" => model.contains("claude") || model.contains("anthropic/"),
+        "openai" => {
+            model.contains("openai/")
+                || model.starts_with("gpt-")
+                || model.starts_with("o1")
+                || model.starts_with("o3")
+                || model.starts_with("o4")
+        }
+        "github-copilot" => model.contains("copilot"),
+        _ => false,
+    }
+}
+
+fn parse_anthropic_live_plan_usage(payload: &serde_json::Value) -> LivePlanUsage {
+    let mut windows = Vec::new();
+    push_live_window(&mut windows, payload.get("five_hour"), "5h");
+    push_live_window(&mut windows, payload.get("seven_day"), "7d");
+    push_live_window(&mut windows, payload.get("seven_day_sonnet"), "7d sonnet");
+    push_live_window(&mut windows, payload.get("seven_day_opus"), "7d opus");
+
+    LivePlanUsage {
+        plan_name: "Max 5x".to_string(),
+        windows,
+    }
+}
+
+fn parse_copilot_live_plan_usage(payload: &serde_json::Value) -> LivePlanUsage {
+    let mut windows = Vec::new();
+    let reset_at = parse_reset_at(payload.get("quota_reset_date"));
+    let Some(snapshots) = payload.get("quota_snapshots").and_then(|x| x.as_object()) else {
+        return LivePlanUsage {
+            plan_name: "GitHub Copilot".to_string(),
+            windows,
+        };
+    };
+
+    push_copilot_window(&mut windows, snapshots.get("chat"), "chat", reset_at);
+    push_copilot_window(
+        &mut windows,
+        snapshots.get("completions"),
+        "completions",
+        reset_at,
+    );
+    push_copilot_window(
+        &mut windows,
+        snapshots.get("premium_interactions"),
+        "premium",
+        reset_at,
+    );
+
+    LivePlanUsage {
+        plan_name: "GitHub Copilot".to_string(),
+        windows,
+    }
+}
+
+fn push_live_window(windows: &mut Vec<PlanWindow>, raw: Option<&serde_json::Value>, label: &str) {
+    let Some(raw) = raw else {
+        return;
+    };
+    windows.push(PlanWindow {
+        label: label.to_string(),
+        utilization: value_to_f64(raw.get("utilization")).map(normalize_utilization),
+        reset_at: parse_reset_at(raw.get("resets_at")),
+        reset_hint: None,
+        binding: false,
+    });
+}
+
+fn push_copilot_window(
+    windows: &mut Vec<PlanWindow>,
+    raw: Option<&serde_json::Value>,
+    label: &str,
+    reset_at: Option<DateTime<Utc>>,
+) {
+    let Some(raw) = raw else {
+        return;
+    };
+    let entitlement = value_to_f64(raw.get("entitlement"));
+    let remaining = value_to_f64(raw.get("remaining"));
+    let utilization = match (entitlement, remaining) {
+        (Some(entitlement), Some(remaining)) if entitlement > 0.0 => {
+            Some(normalize_utilization(1.0 - (remaining / entitlement)))
+        }
+        _ => None,
+    };
+    windows.push(PlanWindow {
+        label: label.to_string(),
+        utilization,
+        reset_at,
+        reset_hint: None,
+        binding: false,
+    });
+}
+
+fn parse_reset_at(raw: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
+    let raw = raw?;
+    if let Some(s) = raw.as_str() {
+        return chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .map(|dt| dt.with_timezone(&Utc));
+    }
+    if let Some(n) = raw.as_i64() {
+        return if n >= 1_000_000_000_000 {
+            Utc.timestamp_millis_opt(n).single()
+        } else {
+            Utc.timestamp_opt(n, 0).single()
+        };
+    }
+    None
+}
+
+fn value_to_f64(raw: Option<&serde_json::Value>) -> Option<f64> {
+    match raw {
+        Some(serde_json::Value::Number(n)) => n.as_f64(),
+        Some(serde_json::Value::String(s)) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+fn normalize_utilization(value: f64) -> f64 {
+    if value > 1.0 && value <= 100.0 {
+        (value / 100.0).clamp(0.0, 1.0)
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
+fn live_plan_usage_cache_path(storage_root: &Path, provider_id: &str) -> PathBuf {
+    storage_root
+        .join("cache")
+        .join("plan_usage")
+        .join(format!("{provider_id}.json"))
+}
+
+fn write_live_plan_usage_cache(storage_root: &Path, provider_id: &str, cache: &LivePlanUsageCache) {
+    let path = live_plan_usage_cache_path(storage_root, provider_id);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(bytes) = serde_json::to_vec(cache) else {
+        return;
+    };
+    let _ = fs::write(path, bytes);
+}
+
+fn read_live_plan_usage_cache(
+    storage_root: &Path,
+    provider_id: &str,
+) -> Option<LivePlanUsageCache> {
+    let path = live_plan_usage_cache_path(storage_root, provider_id);
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn http_get_json(
+    url: &str,
+    headers: Vec<(String, String)>,
+) -> std::result::Result<serde_json::Value, String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(LIVE_USAGE_TIMEOUT))
+        .user_agent(concat!("rust-agtop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .new_agent();
+
+    let mut req = agent.get(url);
+    for (name, value) in headers {
+        req = req.header(&name, &value);
+    }
+
+    let mut resp = req.call().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let mut body = Vec::new();
+    resp.body_mut()
+        .as_reader()
+        .take(MAX_LIVE_USAGE_RESPONSE_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| e.to_string())?;
+    if body.len() > MAX_LIVE_USAGE_RESPONSE_BYTES {
+        return Err(format!("response too large: {} bytes", body.len()));
+    }
+
+    serde_json::from_slice(&body).map_err(|e| e.to_string())
 }
 
 fn subscription_label_for_provider(
@@ -1089,6 +1529,303 @@ mod tests {
             .find(|pu| pu.label == "OpenCode · GitHub Copilot")
             .expect("copilot card");
         assert_eq!(copilot.plan_name.as_deref(), Some("GitHub Copilot"));
+    }
+
+    #[test]
+    fn live_plan_usage_for_anthropic_oauth_parses_usage_windows() {
+        let auth_entry = serde_json::json!({
+            "type": "oauth",
+            "access": "anthropic-token"
+        });
+
+        let live = live_plan_usage_for_provider(
+            "anthropic",
+            &auth_entry,
+            |url, headers: Vec<(String, String)>| {
+                assert_eq!(url, "https://api.anthropic.com/api/oauth/usage");
+                assert!(headers
+                    .iter()
+                    .any(|(k, v)| { k == "Authorization" && v == "Bearer anthropic-token" }));
+                assert!(headers
+                    .iter()
+                    .any(|(k, v)| { k == "anthropic-beta" && v == "oauth-2025-04-20" }));
+
+                Ok(serde_json::json!({
+                    "five_hour": {
+                        "utilization": 0.64,
+                        "resets_at": "2026-04-18T10:00:00Z"
+                    },
+                    "seven_day": {
+                        "utilization": 0.12,
+                        "resets_at": "2026-04-24T10:00:00Z"
+                    },
+                    "seven_day_sonnet": {
+                        "utilization": 0.21,
+                        "resets_at": "2026-04-24T10:00:00Z"
+                    },
+                    "seven_day_opus": {
+                        "utilization": 0.03,
+                        "resets_at": "2026-04-24T10:00:00Z"
+                    }
+                }))
+            },
+        )
+        .expect("live usage")
+        .expect("anthropic usage present");
+
+        assert_eq!(live.plan_name, "Max 5x");
+        assert_eq!(live.windows.len(), 4);
+        assert_eq!(
+            live.windows
+                .iter()
+                .find(|w| w.label == "5h")
+                .unwrap()
+                .utilization,
+            Some(0.64)
+        );
+        assert_eq!(
+            live.windows
+                .iter()
+                .find(|w| w.label == "7d")
+                .unwrap()
+                .utilization,
+            Some(0.12)
+        );
+        assert_eq!(
+            live.windows
+                .iter()
+                .find(|w| w.label == "7d sonnet")
+                .unwrap()
+                .utilization,
+            Some(0.21)
+        );
+        assert_eq!(
+            live.windows
+                .iter()
+                .find(|w| w.label == "7d opus")
+                .unwrap()
+                .utilization,
+            Some(0.03)
+        );
+    }
+
+    #[test]
+    fn live_plan_usage_for_copilot_oauth_parses_quota_snapshots() {
+        let auth_entry = serde_json::json!({
+            "type": "oauth",
+            "access": "copilot-token"
+        });
+
+        let live = live_plan_usage_for_provider(
+            "github-copilot",
+            &auth_entry,
+            |url, headers: Vec<(String, String)>| {
+                assert_eq!(url, "https://api.github.com/copilot_internal/user");
+                assert!(headers
+                    .iter()
+                    .any(|(k, v)| { k == "Authorization" && v == "token copilot-token" }));
+                assert!(headers
+                    .iter()
+                    .any(|(k, v)| k == "Editor-Version" && v == "vscode/1.96.2"));
+
+                Ok(serde_json::json!({
+                    "quota_reset_date": "2026-04-19T00:00:00Z",
+                    "quota_snapshots": {
+                        "chat": {
+                            "entitlement": 300,
+                            "remaining": 120
+                        },
+                        "completions": {
+                            "entitlement": 150,
+                            "remaining": 75
+                        },
+                        "premium_interactions": {
+                            "entitlement": 50,
+                            "remaining": 5
+                        }
+                    }
+                }))
+            },
+        )
+        .expect("live usage")
+        .expect("copilot usage present");
+
+        assert_eq!(live.plan_name, "GitHub Copilot");
+        assert_eq!(live.windows.len(), 3);
+
+        let chat = live.windows.iter().find(|w| w.label == "chat").unwrap();
+        assert_eq!(chat.utilization, Some(0.6));
+        assert!(chat.reset_at.is_some());
+
+        let completions = live
+            .windows
+            .iter()
+            .find(|w| w.label == "completions")
+            .unwrap();
+        assert_eq!(completions.utilization, Some(0.5));
+
+        let premium = live.windows.iter().find(|w| w.label == "premium").unwrap();
+        assert_eq!(premium.utilization, Some(0.9));
+    }
+
+    #[test]
+    fn anthropic_live_usage_normalizes_percentage_values() {
+        let live = parse_anthropic_live_plan_usage(&serde_json::json!({
+            "five_hour": {
+                "utilization": 20.0,
+                "resets_at": "2026-04-18T10:00:00Z"
+            }
+        }));
+
+        let w = live.windows.iter().find(|w| w.label == "5h").unwrap();
+        assert_eq!(w.utilization, Some(0.2));
+    }
+
+    #[test]
+    fn live_plan_usage_uses_cached_payload_when_fetch_fails() {
+        let tmp = TestDir::new("agtop-opencode-live-cache");
+        let auth_entry = serde_json::json!({
+            "type": "oauth",
+            "access": "anthropic-token"
+        });
+
+        let first = live_plan_usage_for_provider_cached(
+            &tmp.path,
+            "anthropic",
+            &auth_entry,
+            &[],
+            Utc.with_ymd_and_hms(2026, 4, 18, 5, 0, 0).unwrap(),
+            |_url, _headers: Vec<(String, String)>| {
+                Ok(serde_json::json!({
+                    "five_hour": {
+                        "utilization": 0.64,
+                        "resets_at": "2026-04-18T10:00:00Z"
+                    }
+                }))
+            },
+        )
+        .expect("first fetch")
+        .expect("first usage present");
+        assert_eq!(first.windows[0].utilization, Some(0.64));
+
+        let second = live_plan_usage_for_provider_cached(
+            &tmp.path,
+            "anthropic",
+            &auth_entry,
+            &[],
+            Utc.with_ymd_and_hms(2026, 4, 18, 5, 5, 0).unwrap(),
+            |_url, _headers: Vec<(String, String)>| Err("HTTP 429".to_string()),
+        )
+        .expect("cached fetch")
+        .expect("cached usage present");
+        assert_eq!(second.windows[0].utilization, Some(0.64));
+    }
+
+    #[test]
+    fn cached_live_usage_skips_refetch_without_new_relevant_activity() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 18, 5, 10, 0).unwrap();
+        let cache = LivePlanUsageCache {
+            plan_name: "Max 5x".to_string(),
+            windows: Vec::new(),
+            last_fetch_attempt_at: Some(now - chrono::TimeDelta::minutes(10)),
+            last_fetch_success_at: Some(now - chrono::TimeDelta::minutes(10)),
+            last_activity_seen_at: Some(now - chrono::TimeDelta::minutes(2)),
+        };
+
+        let should = should_refresh_live_plan_usage(
+            now,
+            Some(now - chrono::TimeDelta::minutes(2)),
+            Some(&cache),
+        );
+        assert!(!should);
+    }
+
+    #[test]
+    fn cached_live_usage_refetches_after_cooldown_and_new_activity() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 18, 5, 10, 0).unwrap();
+        let cache = LivePlanUsageCache {
+            plan_name: "Max 5x".to_string(),
+            windows: Vec::new(),
+            last_fetch_attempt_at: Some(now - chrono::TimeDelta::minutes(10)),
+            last_fetch_success_at: Some(now - chrono::TimeDelta::minutes(10)),
+            last_activity_seen_at: Some(now - chrono::TimeDelta::minutes(5)),
+        };
+
+        let should = should_refresh_live_plan_usage(
+            now,
+            Some(now - chrono::TimeDelta::minutes(1)),
+            Some(&cache),
+        );
+        assert!(should);
+    }
+
+    #[test]
+    fn anthropic_activity_matches_claude_and_opencode_sessions() {
+        let claude = SessionSummary::new(
+            ProviderKind::Claude,
+            Some("Max 5x".to_string()),
+            "c1".to_string(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 10, 0).unwrap()),
+            Some("claude-opus-4-7".to_string()),
+            None,
+            PathBuf::from("/tmp/claude"),
+        );
+        let opencode = SessionSummary::new(
+            ProviderKind::OpenCode,
+            Some("Max 5x".to_string()),
+            "o1".to_string(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 30, 0).unwrap()),
+            Some("anthropic/claude-sonnet-4-6".to_string()),
+            None,
+            PathBuf::from("/tmp/opencode"),
+        );
+        let codex = SessionSummary::new(
+            ProviderKind::Codex,
+            Some("ChatGPT Plus".to_string()),
+            "x1".to_string(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 40, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 50, 0).unwrap()),
+            Some("gpt-5.4".to_string()),
+            None,
+            PathBuf::from("/tmp/codex"),
+        );
+
+        let latest = latest_relevant_session_activity("anthropic", &[claude, opencode, codex]);
+        assert_eq!(
+            latest,
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 30, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn openai_activity_matches_codex_and_opencode_sessions() {
+        let codex = SessionSummary::new(
+            ProviderKind::Codex,
+            Some("ChatGPT Plus".to_string()),
+            "x1".to_string(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 10, 0).unwrap()),
+            Some("gpt-5.4".to_string()),
+            None,
+            PathBuf::from("/tmp/codex"),
+        );
+        let opencode = SessionSummary::new(
+            ProviderKind::OpenCode,
+            Some("ChatGPT Plus".to_string()),
+            "o1".to_string(),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 25, 0).unwrap()),
+            Some("openai/gpt-5.4".to_string()),
+            None,
+            PathBuf::from("/tmp/opencode"),
+        );
+        let latest = latest_relevant_session_activity("openai", &[codex, opencode]);
+        assert_eq!(
+            latest,
+            Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 25, 0).unwrap())
+        );
     }
 
     #[test]

@@ -56,54 +56,6 @@ pub fn render(
         .collect();
     let header = Row::new(header_cells).style(header_style).height(1);
 
-    // ── Compute absolute x-ranges for sortable header cells ──────────────
-    // The table widget draws: left border (1px) + highlight-symbol (2px) +
-    // then columns laid out left-to-right with 1px spacing between them.
-    header_cols.clear();
-    let mut cursor_x = area.x + 1 + 2; // left border + "▶ "
-
-    // Walk all visible columns. Stop tracking when we hit a flexible (CWD)
-    // column since we don't know its rendered width here.
-    let mut hit_flexible = false;
-    for &col_id in &visible {
-        if hit_flexible {
-            break;
-        }
-        if col_id.is_flexible() {
-            hit_flexible = true;
-            continue;
-        }
-        let w = col_id.fixed_width().unwrap_or(0);
-        if let Some(sc) = col_id.sort_col() {
-            header_cols.push((cursor_x, cursor_x + w, sc));
-        }
-        cursor_x += w + 1; // +1 for the inter-column spacing
-    }
-
-    // Columns after the flexible CWD column — compute from right edge.
-    if hit_flexible {
-        let right_edge = area.x + area.width - 1;
-        let tail: Vec<ColumnId> = visible
-            .iter()
-            .rev()
-            .take_while(|&&id| !id.is_flexible())
-            .copied()
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        let mut rx = right_edge;
-        for col_id in tail.iter().rev() {
-            let w = col_id.fixed_width().unwrap_or(0);
-            let x_start = rx.saturating_sub(w);
-            if let Some(sc) = col_id.sort_col() {
-                header_cols.push((x_start, rx, sc));
-            }
-            rx = x_start.saturating_sub(1);
-        }
-    }
-    // ─────────────────────────────────────────────────────────────────────
-
     let widths: Vec<Constraint> = visible
         .iter()
         .map(|&col_id| {
@@ -114,6 +66,45 @@ pub fn render(
             }
         })
         .collect();
+
+    // ── Compute absolute x-ranges for sortable header cells ──────────────
+    //
+    // We mirror ratatui's Table::get_columns_widths exactly:
+    //   1. Reserve `selection_width` columns for the highlight symbol.
+    //   2. Split the remaining inner width with the same Constraints + spacing=1.
+    //
+    // This is the only way to get correct offsets when the terminal is
+    // narrower than the sum of all Length constraints (ratatui compresses
+    // them proportionally; our old manual cursor arithmetic did not).
+    header_cols.clear();
+
+    // `"▶ "` is 2 terminal columns wide (▶ = 1 col, space = 1 col).
+    // HighlightSpacing::WhenSelected (ratatui default) reserves the symbol
+    // width only when a row is selected.
+    let selection_width: u16 = if app.selected_idx().is_some() { 2 } else { 0 };
+
+    // Inner area: strip the block's 1-column left and right borders.
+    let inner_width = area.width.saturating_sub(2);
+    let inner_x = area.x + 1;
+
+    // Columns area starts after the selection column.
+    let columns_x = inner_x + selection_width;
+    let columns_width = inner_width.saturating_sub(selection_width);
+
+    // Split exactly as Table does: Layout::horizontal(widths).spacing(1).
+    let col_rects = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(widths.clone())
+        .spacing(1)
+        .split(Rect::new(columns_x, area.y, columns_width, 1));
+
+    for (i, &col_id) in visible.iter().enumerate() {
+        if let Some(sc) = col_id.sort_col() {
+            let r = col_rects[i];
+            header_cols.push((r.x, r.x + r.width, sc));
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     let title = format!(
         " Sessions ({visible}/{total})  sort:{col}{dir}  filter:\"{f}\" ",

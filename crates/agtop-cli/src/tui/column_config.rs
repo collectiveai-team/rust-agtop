@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tui::app::SortColumn;
+use crate::tui::app::{SortColumn, SortDir};
 
 /// All column identifiers in the session table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,11 +126,25 @@ impl ColumnId {
     }
 }
 
+fn default_sort_col() -> SortColumn {
+    SortColumn::LastActive
+}
+
+fn default_sort_dir() -> SortDir {
+    SortColumn::LastActive.default_direction()
+}
+
 /// Persisted column configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnConfig {
     /// Columns in display order. Only entries in this list are shown.
     pub columns: Vec<ColumnEntry>,
+    /// Active sort column. Defaults to `LastActive` for new/missing configs.
+    #[serde(default = "default_sort_col")]
+    pub sort_col: SortColumn,
+    /// Active sort direction. Defaults to the sort column's natural direction.
+    #[serde(default = "default_sort_dir")]
+    pub sort_dir: SortDir,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +155,7 @@ pub struct ColumnEntry {
 
 impl Default for ColumnConfig {
     fn default() -> Self {
+        let sort_col = default_sort_col();
         Self {
             columns: ColumnId::all()
                 .iter()
@@ -150,6 +165,8 @@ impl Default for ColumnConfig {
                     visible: !matches!(id, ColumnId::ToolCalls | ColumnId::Duration),
                 })
                 .collect(),
+            sort_col,
+            sort_dir: sort_col.default_direction(),
         }
     }
 }
@@ -185,6 +202,15 @@ impl ColumnConfig {
         }
     }
 
+    // ---- Sort persistence ---------------------------------------------------
+
+    /// Update the persisted sort state and save to disk.
+    pub fn set_sort(&mut self, col: SortColumn, dir: SortDir) {
+        self.sort_col = col;
+        self.sort_dir = dir;
+        self.save();
+    }
+
     // ---- Persistence --------------------------------------------------------
 
     fn config_path() -> Option<std::path::PathBuf> {
@@ -194,12 +220,21 @@ impl ColumnConfig {
     /// Load from disk, returning `Default` when the file does not exist
     /// or is unreadable/malformed.
     pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
+        // In tests always return the default so that tests which call
+        // set_sort() → save() don't corrupt subsequent tests that create
+        // a fresh App via App::new().
+        #[cfg(test)]
+        return Self::default();
+
+        #[cfg(not(test))]
+        {
+            let Some(path) = Self::config_path() else {
+                return Self::default();
+            };
+            match std::fs::read_to_string(&path) {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+                Err(_) => Self::default(),
+            }
         }
     }
 

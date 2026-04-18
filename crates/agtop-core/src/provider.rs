@@ -35,4 +35,12 @@ pub trait Provider: std::fmt::Debug + Send + Sync {
     fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
         Ok(Vec::new())
     }
+
+    /// Context-aware plan usage hook. Providers that need to correlate
+    /// quota refreshes with recently discovered sessions can override
+    /// this method; everyone else keeps the plain `plan_usage` behavior.
+    fn plan_usage_with_sessions(&self, sessions: &[SessionSummary]) -> Result<Vec<PlanUsage>> {
+        let _ = sessions;
+        self.plan_usage()
+    }
 }

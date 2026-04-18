@@ -60,7 +60,7 @@ Examples:
 - `"Claude Code · Max 5x"` → `"Max 5x"`
 - `"Max 5x via Claude Code"` → `"Max 5x"`
 - `"OpenCode · Anthropic (Max)"` → `"Anthropic (Max)"`
-- `plan_name: Some("max")` → `"max"` (or capitalized)
+- `plan_name: Some("max")` → `"max"` (used as-is, no capitalization applied)
 
 ### Merging Multiple Sources
 
@@ -93,7 +93,7 @@ Location: inline in `dashboard_plan.rs` (private) or in `session.rs` (if reused 
 - Each item is two lines:
   - Line 1: subscription name (highlighted when selected).
   - Line 2: `  bar20 XX%` — 20-char ASCII bar + percentage.
-- Bar data source: utilization from the window with the **shortest `reset_at`** (nearest reset time). If no `reset_at` on any window, fall back to first window with non-None utilization.
+- Bar data source: utilization from the window with the **nearest (smallest) `reset_at`** value (i.e. soonest to reset). If no window has `reset_at`, fall back to the first window with non-None utilization.
 - Bar color: green if util <30%, yellow if 30–80%, red if ≥80%.
 - Selected item uses `PLAN_SELECTED` style (reversed/highlighted).
 - Navigation: `↑`/`↓` arrow keys and `j`/`k` vi-keys cycle through subscriptions. Selection wraps (or clamps — clamping preferred for simplicity).

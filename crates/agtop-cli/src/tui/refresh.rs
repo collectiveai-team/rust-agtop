@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use agtop_core::pricing::Plan;
-use agtop_core::{analyze_all, plan_usage_all, Provider};
+use agtop_core::{analyze_all, discover_all, plan_usage_all_from_summaries, Provider};
 use tokio::sync::watch;
 
 /// Message the UI consumes from the refresh task.
@@ -156,8 +156,9 @@ pub fn spawn(
             generation = generation.wrapping_add(1);
             let providers_inner = providers_arc.clone();
             let result = tokio::task::spawn_blocking(move || {
+                let summaries = discover_all(&providers_inner);
                 let analyses = analyze_all(&providers_inner, plan);
-                let plan_usage = plan_usage_all(&providers_inner);
+                let plan_usage = plan_usage_all_from_summaries(&providers_inner, &summaries);
                 (analyses, plan_usage)
             })
             .await;

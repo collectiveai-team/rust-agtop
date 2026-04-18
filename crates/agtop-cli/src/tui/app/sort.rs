@@ -7,7 +7,8 @@ use agtop_core::session::{SessionAnalysis, TokenTotals};
 // ---------------------------------------------------------------------------
 
 /// Columns the user can sort the session table by. Cycles via `F6` / `>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortColumn {
     /// Last-active timestamp (descending = most recent first). Default.
     LastActive,
@@ -82,7 +83,8 @@ impl SortColumn {
 }
 
 /// Sort direction toggle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SortDir {
     Asc,
     Desc,
