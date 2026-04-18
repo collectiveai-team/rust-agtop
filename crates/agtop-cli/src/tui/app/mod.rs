@@ -80,6 +80,75 @@ impl Tab {
     }
 }
 
+/// Sub-tab for the Cost Summary dashboard panel (group-by dimension).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostTab {
+    /// Group costs by agentic provider (Claude Code, Codex, OpenCode).
+    Provider,
+    /// Group costs by billing subscription (Claude Max, ChatGPT Plus, …).
+    Subscription,
+    /// Group costs by model name.
+    Model,
+    /// Group costs by project working directory.
+    Project,
+}
+
+impl CostTab {
+    pub fn all() -> &'static [CostTab] {
+        &[
+            CostTab::Provider,
+            CostTab::Subscription,
+            CostTab::Model,
+            CostTab::Project,
+        ]
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Provider => "Provider",
+            Self::Subscription => "Subscription",
+            Self::Model => "Model",
+            Self::Project => "Project",
+        }
+    }
+
+    pub fn cycle_forward(self) -> Self {
+        match self {
+            Self::Provider => Self::Subscription,
+            Self::Subscription => Self::Model,
+            Self::Model => Self::Project,
+            Self::Project => Self::Provider,
+        }
+    }
+
+    pub fn cycle_back(self) -> Self {
+        match self {
+            Self::Provider => Self::Project,
+            Self::Subscription => Self::Provider,
+            Self::Model => Self::Subscription,
+            Self::Project => Self::Model,
+        }
+    }
+}
+
+/// Time-period filter for the Cost Summary dashboard panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostPeriod {
+    /// Show all-time totals.
+    Total,
+    /// Show only the current calendar month.
+    Month,
+}
+
+impl CostPeriod {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Total => Self::Month,
+            Self::Month => Self::Total,
+        }
+    }
+}
+
 /// Keyboard input mode. In `Normal`, all bindings are active. In `Filter`,
 /// printable characters append to the filter buffer and Enter/Esc return
 /// to `Normal`.
@@ -127,6 +196,14 @@ pub struct App {
     history: UsageHistory,
     /// Plan usage snapshots per provider.
     plan_usage: Vec<agtop_core::PlanUsage>,
+    /// Active sub-tab in the Cost Summary dashboard panel.
+    cost_tab: CostTab,
+    /// Period filter (total vs current month) for the Cost Summary panel.
+    cost_period: CostPeriod,
+    /// Scroll offset for the Cost Summary breakdown rows (0 = top).
+    cost_scroll: usize,
+    /// Selected subscription index in the plan-usage list (dashboard mode).
+    plan_selected: usize,
     /// Persistent column configuration (visibility + order).
     column_config: ColumnConfig,
     /// Selected row index in the Config tab column list.
@@ -146,13 +223,16 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
+        let column_config = ColumnConfig::load();
+        let sort_col = column_config.sort_col;
+        let sort_dir = column_config.sort_dir;
         Self {
             sessions: Vec::new(),
             selected_idx: None,
             sticky_id: None,
             filter: String::new(),
-            sort_col: SortColumn::LastActive,
-            sort_dir: SortColumn::LastActive.default_direction(),
+            sort_col,
+            sort_dir,
             tab: Tab::Info,
             mode: InputMode::Normal,
             should_quit: false,
@@ -161,7 +241,11 @@ impl App {
             ui_mode: UiMode::Classic,
             history: UsageHistory::default(),
             plan_usage: Vec::new(),
-            column_config: ColumnConfig::load(),
+            cost_tab: CostTab::Provider,
+            cost_period: CostPeriod::Total,
+            cost_scroll: 0,
+            plan_selected: 0,
+            column_config,
             config_cursor: 0,
             view_cache: RefCell::new(None),
         }
@@ -202,6 +286,31 @@ impl App {
     pub fn plan_usage(&self) -> &[agtop_core::PlanUsage] {
         &self.plan_usage
     }
+    pub fn cost_tab(&self) -> CostTab {
+        self.cost_tab
+    }
+    pub fn cost_period(&self) -> CostPeriod {
+        self.cost_period
+    }
+    pub fn cost_scroll(&self) -> usize {
+        self.cost_scroll
+    }
+    pub fn plan_selected(&self) -> usize {
+        self.plan_selected
+    }
+
+    /// Move the subscription list selection down by 1, clamped to the list length.
+    pub fn plan_select_next(&mut self, list_len: usize) {
+        if list_len > 0 {
+            self.plan_selected = (self.plan_selected + 1).min(list_len - 1);
+        }
+    }
+
+    /// Move the subscription list selection up by 1, clamped to 0.
+    pub fn plan_select_prev(&mut self) {
+        self.plan_selected = self.plan_selected.saturating_sub(1);
+    }
+
     pub fn sessions(&self) -> &[SessionAnalysis] {
         &self.sessions
     }
@@ -413,6 +522,7 @@ impl App {
     pub fn cycle_sort_column(&mut self) {
         self.sort_col = self.sort_col.next();
         self.sort_dir = self.sort_col.default_direction();
+        self.column_config.set_sort(self.sort_col, self.sort_dir);
         self.invalidate_view_cache();
         self.select_first();
     }
@@ -420,6 +530,7 @@ impl App {
     /// Flip the sort direction. Moves the cursor to the top.
     pub fn flip_sort_direction(&mut self) {
         self.sort_dir = self.sort_dir.flip();
+        self.column_config.set_sort(self.sort_col, self.sort_dir);
         self.invalidate_view_cache();
         self.select_first();
     }
@@ -434,6 +545,7 @@ impl App {
             self.sort_col = col;
             self.sort_dir = col.default_direction();
         }
+        self.column_config.set_sort(self.sort_col, self.sort_dir);
         self.invalidate_view_cache();
         self.select_first();
     }
@@ -492,6 +604,48 @@ impl App {
             UiMode::Classic => UiMode::Dashboard,
             UiMode::Dashboard => UiMode::Classic,
         };
+    }
+
+    /// Cycle the Cost Summary panel sub-tab forward (Provider → Subscription → Model → Project → …).
+    pub fn cycle_cost_tab_forward(&mut self) {
+        self.cost_tab = self.cost_tab.cycle_forward();
+        self.cost_scroll = 0;
+    }
+
+    /// Cycle the Cost Summary panel sub-tab backward.
+    pub fn cycle_cost_tab_back(&mut self) {
+        self.cost_tab = self.cost_tab.cycle_back();
+        self.cost_scroll = 0;
+    }
+
+    /// Directly set the active Cost Summary sub-tab (e.g. on mouse click).
+    pub fn set_cost_tab(&mut self, tab: CostTab) {
+        self.cost_tab = tab;
+        self.cost_scroll = 0;
+    }
+
+    /// Toggle the Cost Summary period between Total and Month.
+    pub fn toggle_cost_period(&mut self) {
+        self.cost_period = self.cost_period.toggle();
+        self.cost_scroll = 0;
+    }
+
+    /// Directly set the Cost Summary period (e.g. on mouse click).
+    pub fn set_cost_period(&mut self, period: CostPeriod) {
+        self.cost_period = period;
+        self.cost_scroll = 0;
+    }
+
+    /// Scroll the Cost Summary breakdown rows down by `delta`.
+    /// `total_rows` is the number of data rows so we can clamp.
+    pub fn scroll_cost_down(&mut self, delta: usize, total_rows: usize, visible_rows: usize) {
+        let max = total_rows.saturating_sub(visible_rows);
+        self.cost_scroll = (self.cost_scroll + delta).min(max);
+    }
+
+    /// Scroll the Cost Summary breakdown rows up by `delta`.
+    pub fn scroll_cost_up(&mut self, delta: usize) {
+        self.cost_scroll = self.cost_scroll.saturating_sub(delta);
     }
 
     pub fn set_ui_mode(&mut self, mode: UiMode) {
