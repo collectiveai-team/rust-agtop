@@ -21,7 +21,7 @@ use crate::tui::theme as th;
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Config — Columns (Space:toggle, K/J:reorder) ");
+        .title(" Config — Columns (Space:toggle, Shift+J/K:reorder) ");
 
     let col_cfg = app.column_config();
     let cursor = app.config_cursor();
