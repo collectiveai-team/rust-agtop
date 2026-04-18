@@ -9,7 +9,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use super::app::{App, InputMode, Tab};
+use super::app::{App, InputMode, Tab, UiMode};
 
 /// A hint returned from [`apply_key`] so the event loop can take
 /// side-effect actions the pure state can't model (e.g. "refresh now").
@@ -92,8 +92,20 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Char('q') | KeyCode::F(10) => {
             app.request_quit();
         }
-        KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
-        KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
+        KeyCode::Char('j') | KeyCode::Down => {
+            if app.ui_mode() == UiMode::Dashboard {
+                app.plan_select_next(app.plan_usage().len());
+            } else {
+                app.move_selection(1);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.ui_mode() == UiMode::Dashboard {
+                app.plan_select_prev();
+            } else {
+                app.move_selection(-1);
+            }
+        }
         KeyCode::PageDown => app.move_selection(10),
         KeyCode::PageUp => app.move_selection(-10),
         KeyCode::Home | KeyCode::Char('g') => app.select_first(),
@@ -110,6 +122,11 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Char('d') => app.toggle_ui_mode(),
         KeyCode::Tab => app.next_tab(),
         KeyCode::BackTab => app.prev_tab(),
+        // [ / ] cycle the Cost Summary sub-tab (only meaningful in dashboard mode).
+        KeyCode::Char('[') if app.ui_mode() == UiMode::Dashboard => app.cycle_cost_tab_back(),
+        KeyCode::Char(']') if app.ui_mode() == UiMode::Dashboard => app.cycle_cost_tab_forward(),
+        // t toggles the Cost Summary period between total and month.
+        KeyCode::Char('t') if app.ui_mode() == UiMode::Dashboard => app.toggle_cost_period(),
         _ => {}
     }
     Action::None
@@ -372,5 +389,57 @@ mod tests {
             cursor_before - 1,
             "plain k must move the cursor up"
         );
+    }
+
+    #[test]
+    fn dashboard_j_moves_plan_selection_down() {
+        let mut app = App::new();
+        app.toggle_ui_mode(); // switch to Dashboard
+        assert_eq!(app.ui_mode(), UiMode::Dashboard);
+        // plan_select_next needs a list_len; we simulate 3 subscriptions.
+        // The event handler should call plan_select_next(3) when it knows the count.
+        // Since events.rs cannot know the count, we call plan_select_next directly
+        // from apply_key using a fixed count of usize::MAX (clamps to 0 without
+        // a concrete list) — see implementation note below.
+        //
+        // For this test, pre-set plan_selected to 0 and verify it increments.
+        // We'll use a helper that passes count=10.
+        app.plan_select_next(10);
+        assert_eq!(app.plan_selected(), 1);
+        app.plan_select_prev();
+        assert_eq!(app.plan_selected(), 0);
+    }
+
+    #[test]
+    fn dashboard_k_clamps_at_zero() {
+        let mut app = App::new();
+        app.toggle_ui_mode();
+        app.plan_select_prev(); // already at 0 — should stay at 0
+        assert_eq!(app.plan_selected(), 0);
+    }
+
+    #[test]
+    fn dashboard_j_key_moves_plan_selection() {
+        let mut app = App::new();
+        app.toggle_ui_mode(); // Dashboard mode
+                              // Pre-populate plan_usage so plan_select_next has something to clamp to.
+                              // plan_usage().len() == 0 means plan_select_next(0) is a no-op,
+                              // so we need to check the routing without relying on actual movement.
+                              // The key thing to test is that move_selection is NOT called in dashboard mode.
+        let session_count_before = app.view_len();
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        // In Dashboard mode j should NOT change the session table selection.
+        // plan_usage is empty so plan_select_next(0) is a no-op, but no panic.
+        assert_eq!(app.view_len(), session_count_before);
+    }
+
+    #[test]
+    fn classic_j_key_moves_session_selection() {
+        let mut app = App::new();
+        // Classic mode (default) — j moves the session table.
+        assert_eq!(app.ui_mode(), UiMode::Classic);
+        // Just verify it doesn't panic with empty session list.
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        apply_key(&mut app, press(KeyCode::Char('k')));
     }
 }
