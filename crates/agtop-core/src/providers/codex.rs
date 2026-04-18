@@ -181,6 +181,36 @@ fn title_case(s: &str) -> String {
     }
 }
 
+fn effort_from_turn_context(payload: &serde_json::Value) -> Option<(String, String)> {
+    payload
+        .get("effort")
+        .and_then(|x| x.as_str())
+        .map(|effort| (effort.to_string(), "turn_context.effort".to_string()))
+        .or_else(|| {
+            payload
+                .get("collaboration_mode")
+                .and_then(|x| x.get("settings"))
+                .and_then(|x| x.get("reasoning_effort"))
+                .and_then(|x| x.as_str())
+                .map(|effort| {
+                    (
+                        effort.to_string(),
+                        "turn_context.collaboration_mode.settings.reasoning_effort".to_string(),
+                    )
+                })
+        })
+}
+
+fn state_from_response_item(payload: &serde_json::Value) -> Option<(String, String)> {
+    match payload.get("type").and_then(|x| x.as_str()) {
+        Some("function_call") => Some((
+            "waiting".to_string(),
+            "response_item:function_call".to_string(),
+        )),
+        _ => None,
+    }
+}
+
 /// Scan the newest rollout jsonl files for the latest `rate_limits`
 /// snapshot. Returns whichever windows we find (`primary` / `secondary`)
 /// and whether any rollout files were present.
@@ -362,6 +392,10 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut started_at: Option<DateTime<Utc>> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
+    let mut model_effort: Option<String> = None;
+    let mut model_effort_detail: Option<String> = None;
+    let mut state: Option<String> = None;
+    let mut state_detail: Option<String> = None;
     let mut seen = 0usize;
 
     // We only need the first ~50 records for metadata.
@@ -399,6 +433,18 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                     if model.is_none() {
                         model = p.get("model").and_then(|x| x.as_str()).map(str::to_string);
                     }
+                    if let Some((effort, detail)) = effort_from_turn_context(p) {
+                        model_effort = Some(effort);
+                        model_effort_detail = Some(detail);
+                    }
+                }
+            }
+            "response_item" => {
+                if let Some(p) = payload {
+                    if let Some((next_state, detail)) = state_from_response_item(p) {
+                        state = Some(next_state);
+                        state_detail = Some(detail);
+                    }
                 }
             }
             _ => {}
@@ -433,6 +479,10 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
+        state,
+        state_detail,
+        model_effort,
+        model_effort_detail,
         data_path: path.to_path_buf(),
     })
 }

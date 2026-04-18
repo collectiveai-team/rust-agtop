@@ -61,6 +61,10 @@ fn make_summary(data_path: PathBuf) -> SessionSummary {
         Some(MODEL_ID.into()),
         Some("/tmp/opencode-test".into()),
         data_path,
+        None,
+        None,
+        None,
+        None,
     )
 }
 

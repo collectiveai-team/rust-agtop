@@ -183,6 +183,10 @@ pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     let table: &[(&str, Rates)] = match provider {
         ProviderKind::Codex => CODEX_RATES,
         ProviderKind::Claude | ProviderKind::OpenCode => CLAUDE_RATES,
+        ProviderKind::Copilot
+        | ProviderKind::GeminiCli
+        | ProviderKind::Cursor
+        | ProviderKind::Antigravity => return None,
     };
     if let Some((_, r)) = table.iter().find(|(k, _)| *k == model) {
         return Some(*r);
@@ -242,6 +246,10 @@ fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
                 None
             }
         }
+        ProviderKind::Copilot
+        | ProviderKind::GeminiCli
+        | ProviderKind::Cursor
+        | ProviderKind::Antigravity => None,
     }
 }
 
@@ -366,6 +374,14 @@ mod tests {
     fn lookup_opencode_via_suffix() {
         // OpenCode often reports "provider/model"
         assert!(lookup(ProviderKind::OpenCode, "anthropic/claude-haiku-4.5").is_some());
+    }
+
+    #[test]
+    fn builtin_lookup_unknown_provider_kinds_fall_back_to_none() {
+        assert!(builtin_lookup(ProviderKind::Copilot, "gpt-4.1").is_none());
+        assert!(builtin_lookup(ProviderKind::GeminiCli, "gemini-2.5-pro").is_none());
+        assert!(builtin_lookup(ProviderKind::Cursor, "claude-sonnet-4-5").is_none());
+        assert!(builtin_lookup(ProviderKind::Antigravity, "sonnet").is_none());
     }
 
     #[test]

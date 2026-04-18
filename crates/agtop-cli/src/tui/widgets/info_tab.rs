@@ -33,7 +33,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // `kv_line` owns the value string so temporaries can't go
             // out of scope mid-render. Build everything as `String`
             // first, then hand it over.
-            let lines = vec![
+            let mut lines = vec![
                 kv_line("agentic_provider", s.provider.as_str().to_string()),
                 kv_line(
                     "subscription",
@@ -42,6 +42,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_line("session_id", s.session_id.clone()),
                 kv_line("started", fmt_dt(s.started_at)),
                 kv_line("last_active", fmt_dt(s.last_active)),
+                kv_line("state", s.state.clone().unwrap_or_else(|| "-".into())),
+                kv_line(
+                    "effort",
+                    s.model_effort.clone().unwrap_or_else(|| "-".into()),
+                ),
                 kv_line(
                     "duration",
                     a.duration_secs
@@ -102,6 +107,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     },
                 ),
             ];
+            if let Some(detail) = &s.state_detail {
+                lines.push(kv_line("state_detail", detail.clone()));
+            }
+            if let Some(detail) = &s.model_effort_detail {
+                lines.push(kv_line("effort_detail", detail.clone()));
+            }
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
                 .block(block)

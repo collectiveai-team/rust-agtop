@@ -263,6 +263,10 @@ fn prefix_candidates(provider: ProviderKind, model: &str) -> Vec<String> {
         ProviderKind::Codex => {
             out.push(format!("openai/{}", model));
         }
+        ProviderKind::Copilot
+        | ProviderKind::GeminiCli
+        | ProviderKind::Cursor
+        | ProviderKind::Antigravity => {}
     }
     out
 }
@@ -543,6 +547,14 @@ mod tests {
         assert!(idx
             .lookup(ProviderKind::OpenCode, "anthropic/claude-haiku-4-5")
             .is_some());
+    }
+
+    #[test]
+    fn prefix_candidates_ignore_unmapped_providers() {
+        assert!(prefix_candidates(ProviderKind::Copilot, "gpt-4.1").is_empty());
+        assert!(prefix_candidates(ProviderKind::GeminiCli, "gemini-2.5-pro").is_empty());
+        assert!(prefix_candidates(ProviderKind::Cursor, "claude-sonnet-4-5").is_empty());
+        assert!(prefix_candidates(ProviderKind::Antigravity, "sonnet").is_empty());
     }
 
     #[test]

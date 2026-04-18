@@ -5,7 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tui::app::SortColumn;
+use crate::tui::app::{SortColumn, SortDir};
+
+fn default_sort_col() -> SortColumn {
+    SortColumn::LastActive
+}
+
+fn default_sort_dir() -> SortDir {
+    SortColumn::LastActive.default_direction()
+}
 
 /// All column identifiers in the session table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +32,9 @@ pub enum ColumnId {
     Cost,
     ToolCalls,
     Duration,
+    LastActive,
+    State,
+    Effort,
 }
 
 impl ColumnId {
@@ -43,6 +54,9 @@ impl ColumnId {
             ColumnId::Cost,
             ColumnId::ToolCalls,
             ColumnId::Duration,
+            ColumnId::LastActive,
+            ColumnId::State,
+            ColumnId::Effort,
         ]
     }
 
@@ -61,6 +75,9 @@ impl ColumnId {
             ColumnId::Cost => "COST$",
             ColumnId::ToolCalls => "TOOLS",
             ColumnId::Duration => "DUR",
+            ColumnId::LastActive => "LAST ACTIVE",
+            ColumnId::State => "STATE",
+            ColumnId::Effort => "EFFORT",
         }
     }
 
@@ -79,6 +96,9 @@ impl ColumnId {
             ColumnId::Cost => "Dollar cost",
             ColumnId::ToolCalls => "Tool call count",
             ColumnId::Duration => "Session duration",
+            ColumnId::LastActive => "Last active timestamp",
+            ColumnId::State => "Session workflow state",
+            ColumnId::Effort => "Model reasoning effort",
         }
     }
 
@@ -98,6 +118,9 @@ impl ColumnId {
             ColumnId::Cost => Some(10),
             ColumnId::ToolCalls => Some(6),
             ColumnId::Duration => Some(8),
+            ColumnId::LastActive => Some(16),
+            ColumnId::State => Some(10),
+            ColumnId::Effort => Some(8),
         }
     }
 
@@ -117,6 +140,9 @@ impl ColumnId {
             ColumnId::Cost => Some(SortColumn::Cost),
             ColumnId::ToolCalls => Some(SortColumn::ToolCalls),
             ColumnId::Duration => Some(SortColumn::Duration),
+            ColumnId::LastActive => Some(SortColumn::LastActive),
+            ColumnId::State => None,
+            ColumnId::Effort => None,
         }
     }
 
@@ -131,6 +157,12 @@ impl ColumnId {
 pub struct ColumnConfig {
     /// Columns in display order. Only entries in this list are shown.
     pub columns: Vec<ColumnEntry>,
+    /// Active sort column. Defaults to `LastActive` for new/missing configs.
+    #[serde(default = "default_sort_col")]
+    pub sort_col: SortColumn,
+    /// Active sort direction. Defaults to the sort column's natural direction.
+    #[serde(default = "default_sort_dir")]
+    pub sort_dir: SortDir,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +173,7 @@ pub struct ColumnEntry {
 
 impl Default for ColumnConfig {
     fn default() -> Self {
+        let sort_col = default_sort_col();
         Self {
             columns: ColumnId::all()
                 .iter()
@@ -150,6 +183,8 @@ impl Default for ColumnConfig {
                     visible: !matches!(id, ColumnId::ToolCalls | ColumnId::Duration),
                 })
                 .collect(),
+            sort_col,
+            sort_dir: sort_col.default_direction(),
         }
     }
 }
@@ -185,6 +220,15 @@ impl ColumnConfig {
         }
     }
 
+    // ---- Sort persistence ---------------------------------------------------
+
+    /// Update the persisted sort state and save to disk.
+    pub fn set_sort(&mut self, col: SortColumn, dir: SortDir) {
+        self.sort_col = col;
+        self.sort_dir = dir;
+        self.save();
+    }
+
     // ---- Persistence --------------------------------------------------------
 
     fn config_path() -> Option<std::path::PathBuf> {
@@ -194,12 +238,18 @@ impl ColumnConfig {
     /// Load from disk, returning `Default` when the file does not exist
     /// or is unreadable/malformed.
     pub fn load() -> Self {
-        let Some(path) = Self::config_path() else {
-            return Self::default();
-        };
-        match std::fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
+        #[cfg(test)]
+        return Self::default();
+
+        #[cfg(not(test))]
+        {
+            let Some(path) = Self::config_path() else {
+                return Self::default();
+            };
+            match std::fs::read_to_string(&path) {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+                Err(_) => Self::default(),
+            }
         }
     }
 

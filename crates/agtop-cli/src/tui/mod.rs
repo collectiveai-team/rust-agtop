@@ -553,6 +553,10 @@ mod tests {
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),
+            Some("waiting".into()),
+            Some("tool approval pending".into()),
+            Some("high".into()),
+            Some("reasoning.effort=high".into()),
         );
         let mut s1_tokens = TokenTotals::default();
         s1_tokens.input = 1_000;
@@ -585,6 +589,10 @@ mod tests {
             Some("gpt-5".into()),
             Some("/tmp/other".into()),
             PathBuf::from("/tmp/codex.jsonl"),
+            None,
+            None,
+            None,
+            None,
         );
         let mut s2_tokens = TokenTotals::default();
         s2_tokens.input = 2_000;
@@ -633,6 +641,10 @@ mod tests {
         assert!(contents.contains("gpt-5"), "gpt-5 model missing");
         assert!(contents.contains("▶"), "selected-row marker missing");
         assert!(contents.contains("Info"), "Info tab title missing");
+        assert!(contents.contains("STATE"), "state header missing");
+        assert!(contents.contains("EFFORT"), "effort header missing");
+        assert!(contents.contains("waiting"), "state value missing");
+        assert!(contents.contains("high"), "effort value missing");
     }
 
     #[test]

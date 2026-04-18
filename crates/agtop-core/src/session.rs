@@ -53,6 +53,18 @@ pub struct SessionSummary {
     pub model: Option<String>,
     /// Working directory (best-effort). Used for display labels.
     pub cwd: Option<String>,
+    /// Coarse workflow state such as `waiting` or `stopped`.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Provider-specific explanation of the derived state.
+    #[serde(default)]
+    pub state_detail: Option<String>,
+    /// Explicit reasoning/model effort when the provider exposes it.
+    #[serde(default)]
+    pub model_effort: Option<String>,
+    /// Provider-specific explanation of where the effort came from.
+    #[serde(default)]
+    pub model_effort_detail: Option<String>,
     /// Primary data file / directory for this session.
     pub data_path: PathBuf,
 }
@@ -91,6 +103,10 @@ impl SessionSummary {
         model: Option<String>,
         cwd: Option<String>,
         data_path: std::path::PathBuf,
+        state: Option<String>,
+        state_detail: Option<String>,
+        model_effort: Option<String>,
+        model_effort_detail: Option<String>,
     ) -> Self {
         Self {
             provider,
@@ -100,6 +116,10 @@ impl SessionSummary {
             last_active,
             model,
             cwd,
+            state,
+            state_detail,
+            model_effort,
+            model_effort_detail,
             data_path,
         }
     }
