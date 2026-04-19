@@ -43,4 +43,13 @@ pub trait Provider: std::fmt::Debug + Send + Sync {
         let _ = sessions;
         self.plan_usage()
     }
+
+    /// Optional provider-specific parent/child relationship hook.
+    /// The default implementation returns an empty vec so providers
+    /// without child-session support remain valid. MUST NOT panic;
+    /// on errors, providers should log via `tracing` if useful and
+    /// return `Ok(vec![])`.
+    fn children(&self, _parent: &SessionSummary) -> Result<Vec<SessionSummary>> {
+        Ok(Vec::new())
+    }
 }
