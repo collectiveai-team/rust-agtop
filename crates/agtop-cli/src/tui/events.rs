@@ -129,6 +129,15 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Char(']') if app.ui_mode() == UiMode::Dashboard => app.cycle_cost_tab_forward(),
         // t toggles the Cost Summary period between total and month.
         KeyCode::Char('t') if app.ui_mode() == UiMode::Dashboard => app.toggle_cost_period(),
+        // Enter and Space toggle expand/collapse for sessions with children.
+        KeyCode::Enter | KeyCode::Char(' ') => {
+            if let Some((_, a)) = app.selected() {
+                if !a.children.is_empty() {
+                    let id = a.summary.session_id.clone();
+                    app.toggle_expand(&id);
+                }
+            }
+        }
         _ => {}
     }
     Action::None
