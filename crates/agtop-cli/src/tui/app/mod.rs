@@ -330,6 +330,11 @@ impl App {
     pub fn column_config(&self) -> &ColumnConfig {
         &self.column_config
     }
+
+    /// Mutable access to the column configuration (used in tests for setup).
+    pub(crate) fn column_config_mut(&mut self) -> &mut ColumnConfig {
+        &mut self.column_config
+    }
     /// Save column config to disk (called after mutations in the config tab).
     #[allow(dead_code)]
     pub fn save_column_config(&self) {

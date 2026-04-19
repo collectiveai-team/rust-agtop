@@ -604,6 +604,7 @@ fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::column_config::ColumnId;
     use agtop_core::session::{
         CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
     };
@@ -826,6 +827,41 @@ mod tests {
         assert!(
             !contents.contains("stopped"),
             "raw state leaked into info tab:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn info_tab_reports_hidden_columns_too() {
+        let backend = TestBackend::new(160, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = fixture_app();
+
+        for entry in &mut app.column_config_mut().columns {
+            if matches!(
+                entry.id,
+                ColumnId::Started | ColumnId::LastActive | ColumnId::Duration
+            ) {
+                entry.visible = false;
+            }
+        }
+
+        let mut state = ratatui::widgets::TableState::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
+            .expect("draw");
+
+        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        assert!(
+            contents.contains("started"),
+            "started row missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("last_active"),
+            "last_active row missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("duration"),
+            "duration row missing:\n{contents}"
         );
     }
 
