@@ -267,10 +267,9 @@ fn build_rows(app: &App, period: CostPeriod, cur_year: i32, cur_month: u32) -> V
                 .or_else(|| s.summary.model.clone())
                 .unwrap_or_else(|| "(unknown)".to_string()),
             CostTab::Project => s
-                .summary
-                .cwd
+                .project_name
                 .clone()
-                .map(|p| shorten_path(&p))
+                .or_else(|| s.summary.cwd.clone().map(|p| shorten_path(&p)))
                 .unwrap_or_else(|| "(unknown)".to_string()),
         };
         *map.entry(key).or_insert(0.0) += s.cost.total;
