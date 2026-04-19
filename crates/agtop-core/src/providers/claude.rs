@@ -15,13 +15,14 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts};
+use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
     PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
 };
@@ -34,9 +35,10 @@ use crate::session::{
 /// sort by mtime descending and inspect at most this many files.
 const PLAN_USAGE_RECENT_FILE_SCAN_LIMIT: usize = 50;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ClaudeProvider {
     pub projects_root: PathBuf,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for ClaudeProvider {
@@ -48,6 +50,7 @@ impl Default for ClaudeProvider {
             .unwrap_or_else(|| home.join(".claude"));
         Self {
             projects_root: base.join("projects"),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -96,7 +99,11 @@ impl Provider for ClaudeProvider {
                 if !is_full_uuid(stem) {
                     continue;
                 }
-                match summarize_claude_file(&p) {
+                let cached = {
+                    let mut guard = self.discover_cache.lock().unwrap();
+                    guard.get_or_insert_with(&p, || summarize_claude_file(&p))
+                };
+                match cached {
                     Ok(mut s) if s.model.is_some() => {
                         s.subscription = subscription.clone();
                         out.push(s)
@@ -108,6 +115,14 @@ impl Provider for ClaudeProvider {
                     }
                 }
             }
+        }
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&Path> = out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
         Ok(out)
     }
@@ -941,5 +956,39 @@ mod tests {
         let out = plan_usage_for(&projects_root).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].plan_name.as_deref(), Some("Max"));
+    }
+
+    #[test]
+    fn second_list_sessions_uses_cache() {
+        let td = TestDir::new();
+        let projects = td.path().join("projects");
+        fs::create_dir_all(projects.join("proj")).unwrap();
+        // Write a minimal JSONL with a uuid stem
+        let jsonl = projects
+            .join("proj")
+            .join("deadbeef-aaaa-bbbb-cccc-012345678901.jsonl");
+        write_jsonl(
+            &jsonl,
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-opus-4","content":[]}}"#,
+            ],
+        );
+
+        let provider = ClaudeProvider {
+            projects_root: projects.clone(),
+            discover_cache: std::sync::Mutex::default(),
+        };
+
+        // First call
+        let r1 = provider.list_sessions();
+        // Second call - should use cache and return same results
+        let r2 = provider.list_sessions();
+
+        match (r1, r2) {
+            (Ok(s1), Ok(s2)) => {
+                assert_eq!(s1.len(), s2.len(), "session count changed between calls");
+            }
+            _ => panic!("list_sessions failed"),
+        }
     }
 }

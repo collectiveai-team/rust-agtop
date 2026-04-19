@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// True iff `p` exists and is a directory.
 pub fn dir_exists(p: &Path) -> bool {
@@ -52,4 +54,42 @@ pub fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|d| d.with_timezone(&Utc))
+}
+
+/// Per-provider cache keyed on file identity. A file is considered
+/// unchanged when both `mtime` and `size` match the previous call.
+#[derive(Debug, Default)]
+pub struct DiscoverCache {
+    entries: HashMap<PathBuf, (SystemTime, u64, crate::session::SessionSummary)>,
+}
+
+impl DiscoverCache {
+    /// Return a cached summary if (mtime, size) match, else call `make`,
+    /// store, and return the fresh result.
+    pub fn get_or_insert_with<F>(
+        &mut self,
+        path: &Path,
+        make: F,
+    ) -> std::io::Result<crate::session::SessionSummary>
+    where
+        F: FnOnce() -> crate::Result<crate::session::SessionSummary>,
+    {
+        let md = fs::metadata(path)?;
+        let mtime = md.modified()?;
+        let size = md.len();
+        if let Some((m, s, cached)) = self.entries.get(path) {
+            if *m == mtime && *s == size {
+                return Ok(cached.clone());
+            }
+        }
+        let fresh = make().map_err(|e| std::io::Error::other(e.to_string()))?;
+        self.entries
+            .insert(path.to_path_buf(), (mtime, size, fresh.clone()));
+        Ok(fresh)
+    }
+
+    /// Drop entries for files that no longer exist in the live set.
+    pub fn retain_paths(&mut self, live: &HashSet<&Path>) {
+        self.entries.retain(|p, _| live.contains(p.as_path()));
+    }
 }
