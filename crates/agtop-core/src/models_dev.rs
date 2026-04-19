@@ -24,6 +24,7 @@ struct RawCost {
     #[serde(default)]
     output: Option<f64>,
     #[serde(default)]
+    #[allow(dead_code)]
     reasoning: Option<f64>,
     #[serde(default)]
     cache_read: Option<f64>,
