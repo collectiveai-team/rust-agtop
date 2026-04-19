@@ -45,6 +45,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 rustc-hash = "2"
 # Provider logo rendering in the dashboard plan panel. Auto-detects
 # terminal protocol (sixel/kitty/iterm2) and falls back to halfblocks.
-ratatui-image = { version = "10", default-features = false, features = ["crossterm", "image-defaults"] }
+ratatui-image = { version = "8", default-features = false, features = ["crossterm", "image-defaults"] }
 # Image decoding (SVG → raster) for provider logos from models.dev.
 image = "0.25"
+resvg = { version = "0.44", default-features = false }
