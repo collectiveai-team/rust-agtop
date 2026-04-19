@@ -8,18 +8,20 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts};
+use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct GeminiCliProvider {
     pub gemini_dir: PathBuf,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for GeminiCliProvider {
@@ -27,6 +29,7 @@ impl Default for GeminiCliProvider {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
             gemini_dir: home.join(".gemini"),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -96,18 +99,30 @@ impl Provider for GeminiCliProvider {
                 if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
                     continue;
                 }
-                match parse_gemini_session(
-                    &path,
-                    cwd.clone(),
-                    global_model.clone(),
-                    subscription.clone(),
-                ) {
+                let cwd2 = cwd.clone();
+                let gm = global_model.clone();
+                let sub = subscription.clone();
+                let cached = {
+                    let mut guard = self.discover_cache.lock().unwrap();
+                    guard.get_or_insert_with(&path, || parse_gemini_session(&path, cwd2, gm, sub))
+                };
+                match cached {
                     Ok(s) => out.push(s),
                     Err(e) => {
                         tracing::debug!(path = %path.display(), error = %e, "skip gemini session");
                     }
                 }
             }
+        }
+
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&std::path::Path> =
+                out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
 
         Ok(out)
@@ -323,6 +338,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::sync::Mutex;
 
     struct TestDir {
         path: std::path::PathBuf,
@@ -345,6 +361,7 @@ mod tests {
     fn missing_dir_returns_empty() {
         let p = GeminiCliProvider {
             gemini_dir: std::path::PathBuf::from("/no/such/path"),
+            discover_cache: Mutex::default(),
         };
         assert!(p.list_sessions().unwrap().is_empty());
     }
@@ -370,6 +387,7 @@ mod tests {
 
         let p = GeminiCliProvider {
             gemini_dir: td.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);

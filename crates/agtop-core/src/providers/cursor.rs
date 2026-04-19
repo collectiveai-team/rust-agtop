@@ -14,19 +14,21 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
 use crate::error::Result;
 use crate::pricing::Plan;
 use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts};
+use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CursorProvider {
     pub projects_root: PathBuf,
     pub state_db: PathBuf,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for CursorProvider {
@@ -45,6 +47,7 @@ impl Default for CursorProvider {
         Self {
             projects_root: home.join(".cursor").join("projects"),
             state_db: code_user.join("globalStorage").join("state.vscdb"),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -106,12 +109,15 @@ impl Provider for CursorProvider {
                     continue;
                 }
 
-                match parse_cursor_transcript(
-                    &transcript_file,
-                    composer_id,
-                    workspace_name.clone(),
-                    subscription.clone(),
-                ) {
+                let cid = composer_id.clone();
+                let wn = workspace_name.clone();
+                let sub = subscription.clone();
+                let tf = transcript_file.clone();
+                let cached = {
+                    let mut guard = self.discover_cache.lock().unwrap();
+                    guard.get_or_insert_with(&tf, || parse_cursor_transcript(&tf, cid, wn, sub))
+                };
+                match cached {
                     Ok(s) => out.push(s),
                     Err(e) => {
                         tracing::debug!(
@@ -122,6 +128,16 @@ impl Provider for CursorProvider {
                     }
                 }
             }
+        }
+
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&std::path::Path> =
+                out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
 
         Ok(out)
@@ -297,6 +313,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::sync::Mutex;
 
     struct TestDir {
         path: std::path::PathBuf,
@@ -320,6 +337,7 @@ mod tests {
         let p = CursorProvider {
             projects_root: std::path::PathBuf::from("/no/such/path"),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
+            discover_cache: Mutex::default(),
         };
         assert!(p.list_sessions().unwrap().is_empty());
     }
@@ -345,6 +363,7 @@ mod tests {
         let p = CursorProvider {
             projects_root: td.path.clone(),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
+            discover_cache: Mutex::default(),
         };
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);

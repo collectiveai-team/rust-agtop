@@ -13,6 +13,7 @@
 //! missing/partial entries).
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use chrono::{DateTime, TimeZone, Utc};
 use walkdir::WalkDir;
@@ -20,7 +21,7 @@ use walkdir::WalkDir;
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts};
+use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
     PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
 };
@@ -31,12 +32,13 @@ use crate::session::{
 /// still catching recent activity across multiple machines/days.
 const RATE_LIMIT_SCAN_MAX_FILES: usize = 5;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CodexProvider {
     pub sessions_root: PathBuf,
     /// Path to `auth.json`. Separated from `sessions_root` so tests (and
     /// unusual Codex layouts) can point at an arbitrary file.
     pub auth_path: PathBuf,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for CodexProvider {
@@ -46,6 +48,7 @@ impl Default for CodexProvider {
         Self {
             sessions_root: codex_dir.join("sessions"),
             auth_path: codex_dir.join("auth.json"),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -69,14 +72,18 @@ impl Provider for CodexProvider {
             .into_iter()
             .filter_map(|r| r.ok())
         {
-            let p = entry.path();
+            let p = entry.path().to_path_buf();
             if !entry.file_type().is_file() {
                 continue;
             }
             if p.extension().map(|e| e != "jsonl").unwrap_or(true) {
                 continue;
             }
-            match summarize_codex_file(p) {
+            let cached = {
+                let mut guard = self.discover_cache.lock().unwrap();
+                guard.get_or_insert_with(&p, || summarize_codex_file(&p))
+            };
+            match cached {
                 Ok(mut s) => {
                     s.subscription = subscription.clone();
                     out.push(s)
@@ -86,6 +93,15 @@ impl Provider for CodexProvider {
                     continue;
                 }
             }
+        }
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&std::path::Path> =
+                out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
         Ok(out)
     }
@@ -625,7 +641,10 @@ mod tests {
 
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{
+        atomic::{AtomicU64, Ordering},
+        Mutex,
+    };
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Minimal throwaway temp-dir helper. Avoids adding `tempfile` as a
@@ -738,6 +757,7 @@ mod tests {
         let provider = CodexProvider {
             sessions_root,
             auth_path,
+            discover_cache: Mutex::default(),
         };
         let usages = provider.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
@@ -759,6 +779,7 @@ mod tests {
         let provider = CodexProvider {
             sessions_root,
             auth_path,
+            discover_cache: Mutex::default(),
         };
         let usages = provider.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
@@ -811,6 +832,7 @@ mod tests {
         let provider = CodexProvider {
             sessions_root: tmp.path().join("sessions"),
             auth_path,
+            discover_cache: Mutex::default(),
         };
         let usages = provider.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
@@ -845,6 +867,7 @@ mod tests {
         let provider = CodexProvider {
             sessions_root: tmp.path().join("sessions"),
             auth_path: tmp.path().join("auth.json"),
+            discover_cache: Mutex::default(),
         };
         let usages = provider.plan_usage().expect("plan_usage");
         assert!(usages.is_empty(), "expected empty, got {usages:?}");

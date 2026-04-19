@@ -5,7 +5,10 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::providers::opencode::OpenCodeProvider;
@@ -158,6 +161,7 @@ fn opencode_sqlite_token_counts_are_summed() {
 
     let provider = OpenCodeProvider {
         storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
     let analysis = provider
@@ -186,6 +190,7 @@ fn opencode_sqlite_tool_call_count() {
 
     let provider = OpenCodeProvider {
         storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
     let analysis = provider
@@ -209,6 +214,7 @@ fn opencode_sqlite_duration_from_summary() {
 
     let provider = OpenCodeProvider {
         storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
     let analysis = provider
@@ -233,6 +239,7 @@ fn opencode_sqlite_retail_cost_is_positive() {
 
     let provider = OpenCodeProvider {
         storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
     let analysis = provider
@@ -278,7 +285,10 @@ fn opencode_json_token_counts_are_summed() {
     let tmp = TmpDir::new("json-tokens");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider { storage_root };
+    let provider = OpenCodeProvider {
+        storage_root,
+        discover_cache: Mutex::default(),
+    };
     let summary = make_summary(tmp.0.join("session.json")); // data_path unused for JSON path
     let analysis = provider
         .analyze(&summary, Plan::Retail)
@@ -301,7 +311,10 @@ fn opencode_json_tool_call_count() {
     let tmp = TmpDir::new("json-tool-calls");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider { storage_root };
+    let provider = OpenCodeProvider {
+        storage_root,
+        discover_cache: Mutex::default(),
+    };
     let summary = make_summary(tmp.0.join("session.json"));
     let analysis = provider
         .analyze(&summary, Plan::Retail)
@@ -321,7 +334,10 @@ fn opencode_json_user_messages_are_ignored() {
     let tmp = TmpDir::new("json-role-filter");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider { storage_root };
+    let provider = OpenCodeProvider {
+        storage_root,
+        discover_cache: Mutex::default(),
+    };
     let summary = make_summary(tmp.0.join("session.json"));
     let analysis = provider
         .analyze(&summary, Plan::Retail)
@@ -336,7 +352,10 @@ fn opencode_json_retail_cost_is_positive() {
     let tmp = TmpDir::new("json-cost");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider { storage_root };
+    let provider = OpenCodeProvider {
+        storage_root,
+        discover_cache: Mutex::default(),
+    };
     let summary = make_summary(tmp.0.join("session.json"));
     let analysis = provider
         .analyze(&summary, Plan::Retail)

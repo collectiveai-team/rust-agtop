@@ -11,13 +11,13 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use crate::error::Result;
 use crate::pricing::Plan;
 use crate::provider::Provider;
-use crate::providers::util::mtime;
+use crate::providers::util::{mtime, DiscoverCache};
 use crate::session::{
     CostBreakdown, PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary,
     TokenTotals,
@@ -35,7 +35,7 @@ struct CopilotParsed {
     duration_secs: Option<u64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CopilotProvider {
     pub workspace_storage_root: PathBuf,
     pub gh_hosts_path: PathBuf,
@@ -44,6 +44,7 @@ pub struct CopilotProvider {
     /// file path. Shared via `Arc<RwLock<…>>` so `Clone` shares the cache
     /// (correct — provider instances are shared across threads via `Arc`).
     cache: Arc<RwLock<HashMap<PathBuf, CopilotParsed>>>,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for CopilotProvider {
@@ -67,6 +68,7 @@ impl Default for CopilotProvider {
                 .join("github-copilot")
                 .join("hosts.json"),
             cache: Arc::new(RwLock::new(HashMap::new())),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -114,18 +116,35 @@ impl Provider for CopilotProvider {
                     Some(s) => s.to_string(),
                     None => continue,
                 };
-                match parse_session_all(&path, stem) {
-                    Ok((summary, parsed)) => {
-                        if let Ok(mut guard) = self.cache.write() {
-                            guard.insert(path.clone(), parsed);
-                        }
-                        out.push(summary);
-                    }
+                let stem2 = stem.clone();
+                let cached = {
+                    let mut guard = self.discover_cache.lock().unwrap();
+                    guard.get_or_insert_with(&path, || {
+                        parse_session_all(&path, stem2).map(|(summary, parsed)| {
+                            if let Ok(mut g) = self.cache.write() {
+                                g.insert(path.clone(), parsed);
+                            }
+                            summary
+                        })
+                    })
+                };
+                match cached {
+                    Ok(summary) => out.push(summary),
                     Err(e) => {
                         tracing::debug!(path = %path.display(), error = %e, "skip copilot session");
                     }
                 }
             }
+        }
+
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&std::path::Path> =
+                out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
 
         Ok(out)

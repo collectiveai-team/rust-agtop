@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::{DateTime, TimeZone, Utc};
@@ -22,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::provider::Provider;
-use crate::providers::util::dir_exists;
+use crate::providers::util::{dir_exists, DiscoverCache};
 use crate::session::{
     PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
 };
@@ -31,9 +32,10 @@ const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_LIVE_USAGE_RESPONSE_BYTES: usize = 256 * 1024;
 const LIVE_USAGE_REFRESH_COOLDOWN: Duration = Duration::from_secs(300);
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OpenCodeProvider {
     pub storage_root: PathBuf,
+    pub discover_cache: Mutex<DiscoverCache>,
 }
 
 impl Default for OpenCodeProvider {
@@ -47,6 +49,7 @@ impl Default for OpenCodeProvider {
         });
         Self {
             storage_root: base.join("opencode"),
+            discover_cache: Mutex::default(),
         }
     }
 }
@@ -78,10 +81,25 @@ impl Provider for OpenCodeProvider {
         // --- Legacy JSON path (v1.1 and earlier) ---
         let session_root = self.storage_root.join("storage").join("session");
         if dir_exists(&session_root) {
-            match list_sessions_json(&session_root, &self.storage_root, &subscriptions) {
+            match list_sessions_json(
+                &session_root,
+                &self.storage_root,
+                &subscriptions,
+                &self.discover_cache,
+            ) {
                 Ok(mut rows) => out.append(&mut rows),
                 Err(e) => tracing::warn!(error = %e, "opencode json list failed"),
             }
+        }
+
+        {
+            use std::collections::HashSet;
+            let live_paths: HashSet<&std::path::Path> =
+                out.iter().map(|s| s.data_path.as_path()).collect();
+            self.discover_cache
+                .lock()
+                .unwrap()
+                .retain_paths(&live_paths);
         }
 
         Ok(out)
@@ -1224,6 +1242,7 @@ fn list_sessions_json(
     session_root: &Path,
     storage_root: &Path,
     subscriptions: &HashMap<String, String>,
+    discover_cache: &Mutex<DiscoverCache>,
 ) -> Result<Vec<SessionSummary>> {
     let mut out = Vec::new();
     let project_dirs = match fs::read_dir(session_root) {
@@ -1243,7 +1262,13 @@ fn list_sessions_json(
             if p.extension().map(|e| e != "json").unwrap_or(true) {
                 continue;
             }
-            match summarize_opencode_session_json(&p, storage_root, subscriptions) {
+            let sr = storage_root.to_path_buf();
+            let subs = subscriptions.clone();
+            let cached = {
+                let mut guard = discover_cache.lock().unwrap();
+                guard.get_or_insert_with(&p, || summarize_opencode_session_json(&p, &sr, &subs))
+            };
+            match cached {
                 Ok(s) => out.push(s),
                 Err(e) => {
                     tracing::debug!(path = %p.display(), error = %e, "skip opencode json session");
@@ -1405,6 +1430,7 @@ fn analyze_opencode_session_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TestDir {
@@ -1500,6 +1526,7 @@ mod tests {
 
         let provider = OpenCodeProvider {
             storage_root: tmp.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let out = provider.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
@@ -1526,6 +1553,7 @@ mod tests {
 
         let provider = OpenCodeProvider {
             storage_root: tmp.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let out = provider.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
@@ -1536,6 +1564,7 @@ mod tests {
         let tmp = TestDir::new("agtop-opencode-plan-missing-db");
         let provider = OpenCodeProvider {
             storage_root: tmp.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let out = provider.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
@@ -1549,6 +1578,7 @@ mod tests {
 
         let provider = OpenCodeProvider {
             storage_root: tmp.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let out = provider.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
@@ -1570,6 +1600,7 @@ mod tests {
 
         let provider = OpenCodeProvider {
             storage_root: tmp.path.clone(),
+            discover_cache: Mutex::default(),
         };
         let out = provider.plan_usage().expect("plan_usage");
 

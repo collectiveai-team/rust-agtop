@@ -6,7 +6,10 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::providers::codex::CodexProvider;
@@ -176,6 +179,7 @@ fn codex_fixture_extracts_effort_and_waiting_state() {
     let provider = CodexProvider {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
+        discover_cache: Mutex::default(),
     };
 
     let sessions = provider.list_sessions().expect("list_sessions");
@@ -223,6 +227,7 @@ fn codex_fixture_token_counts_are_summed() {
     let provider = CodexProvider {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"), // won't be read for analyze()
+        discover_cache: Mutex::default(),
     };
 
     let analysis = provider
@@ -261,6 +266,7 @@ fn codex_fixture_tool_call_count() {
     let provider = CodexProvider {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
+        discover_cache: Mutex::default(),
     };
 
     let analysis = provider
@@ -297,6 +303,7 @@ fn codex_fixture_duration_from_timestamps() {
     let provider = CodexProvider {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
+        discover_cache: Mutex::default(),
     };
 
     let analysis = provider
@@ -334,6 +341,7 @@ fn codex_fixture_retail_cost_is_positive() {
     let provider = CodexProvider {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
+        discover_cache: Mutex::default(),
     };
 
     let analysis = provider
