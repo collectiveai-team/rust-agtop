@@ -81,6 +81,11 @@ struct UiLayout {
     cost_row_count: usize,
     /// Number of visible data rows in the current breakdown (for scroll clamping).
     cost_visible_rows: usize,
+    /// One entry per Providers-section row: (full-row rect, virtual cursor idx).
+    /// Populated by widgets::config_tab::render.
+    config_provider_rows: Vec<(Rect, usize)>,
+    /// One entry per Columns-section row: (full-row rect, virtual cursor idx).
+    config_column_rows: Vec<(Rect, usize)>,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -459,7 +464,15 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     match app.tab() {
         Tab::Info => widgets::info_tab::render(frame, rows[1], app),
         Tab::Cost => widgets::cost_tab::render(frame, rows[1], app),
-        Tab::Config => widgets::config_tab::render(frame, rows[1], app),
+        Tab::Config => widgets::config_tab::render(
+            frame,
+            rows[1],
+            app,
+            widgets::config_tab::ConfigRenderOut {
+                provider_rows: &mut layout.config_provider_rows,
+                column_rows: &mut layout.config_column_rows,
+            },
+        ),
     }
 }
 
@@ -972,6 +985,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn config_tab_renders_both_sections() {
+        let backend = TestBackend::new(140, 50);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = fixture_app();
+        app.set_tab(Tab::Config);
+
+        let mut state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut layout))
+            .expect("draw");
+
+        let contents = {
+            let buf = terminal.backend().buffer().clone();
+            let mut s = String::new();
+            for y in 0..buf.area.height {
+                for x in 0..buf.area.width {
+                    s.push_str(buf.cell((x, y)).unwrap().symbol());
+                }
+                s.push('\n');
+            }
+            s
+        };
+
+        assert!(
+            contents.contains("Providers"),
+            "Providers section title missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Columns"),
+            "Columns section title missing:\n{contents}"
+        );
+        // At least one provider name should render.
+        assert!(contents.contains("claude"), "claude provider row missing");
+        // Layout hit-test arrays should be populated.
+        assert!(
+            !layout.config_provider_rows.is_empty(),
+            "config_provider_rows not populated"
+        );
+        assert!(
+            !layout.config_column_rows.is_empty(),
+            "config_column_rows not populated"
+        );
     }
 
     fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
