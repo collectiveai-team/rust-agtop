@@ -58,6 +58,7 @@ impl std::fmt::Display for ClientKind {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
+    #[serde(alias = "provider")]
     pub client: ClientKind,
     /// Billing/auth bucket for this session when known, e.g. "Max 5x",
     /// "ChatGPT Plus", or "API key".
@@ -344,6 +345,7 @@ pub struct PlanWindow {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanUsage {
+    #[serde(alias = "provider")]
     pub client: ClientKind,
     /// Client-qualified label for the card header, e.g. "Claude Code ·
     /// Max 5x" or "OpenCode · anthropic (Max)". Free-form; renderers
@@ -368,6 +370,7 @@ pub struct PlanUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn client_kind_all_lists_every_variant() {
@@ -376,5 +379,45 @@ mod tests {
         // Spot-check a couple of variants to guard against silent drift.
         assert!(all.contains(&ClientKind::Claude));
         assert!(all.contains(&ClientKind::Antigravity));
+    }
+
+    #[test]
+    fn session_summary_deserializes_legacy_provider_field() {
+        let raw = json!({
+            "provider": "claude",
+            "subscription": "Max 5x",
+            "session_id": "abc",
+            "started_at": null,
+            "last_active": null,
+            "model": null,
+            "cwd": null,
+            "state": null,
+            "state_detail": null,
+            "model_effort": null,
+            "model_effort_detail": null,
+            "session_title": null,
+            "data_path": "/tmp/demo"
+        });
+
+        let summary: SessionSummary =
+            serde_json::from_value(raw).expect("deserialize legacy summary");
+        assert_eq!(summary.client, ClientKind::Claude);
+        assert_eq!(summary.subscription.as_deref(), Some("Max 5x"));
+    }
+
+    #[test]
+    fn plan_usage_deserializes_legacy_provider_field() {
+        let raw = json!({
+            "provider": "codex",
+            "label": "Codex · Plus",
+            "plan_name": "plus",
+            "windows": [],
+            "last_limit_hit": null,
+            "note": null
+        });
+
+        let usage: PlanUsage = serde_json::from_value(raw).expect("deserialize legacy plan usage");
+        assert_eq!(usage.client, ClientKind::Codex);
+        assert_eq!(usage.plan_name.as_deref(), Some("plus"));
     }
 }

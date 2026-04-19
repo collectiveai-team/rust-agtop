@@ -616,6 +616,43 @@ mod json_output_tests {
         assert_eq!(json.state.as_deref(), Some("stopped"));
         assert_eq!(json.display_state, "working");
     }
+
+    #[test]
+    fn json_session_serializes_client_field_name() {
+        let now = Utc::now();
+        let summary = SessionSummary::new(
+            ClientKind::Claude,
+            Some("Max 5x".into()),
+            "ses_123".into(),
+            Some(now),
+            Some(now),
+            Some("claude-opus".into()),
+            Some("/tmp/demo".into()),
+            PathBuf::from("/tmp/demo/session.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let analysis = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let value = serde_json::to_value(JsonSession::from_analysis(&analysis, now))
+            .expect("serialize json session");
+        let obj = value.as_object().expect("json object");
+        assert_eq!(obj.get("client").and_then(|v| v.as_str()), Some("claude"));
+        assert!(!obj.contains_key("provider"));
+    }
 }
 
 #[derive(Debug, Serialize, Default)]

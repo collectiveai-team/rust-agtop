@@ -13,6 +13,7 @@ pub enum SortColumn {
     /// Last-active timestamp (descending = most recent first). Default.
     LastActive,
     /// Client name, then session id (ascending, alphabetical).
+    #[serde(alias = "provider")]
     Client,
     /// Session started-at timestamp (descending = newest first).
     Started,

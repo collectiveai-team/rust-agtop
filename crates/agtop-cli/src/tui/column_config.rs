@@ -14,6 +14,7 @@ use agtop_core::ClientKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColumnId {
+    #[serde(alias = "provider")]
     Client,
     Subscription,
     Session,
@@ -376,16 +377,21 @@ impl<'de> Deserialize<'de> for ColumnConfig {
             sort_col: SortColumn,
             #[serde(default = "default_sort_dir")]
             sort_dir: SortDir,
-            #[serde(default = "default_clients_cfg")]
-            clients: Vec<ClientEntry>,
+            clients: Option<Vec<ClientEntry>>,
+            providers: Option<Vec<ClientEntry>>,
         }
 
         let raw = RawColumnConfig::deserialize(deserializer)?;
+        let clients = match (raw.clients, raw.providers) {
+            (Some(clients), _) => clients,
+            (None, Some(providers)) => providers,
+            (None, None) => default_clients_cfg(),
+        };
         Ok(Self {
             columns: raw.columns,
             sort_col: raw.sort_col,
             sort_dir: raw.sort_dir,
-            clients: raw.clients,
+            clients,
         }
         .normalize())
     }
@@ -442,6 +448,26 @@ mod cfg_client_tests {
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(cfg.clients.len(), ClientKind::all().len());
         assert!(cfg.clients.iter().all(|e| e.enabled));
+    }
+
+    #[test]
+    fn deserialize_legacy_provider_config_migrates_to_clients() {
+        let json = r#"{
+            "columns": [{"id": "provider", "visible": true}],
+            "sort_col": "provider",
+            "sort_dir": "asc",
+            "providers": [{"kind": "claude", "enabled": true}]
+        }"#;
+
+        let cfg: ColumnConfig =
+            serde_json::from_str(json).expect("deserialize legacy provider config");
+        assert_eq!(cfg.columns.len(), 1);
+        assert_eq!(cfg.columns[0].id, ColumnId::Client);
+        assert_eq!(cfg.sort_col, SortColumn::Client);
+        assert_eq!(cfg.sort_dir, SortDir::Asc);
+        assert_eq!(cfg.clients.len(), 1);
+        assert_eq!(cfg.clients[0].kind, ClientKind::Claude);
+        assert!(cfg.clients[0].enabled);
     }
 
     #[test]
