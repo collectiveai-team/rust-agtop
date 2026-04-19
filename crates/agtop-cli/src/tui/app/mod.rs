@@ -332,6 +332,7 @@ impl App {
     }
 
     /// Mutable access to the column configuration (used in tests for setup).
+    #[cfg(test)]
     pub(crate) fn column_config_mut(&mut self) -> &mut ColumnConfig {
         &mut self.column_config
     }
