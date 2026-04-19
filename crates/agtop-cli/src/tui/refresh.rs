@@ -348,6 +348,9 @@ fn cached_analyze_all(
                             project_cache.get(&key).and_then(|v| v.clone());
                     }
                 }
+                // Note: children are cached with the parent; if only a child's
+                // last_active changes while the parent's is stable, the stale
+                // child data is served until the parent itself is re-analyzed.
                 out.push(cached_analysis);
                 continue;
             }
