@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::tui::app::App;
 use crate::tui::theme as th;
+use crate::tui::widgets::state_display::display_state;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -23,6 +24,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }
         Some((_, a)) => {
             let s = &a.summary;
+            let (state_label, state_style) = display_state(a, Utc::now());
             let fmt_dt = |dt: Option<DateTime<Utc>>| match dt {
                 Some(t) => t
                     .with_timezone(&Local)
@@ -42,7 +44,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_line("session_id", s.session_id.clone()),
                 kv_line("started", fmt_dt(s.started_at)),
                 kv_line("last_active", fmt_dt(s.last_active)),
-                kv_line("state", s.state.clone().unwrap_or_else(|| "-".into())),
+                kv_line_styled("state", state_label.to_string(), state_style),
                 kv_line(
                     "effort",
                     s.model_effort.clone().unwrap_or_else(|| "-".into()),
@@ -155,6 +157,14 @@ fn kv_line(key: &'static str, value: String) -> Line<'static> {
         Span::styled(format!("{key:>16}"), th::INFO_KEY),
         Span::raw("  "),
         Span::raw(value),
+    ])
+}
+
+fn kv_line_styled(key: &'static str, value: String, style: Style) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{key:>16}"), th::INFO_KEY),
+        Span::raw("  "),
+        Span::styled(value, style),
     ])
 }
 

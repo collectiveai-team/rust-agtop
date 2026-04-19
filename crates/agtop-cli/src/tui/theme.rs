@@ -52,6 +52,12 @@ pub const COST_INCLUDED: Style = Style::new().fg(Color::Green).add_modifier(Modi
 /// Session costing ≥ $5 — worth a visual nudge.
 pub const COST_HIGH: Style = Style::new().fg(Color::Yellow);
 
+// ── Session state colours ──────────────────────────────────────────────────
+
+pub const STATE_WORKING: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+pub const STATE_WAITING: Style = Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+pub const STATE_STALE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD);
+
 // ── Cost tab ─────────────────────────────────────────────────────────────
 
 /// "Total" row in the cost breakdown table.

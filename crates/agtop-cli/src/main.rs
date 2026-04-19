@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::Serialize;
 
+use crate::tui::widgets::state_display::display_state;
 use agtop_core::{
     analyze_all, default_providers, discover_all, pricing::Plan, session::SessionAnalysis,
     ProviderKind,
@@ -527,6 +528,7 @@ struct JsonSession {
     started_at: Option<DateTime<Utc>>,
     last_active: Option<DateTime<Utc>>,
     state: Option<String>,
+    display_state: String,
     state_detail: Option<String>,
     model_effort: Option<String>,
     model_effort_detail: Option<String>,
@@ -546,6 +548,13 @@ struct JsonSession {
 
 impl From<&SessionAnalysis> for JsonSession {
     fn from(a: &SessionAnalysis) -> Self {
+        Self::from_analysis(a, Utc::now())
+    }
+}
+
+impl JsonSession {
+    fn from_analysis(a: &SessionAnalysis, now: DateTime<Utc>) -> Self {
+        let (display_state_label, _) = display_state(a, now);
         Self {
             provider: a.summary.provider.as_str(),
             subscription: a.summary.subscription.clone(),
@@ -556,6 +565,7 @@ impl From<&SessionAnalysis> for JsonSession {
             started_at: a.summary.started_at,
             last_active: a.summary.last_active,
             state: a.summary.state.clone(),
+            display_state: display_state_label.to_string(),
             state_detail: a.summary.state_detail.clone(),
             model_effort: a.summary.model_effort.clone(),
             model_effort_detail: a.summary.model_effort_detail.clone(),
@@ -569,6 +579,49 @@ impl From<&SessionAnalysis> for JsonSession {
             context_window: a.context_window,
             data_path: a.summary.data_path.display().to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod json_output_tests {
+    use super::*;
+    use agtop_core::session::{CostBreakdown, ProviderKind, SessionSummary, TokenTotals};
+    use std::path::PathBuf;
+
+    #[test]
+    fn json_session_keeps_raw_state_and_adds_display_state() {
+        let now = Utc::now();
+        let summary = SessionSummary::new(
+            ProviderKind::OpenCode,
+            None,
+            "sess".into(),
+            Some(now - chrono::Duration::minutes(1)),
+            Some(now - chrono::Duration::seconds(5)),
+            Some("model".into()),
+            Some("/tmp".into()),
+            PathBuf::from("/tmp/sess.json"),
+            Some("stopped".into()),
+            Some("finish=stop".into()),
+            None,
+            None,
+        );
+        let analysis = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let json = JsonSession::from_analysis(&analysis, now);
+
+        assert_eq!(json.state.as_deref(), Some("stopped"));
+        assert_eq!(json.display_state, "working");
     }
 }
 

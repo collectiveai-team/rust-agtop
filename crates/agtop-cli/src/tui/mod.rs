@@ -779,6 +779,57 @@ mod tests {
     }
 
     #[test]
+    fn info_tab_shows_translated_state_label() {
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let now = Utc::now();
+
+        let summary = SessionSummary::new(
+            ProviderKind::OpenCode,
+            None,
+            "working-sess".into(),
+            Some(now - chrono::Duration::minutes(2)),
+            Some(now - chrono::Duration::seconds(5)),
+            Some("model".into()),
+            Some("/tmp/proj".into()),
+            PathBuf::from("/tmp/working.json"),
+            Some("stopped".into()),
+            Some("finish=stop".into()),
+            None,
+            None,
+        );
+        let analysis = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut app = App::new();
+        app.set_sessions(vec![analysis]);
+        let mut state = ratatui::widgets::TableState::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
+            .expect("draw");
+
+        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        assert!(
+            contents.contains("working"),
+            "translated state missing:\n{contents}"
+        );
+        assert!(
+            !contents.contains("stopped"),
+            "raw state leaked into info tab:\n{contents}"
+        );
+    }
+
+    #[test]
     fn renders_dashboard_with_plan_usage() {
         use agtop_core::session::{PlanUsage, PlanWindow};
 

@@ -16,6 +16,7 @@ use crate::fmt;
 use crate::tui::app::{App, SortColumn, SortDir};
 use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
+use crate::tui::widgets::state_display::display_state;
 
 /// Render the session table into `area`. Takes a `TableState` so scroll
 /// offset survives redraws — ratatui doesn't maintain it internally.
@@ -202,7 +203,7 @@ fn row_for<'a>(
         .last_active
         .map(fmt::format_local_datetime)
         .unwrap_or_else(|| "-".into());
-    let state = s.state.clone().unwrap_or_else(|| "-".into());
+    let (state, state_style) = display_state(a, now);
     let effort = s.model_effort.clone().unwrap_or_else(|| "-".into());
     let model = s.model.clone().unwrap_or_else(|| "?".into());
     let subscription = s.subscription.clone().unwrap_or_else(|| "-".into());
@@ -267,7 +268,7 @@ fn row_for<'a>(
                     .unwrap_or_else(|| "-".into()),
             ),
             ColumnId::LastActive => Cell::from(last_active_abs.clone()),
-            ColumnId::State => Cell::from(state.clone()),
+            ColumnId::State => Cell::from(state).style(state_style),
             ColumnId::Effort => Cell::from(effort.clone()),
             ColumnId::AgentTurns => Cell::from(
                 a.agent_turns
