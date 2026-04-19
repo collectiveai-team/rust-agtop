@@ -100,10 +100,14 @@ pub fn run(
     // user can't read them.
     install_panic_hook();
 
-    let _enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
-
-    let mut handle = refresh::spawn(providers, plan, refresh_interval)
-        .context("spawn background refresh worker")?;
+    let enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
+    let mut handle = refresh::spawn(
+        providers,
+        std::sync::Arc::clone(&enabled_arc),
+        plan,
+        refresh_interval,
+    )
+    .context("spawn background refresh worker")?;
     let mut app = App::new();
     if start_dashboard {
         app.set_ui_mode(UiMode::Dashboard);

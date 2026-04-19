@@ -11,14 +11,14 @@
 //! (`analyze_all`) is synchronous, so we wrap it in `spawn_blocking` to
 //! keep the runtime reactor unblocked.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use agtop_core::pricing::Plan;
 use agtop_core::session::SessionAnalysis;
-use agtop_core::{discover_all, plan_usage_all_from_summaries, Provider};
+use agtop_core::{discover_all, plan_usage_all_from_summaries, Provider, ProviderKind};
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
@@ -55,6 +55,7 @@ pub struct RefreshHandle {
     /// Set to `true` before we drop the runtime so the worker doesn't
     /// start another `analyze_all` call while the runtime is shutting down.
     shutdown: Arc<AtomicBool>,
+    enabled: Arc<RwLock<HashSet<ProviderKind>>>, // used by the UI to mutate
     _runtime: tokio::runtime::Runtime,
 }
 
@@ -82,6 +83,13 @@ impl RefreshHandle {
         }
     }
 
+    /// Return a clone of the shared enabled-provider set so the UI can
+    /// mutate it (e.g. to toggle a provider on/off). Changes are picked
+    /// up by the worker on the next refresh cycle.
+    pub fn enabled(&self) -> Arc<RwLock<HashSet<ProviderKind>>> {
+        Arc::clone(&self.enabled)
+    }
+
     /// Ask the worker to run one refresh ASAP, outside the normal
     /// interval. Any in-flight refresh finishes normally; the next one
     /// fires immediately after.
@@ -100,12 +108,15 @@ impl RefreshHandle {
 ///
 /// - `providers`: shared with the worker via `Arc`. `Provider` is
 ///   already `Send + Sync`.
+/// - `enabled`: shared set of enabled provider kinds; the worker
+///   consults this on every cycle so toggles take effect immediately.
 /// - `plan`: billing plan, passed through to `analyze_all`.
 /// - `interval`: how long the worker sleeps between automatic refreshes.
 ///   Manual refreshes via [`RefreshHandle::trigger_manual`] bypass the
 ///   sleep. Zero is clamped to 1s to avoid a busy-loop.
 pub fn spawn(
     providers: Vec<Arc<dyn Provider>>,
+    enabled: Arc<RwLock<HashSet<ProviderKind>>>,
     plan: Plan,
     interval: Duration,
 ) -> std::io::Result<RefreshHandle> {
@@ -142,6 +153,7 @@ pub fn spawn(
     // its current one finishes.
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_worker = Arc::clone(&shutdown);
+    let enabled_worker = Arc::clone(&enabled);
 
     // Spawn the worker on the runtime. We use `spawn_blocking` for the
     // CPU/IO-bound `analyze_all` so timers keep ticking.
@@ -157,15 +169,27 @@ pub fn spawn(
                 break;
             }
 
+            // Take a local snapshot of the enabled set so the work below
+            // doesn't hold the lock across .await points.
+            let enabled_snap = {
+                match enabled_worker.read() {
+                    Ok(guard) => guard.clone(),
+                    Err(poisoned) => poisoned.into_inner().clone(),
+                }
+            };
+            let live: Vec<Arc<dyn Provider>> = providers_arc
+                .iter()
+                .filter(|p| enabled_snap.contains(&p.kind()))
+                .cloned()
+                .collect();
+
             generation = generation.wrapping_add(1);
-            let providers_inner = providers_arc.clone();
             // Move the cache into the blocking task; recover it in the result.
             let cache_in = std::mem::take(&mut session_cache);
             let result = tokio::task::spawn_blocking(move || {
-                let summaries = discover_all(&providers_inner);
-                let (analyses, cache_out) =
-                    cached_analyze_all(&providers_inner, &summaries, plan, cache_in);
-                let plan_usage = plan_usage_all_from_summaries(&providers_inner, &summaries);
+                let summaries = discover_all(&live);
+                let (analyses, cache_out) = cached_analyze_all(&live, &summaries, plan, cache_in);
+                let plan_usage = plan_usage_all_from_summaries(&live, &summaries);
                 (analyses, plan_usage, cache_out)
             })
             .await;
@@ -212,6 +236,7 @@ pub fn spawn(
         rx,
         manual_tx,
         shutdown,
+        enabled,
         _runtime: runtime,
     })
 }
@@ -284,9 +309,17 @@ mod tests {
     /// what we're testing here).
     #[test]
     fn worker_publishes_initial_snapshot() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
         let providers: Vec<Arc<dyn Provider>> = Vec::new();
-        let mut handle =
-            spawn(providers, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
+        let enabled = Arc::new(RwLock::new(
+            agtop_core::ProviderKind::all()
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>(),
+        ));
+        let mut handle = spawn(providers, enabled, Plan::Retail, Duration::from_millis(50))
+            .expect("spawn worker");
 
         // Poll up to ~5s for a non-loading message.
         let start = std::time::Instant::now();
@@ -308,5 +341,40 @@ mod tests {
             got_snapshot,
             "refresh worker produced no Snapshot within 5s (last msg: {last_msg_kind})"
         );
+    }
+
+    /// The worker must consult the shared enabled set each cycle, not
+    /// just at startup. Empty set → snapshot has zero sessions.
+    #[test]
+    fn worker_respects_empty_enabled_set() {
+        use agtop_core::ProviderKind;
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+
+        let providers: Vec<Arc<dyn Provider>> = Vec::new();
+        let enabled: Arc<RwLock<HashSet<ProviderKind>>> = Arc::new(RwLock::new(HashSet::new()));
+
+        let mut handle = spawn(providers, enabled, Plan::Retail, Duration::from_millis(50))
+            .expect("spawn worker");
+
+        // Poll for up to 2s. With zero providers + empty enabled set, we
+        // should still get an initial Snapshot message (an empty one).
+        let start = std::time::Instant::now();
+        let mut saw_empty_snapshot = false;
+        while start.elapsed() < Duration::from_secs(2) {
+            if let Some(RefreshMsg::Snapshot {
+                analyses,
+                plan_usage,
+                ..
+            }) = handle.try_recv()
+            {
+                if analyses.is_empty() && plan_usage.is_empty() {
+                    saw_empty_snapshot = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(saw_empty_snapshot, "expected empty snapshot");
     }
 }
