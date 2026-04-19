@@ -3,9 +3,12 @@
 //! Columns can be reordered and toggled visible/hidden. The config is
 //! persisted as JSON to `~/.config/agtop/columns.json`.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::{SortColumn, SortDir};
+use agtop_core::ProviderKind;
 
 /// All column identifiers in the session table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,12 +166,31 @@ pub struct ColumnConfig {
     /// Active sort direction. Defaults to the sort column's natural direction.
     #[serde(default = "default_sort_dir")]
     pub sort_dir: SortDir,
+    /// Which providers are shown. Defaults to all enabled.
+    #[serde(default = "default_providers_cfg")]
+    pub providers: Vec<ProviderEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnEntry {
     pub id: ColumnId,
     pub visible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderEntry {
+    pub kind: ProviderKind,
+    pub enabled: bool,
+}
+
+fn default_providers_cfg() -> Vec<ProviderEntry> {
+    ProviderKind::all()
+        .iter()
+        .map(|&kind| ProviderEntry {
+            kind,
+            enabled: true,
+        })
+        .collect()
 }
 
 impl Default for ColumnConfig {
@@ -185,6 +207,7 @@ impl Default for ColumnConfig {
                 .collect(),
             sort_col,
             sort_dir: sort_col.default_direction(),
+            providers: default_providers_cfg(),
         }
     }
 }
@@ -217,6 +240,25 @@ impl ColumnConfig {
     pub fn move_down(&mut self, idx: usize) {
         if idx + 1 < self.columns.len() {
             self.columns.swap(idx, idx + 1);
+        }
+    }
+
+    // ---- Provider filtering -------------------------------------------------
+
+    /// All currently-enabled providers as a set (the shape the worker wants).
+    pub fn enabled_providers(&self) -> HashSet<ProviderKind> {
+        self.providers
+            .iter()
+            .filter(|e| e.enabled)
+            .map(|e| e.kind)
+            .collect()
+    }
+
+    /// Flip enabled state of provider at `idx` and persist to disk.
+    pub fn toggle_provider(&mut self, idx: usize) {
+        if let Some(entry) = self.providers.get_mut(idx) {
+            entry.enabled = !entry.enabled;
+            self.save();
         }
     }
 
@@ -267,5 +309,50 @@ impl ColumnConfig {
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(path, s);
         }
+    }
+}
+
+#[cfg(test)]
+mod cfg_provider_tests {
+    use super::*;
+    use agtop_core::ProviderKind;
+
+    #[test]
+    fn default_enables_all_providers() {
+        let cfg = ColumnConfig::default();
+        assert_eq!(cfg.providers.len(), ProviderKind::all().len());
+        assert!(cfg.providers.iter().all(|e| e.enabled));
+    }
+
+    #[test]
+    fn enabled_providers_returns_hashset_of_enabled_kinds() {
+        let mut cfg = ColumnConfig::default();
+        // Disable the first entry.
+        let disabled_kind = cfg.providers[0].kind;
+        cfg.providers[0].enabled = false;
+        let live = cfg.enabled_providers();
+        assert!(!live.contains(&disabled_kind));
+        assert_eq!(live.len(), cfg.providers.len() - 1);
+    }
+
+    #[test]
+    fn toggle_provider_flips_enabled_flag() {
+        let mut cfg = ColumnConfig::default();
+        let was = cfg.providers[0].enabled;
+        cfg.toggle_provider(0);
+        assert_eq!(cfg.providers[0].enabled, !was);
+    }
+
+    #[test]
+    fn deserialize_missing_providers_field_defaults_to_all_enabled() {
+        // Historical config format with no `providers` field.
+        let json = r#"{
+            "columns": [],
+            "sort_col": "last_active",
+            "sort_dir": "desc"
+        }"#;
+        let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(cfg.providers.len(), ProviderKind::all().len());
+        assert!(cfg.providers.iter().all(|e| e.enabled));
     }
 }
