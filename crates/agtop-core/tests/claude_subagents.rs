@@ -1,11 +1,11 @@
-//! Integration test for Claude subagent sidechain accounting.
+//! Integration test for Claude subagent parent/child handling.
 //!
 //! Uses a tiny hand-rolled fixture tree under
 //! `tests/fixtures/claude/<slug>/<uuid>.jsonl` + `<uuid>/subagents/*.jsonl`
 //! that covers:
 //!   - main-transcript per-requestId dedup (streaming rewrites)
 //!   - two subagent files with distinct requestIds
-//!   - combined totals are main + Σ(subagents), with no double-counting.
+//!   - parent analysis stays main-only while subagents surface via `children()`.
 
 use std::path::PathBuf;
 
@@ -35,7 +35,7 @@ fn summary_for_fixture() -> SessionSummary {
 }
 
 #[test]
-fn subagents_are_summed_into_parent_totals() {
+fn parent_analysis_excludes_subagent_totals() {
     // Keep the built-in pricing path (some CI might not have a cache).
     let provider = ClaudeProvider::default();
     let summary = summary_for_fixture();
@@ -44,23 +44,27 @@ fn subagents_are_summed_into_parent_totals() {
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
-    // Expected = main (deduped) + agent-aaaa + agent-bbbb.
+    // Expected = main transcript only.
     //   main    : input=300 output=120 cache_read=70 cw_5m=15
-    //   agent-a : input=50  output=25  cache_read=10 cw_5m=2
-    //   agent-b : input=30  output=15  cache_read=3  cw_5m=1
     let t = &analysis.tokens;
-    assert_eq!(t.input, 380, "input tokens");
-    assert_eq!(t.output, 160, "output tokens");
-    assert_eq!(t.cache_read, 83, "cache_read tokens");
-    assert_eq!(t.cache_write_5m, 18, "cache_write_5m tokens");
+    assert_eq!(t.input, 300, "input tokens");
+    assert_eq!(t.output, 120, "output tokens");
+    assert_eq!(t.cache_read, 70, "cache_read tokens");
+    assert_eq!(t.cache_write_5m, 15, "cache_write_5m tokens");
     assert_eq!(t.cache_write_1h, 0);
     // Claude maps cache_read to cached_input for cost math.
     assert_eq!(t.cached_input, t.cache_read);
-
     assert_eq!(
-        analysis.subagent_file_count, 2,
-        "both subagent files should have been counted"
+        analysis.subagent_file_count, 0,
+        "parent analysis stays direct-only"
     );
+
+    let children = provider
+        .children(&summary)
+        .expect("children should succeed for subagent fixtures");
+    assert_eq!(children.len(), 2, "subagents should surface via children()");
+    assert_eq!(children[0].session_id, "agent-aaaa");
+    assert_eq!(children[1].session_id, "agent-bbbb");
 
     // Cost must be > 0 on the retail plan with a known Claude rate card.
     assert!(!analysis.cost.included);
