@@ -31,6 +31,20 @@ impl ProviderKind {
         }
     }
 
+    /// Nerd Font glyph for this provider (requires a Nerd Font to render correctly).
+    #[must_use]
+    pub const fn icon(self) -> &'static str {
+        match self {
+            Self::Claude => "󰚩",     // nf-md-robot_outline
+            Self::Codex => "",       // nf-oct-terminal
+            Self::OpenCode => "󰿘",   // nf-md-open_source_initiative
+            Self::Copilot => "",     // nf-fa-github
+            Self::GeminiCli => "",   // nf-fa-google
+            Self::Cursor => "",      // nf-fa-mouse_pointer
+            Self::Antigravity => "", // nf-fa-rocket
+        }
+    }
+
     /// Every `ProviderKind` variant, in a stable display order.
     /// Keep this in sync with the enum definition — a missing variant
     /// here silently excludes that provider from default-enabled sets.
