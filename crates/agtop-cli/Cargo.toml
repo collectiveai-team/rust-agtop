@@ -39,3 +39,7 @@ ratatui = "0.29"
 # current-thread runtime; `macros` is for #[tokio::main]-style spawns if
 # ever needed; `sync` supplies watch/Mutex; `time` supplies `sleep`.
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time"] }
+# Fast non-cryptographic hasher used by the plan-usage cache key in
+# the refresh worker. Trusted in-process input only, so SipHash's DoS
+# resistance is not needed; FxHasher is ~2-4x faster on small keys.
+rustc-hash = "2"

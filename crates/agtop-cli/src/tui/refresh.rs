@@ -12,6 +12,7 @@
 //! keep the runtime reactor unblocked.
 
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -104,6 +105,29 @@ impl RefreshHandle {
     }
 }
 
+/// Hash the subset of summary fields that affects plan-usage output
+/// (session_id + last_active). FxHasher is used for speed; the input
+/// is in-process, so DoS resistance is unnecessary.
+pub(crate) fn hash_summaries_for_cache(summaries: &[agtop_core::session::SessionSummary]) -> u64 {
+    let mut h = rustc_hash::FxHasher::default();
+    summaries.len().hash(&mut h);
+    for s in summaries {
+        s.session_id.hash(&mut h);
+        // DateTime<Utc> does not implement Hash; use the unix timestamp components.
+        match s.last_active {
+            Some(ts) => {
+                true.hash(&mut h);
+                ts.timestamp().hash(&mut h);
+                ts.timestamp_subsec_nanos().hash(&mut h);
+            }
+            None => {
+                false.hash(&mut h);
+            }
+        }
+    }
+    h.finish()
+}
+
 /// Spawn a refresh worker. Returns a handle the UI can poll.
 ///
 /// - `providers`: shared with the worker via `Arc`. `Provider` is
@@ -163,6 +187,8 @@ pub fn spawn(
         let mut generation: u64 = 0;
         let mut manual_rx = manual_rx;
         let mut session_cache: SessionCache = HashMap::new();
+        let mut plan_cache_key: Option<u64> = None;
+        let mut plan_cache_val: Vec<agtop_core::PlanUsage> = Vec::new();
         loop {
             // Check shutdown flag before starting any new analysis.
             if shutdown_worker.load(Ordering::Acquire) {
@@ -189,16 +215,40 @@ pub fn spawn(
             generation = generation.wrapping_add(1);
             // Move the cache into the blocking task; recover it in the result.
             let cache_in = std::mem::take(&mut session_cache);
+            let plan_cache_key_in = plan_cache_key;
+            let plan_cache_val_in = plan_cache_val.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let summaries = discover_all(&live);
                 let (analyses, cache_out) = cached_analyze_all(&live, &summaries, plan, cache_in);
-                let plan_usage = plan_usage_all_from_summaries(&live, &summaries);
-                (analyses, plan_usage, cache_out)
+
+                let new_key = hash_summaries_for_cache(&summaries);
+                let (plan_usage, new_cache_key, new_cache_val) =
+                    if Some(new_key) == plan_cache_key_in {
+                        // Summaries unchanged — reuse cached plan usage.
+                        (
+                            plan_cache_val_in.clone(),
+                            plan_cache_key_in,
+                            plan_cache_val_in,
+                        )
+                    } else {
+                        let v = plan_usage_all_from_summaries(&live, &summaries);
+                        (v.clone(), Some(new_key), v)
+                    };
+
+                (
+                    analyses,
+                    plan_usage,
+                    cache_out,
+                    new_cache_key,
+                    new_cache_val,
+                )
             })
             .await;
             let msg = match result {
-                Ok((analyses, plan_usage, cache_out)) => {
+                Ok((analyses, plan_usage, cache_out, new_key, new_val)) => {
                     session_cache = cache_out;
+                    plan_cache_key = new_key;
+                    plan_cache_val = new_val;
                     RefreshMsg::Snapshot {
                         generation,
                         analyses,
@@ -438,5 +488,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(saw_empty_snapshot, "expected empty snapshot");
+    }
+
+    #[test]
+    fn plan_usage_cache_hashing_is_stable() {
+        // Verify the function exists and returns a u64.
+        // Verify two empty slices hash equal (deterministic).
+        let h_empty1 = hash_summaries_for_cache(&[]);
+        let h_empty2 = hash_summaries_for_cache(&[]);
+        assert_eq!(h_empty1, h_empty2, "same input must hash equal");
     }
 }
