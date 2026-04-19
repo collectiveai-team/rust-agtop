@@ -38,11 +38,11 @@ pub const TAB_ACTIVE: Style = Style::new()
 /// Dimmed text used when nothing is selected or the list is empty.
 pub const EMPTY_HINT: Style = Style::new().add_modifier(Modifier::DIM);
 
-// ── Provider colours ──────────────────────────────────────────────────────
+// ── Client colours ───────────────────────────────────────────────────────
 
-pub const PROVIDER_CLAUDE: Style = Style::new().fg(Color::Magenta);
-pub const PROVIDER_CODEX: Style = Style::new().fg(Color::Cyan);
-pub const PROVIDER_OPENCODE: Style = Style::new().fg(Color::Green);
+pub const CLIENT_CLAUDE: Style = Style::new().fg(Color::Magenta);
+pub const CLIENT_CODEX: Style = Style::new().fg(Color::Cyan);
+pub const CLIENT_OPENCODE: Style = Style::new().fg(Color::Green);
 
 // ── Cost cell colours ─────────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ pub const CHART_OPENCODE: Style = Style::new().fg(Color::Magenta);
 /// Summary line beneath the chart.
 pub const CHART_SUMMARY: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::DIM);
 
-/// Plan provider label in the plan-usage panel.
+/// Plan client label in the plan-usage panel.
 pub const PLAN_LABEL: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
 
 /// Dimmed note / hint text in the plan panel.

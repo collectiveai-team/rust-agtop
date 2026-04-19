@@ -13,14 +13,14 @@
 use std::sync::{OnceLock, RwLock};
 
 use crate::litellm::PricingIndex;
-use crate::session::{CostBreakdown, ProviderKind, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, TokenTotals};
 
 /// Billing plan selector. `Plan` decides whether sessions are priced at
-/// retail or marked "included" for a given provider.
+/// retail or marked "included" for a given client.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
-    /// Standard API pricing for all providers.
+    /// Standard API pricing for all clients.
     Retail,
     /// Claude Max / Pro: Claude sessions treated as included; Codex/OpenCode retail.
     Max,
@@ -49,11 +49,11 @@ pub enum PlanMode {
 
 impl Plan {
     #[must_use]
-    pub fn mode_for(self, provider: ProviderKind) -> PlanMode {
-        match (self, provider) {
+    pub fn mode_for(self, client: ClientKind) -> PlanMode {
+        match (self, client) {
             (Self::Retail, _) => PlanMode::Retail,
             (Self::Included, _) => PlanMode::Included,
-            (Self::Max, ProviderKind::Claude) => PlanMode::Included,
+            (Self::Max, ClientKind::Claude) => PlanMode::Included,
             (Self::Max, _) => PlanMode::Retail,
         }
     }
@@ -138,55 +138,55 @@ fn autoload_index() {
     }
 }
 
-/// Look up rates for `(provider, model)`. Tries in order:
+/// Look up rates for `(client, model)`. Tries in order:
 /// 1. The live LiteLLM index (covers the full upstream catalog).
 /// 2. The built-in tables below.
 ///
 /// Uses exact match first, then strips `-YYYYMMDD` date suffixes, then
-/// tries provider-prefix variants (`anthropic.foo`, `openai/foo`), and
+/// tries upstream-prefix variants (`anthropic.foo`, `openai/foo`), and
 /// finally falls back to the longest prefix match. OpenCode's
-/// `provider/model` style is handled by retrying with the suffix.
-pub fn lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
+/// upstream-qualified model IDs are handled by retrying with the suffix.
+pub fn lookup(client: ClientKind, model: &str) -> Option<Rates> {
     autoload_index();
 
     // 1) LiteLLM cache.
     if let Ok(slot) = pricing_slot().read() {
         if let Some(idx) = slot.as_ref() {
-            if let Some(r) = idx.lookup(provider, model) {
+            if let Some(r) = idx.lookup(client, model) {
                 return Some(r);
             }
         }
     }
 
     // 2) Built-in fallback.
-    builtin_lookup(provider, model)
+    builtin_lookup(client, model)
 }
 
 /// Best-effort model context window lookup (tokens).
 ///
 /// Uses the LiteLLM cache when available, then falls back to a tiny
 /// built-in table for common models we observe in local transcripts.
-pub fn context_window(provider: ProviderKind, model: &str) -> Option<u64> {
+pub fn context_window(client: ClientKind, model: &str) -> Option<u64> {
     autoload_index();
     if let Ok(slot) = pricing_slot().read() {
         if let Some(idx) = slot.as_ref() {
-            if let Some(w) = idx.lookup_context_window(provider, model) {
+            if let Some(w) = idx.lookup_context_window(client, model) {
                 return Some(w);
             }
         }
     }
-    builtin_context_window(provider, model)
+    builtin_context_window(client, model)
 }
 
 /// Built-in (hard-coded) lookup. Exposed so tests can bypass the cache.
-pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
-    let table: &[(&str, Rates)] = match provider {
-        ProviderKind::Codex => CODEX_RATES,
-        ProviderKind::Claude | ProviderKind::OpenCode => CLAUDE_RATES,
-        ProviderKind::GeminiCli => GEMINI_RATES,
-        ProviderKind::Copilot => COPILOT_RATES,
-        ProviderKind::Cursor => CURSOR_RATES,
-        ProviderKind::Antigravity => return None,
+pub fn builtin_lookup(client: ClientKind, model: &str) -> Option<Rates> {
+    let table: &[(&str, Rates)] = match client {
+        ClientKind::Codex => CODEX_RATES,
+        ClientKind::Claude | ClientKind::OpenCode => CLAUDE_RATES,
+        ClientKind::GeminiCli => GEMINI_RATES,
+        ClientKind::Copilot => COPILOT_RATES,
+        ClientKind::Cursor => CURSOR_RATES,
+        ClientKind::Antigravity => return None,
     };
     if let Some((_, r)) = table.iter().find(|(k, _)| *k == model) {
         return Some(*r);
@@ -207,46 +207,46 @@ pub fn builtin_lookup(provider: ProviderKind, model: &str) -> Option<Rates> {
     if best.is_some() {
         return best;
     }
-    // OpenCode / Cursor frequently report `provider/model`; retry with the suffix.
+    // OpenCode / Cursor frequently report upstream-qualified model IDs; retry with the suffix.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
-            return builtin_lookup(provider, suffix);
+            return builtin_lookup(client, suffix);
         }
     }
     None
 }
 
-fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
+fn builtin_context_window(client: ClientKind, model: &str) -> Option<u64> {
     let key = strip_date_suffix(model);
     if key != model {
-        return builtin_context_window(provider, key);
+        return builtin_context_window(client, key);
     }
 
-    // OpenCode often reports `provider/model`.
+    // OpenCode often reports upstream-qualified model IDs.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
-            if let Some(w) = builtin_context_window(provider, suffix) {
+            if let Some(w) = builtin_context_window(client, suffix) {
                 return Some(w);
             }
         }
     }
 
-    match provider {
-        ProviderKind::Codex => {
+    match client {
+        ClientKind::Codex => {
             if model.starts_with("gpt-5") || model.starts_with("codex") {
                 Some(258_400)
             } else {
                 None
             }
         }
-        ProviderKind::Claude | ProviderKind::OpenCode => {
+        ClientKind::Claude | ClientKind::OpenCode => {
             if model.starts_with("claude") {
                 Some(1_000_000)
             } else {
                 None
             }
         }
-        ProviderKind::GeminiCli => {
+        ClientKind::GeminiCli => {
             if model.starts_with("gemini-2.5")
                 || model.starts_with("gemini-2.0")
                 || model.starts_with("gemini-1.5")
@@ -256,7 +256,7 @@ fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
                 None
             }
         }
-        ProviderKind::Copilot | ProviderKind::Cursor => {
+        ClientKind::Copilot | ClientKind::Cursor => {
             // These proxy OpenAI models; context window varies but 128k is a
             // safe lower-bound for GPT-4.1/4o class models.
             if model.starts_with("gpt-4") || model.starts_with("o3") || model.starts_with("o4") {
@@ -265,7 +265,7 @@ fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
                 None
             }
         }
-        ProviderKind::Antigravity => None,
+        ClientKind::Antigravity => None,
     }
 }
 
@@ -415,34 +415,34 @@ mod tests {
 
     #[test]
     fn plan_mode_semantics() {
-        assert_eq!(Plan::Max.mode_for(ProviderKind::Claude), PlanMode::Included);
-        assert_eq!(Plan::Max.mode_for(ProviderKind::Codex), PlanMode::Retail);
+        assert_eq!(Plan::Max.mode_for(ClientKind::Claude), PlanMode::Included);
+        assert_eq!(Plan::Max.mode_for(ClientKind::Codex), PlanMode::Retail);
         assert_eq!(
-            Plan::Included.mode_for(ProviderKind::OpenCode),
+            Plan::Included.mode_for(ClientKind::OpenCode),
             PlanMode::Included
         );
     }
 
     #[test]
     fn lookup_exact_and_dated() {
-        assert!(lookup(ProviderKind::Codex, "gpt-5.3-codex").is_some());
+        assert!(lookup(ClientKind::Codex, "gpt-5.3-codex").is_some());
         // Dated Claude model
-        assert!(lookup(ProviderKind::Claude, "claude-sonnet-4-5-20250929").is_some());
+        assert!(lookup(ClientKind::Claude, "claude-sonnet-4-5-20250929").is_some());
     }
 
     #[test]
     fn lookup_opencode_via_suffix() {
-        // OpenCode often reports "provider/model"
-        assert!(lookup(ProviderKind::OpenCode, "anthropic/claude-haiku-4.5").is_some());
+        // OpenCode often reports upstream-qualified model IDs.
+        assert!(lookup(ClientKind::OpenCode, "anthropic/claude-haiku-4.5").is_some());
     }
 
     #[test]
     fn builtin_lookup_antigravity_has_no_rates() {
         // Antigravity has no built-in rate table.
-        assert!(builtin_lookup(ProviderKind::Antigravity, "sonnet").is_none());
+        assert!(builtin_lookup(ClientKind::Antigravity, "sonnet").is_none());
         // Copilot, GeminiCli, and Cursor now have real rate tables.
-        assert!(builtin_lookup(ProviderKind::Copilot, "gpt-4.1").is_some());
-        assert!(builtin_lookup(ProviderKind::GeminiCli, "gemini-2.5-pro").is_some());
+        assert!(builtin_lookup(ClientKind::Copilot, "gpt-4.1").is_some());
+        assert!(builtin_lookup(ClientKind::GeminiCli, "gemini-2.5-pro").is_some());
     }
 
     #[test]

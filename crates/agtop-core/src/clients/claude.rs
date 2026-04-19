@@ -1,4 +1,4 @@
-//! Claude Code provider — `~/.claude/projects/<slug>/<uuid>.jsonl`.
+//! Claude Code client — `~/.claude/projects/<slug>/<uuid>.jsonl`.
 //!
 //! Each line is a JSON record. For token accounting we care about:
 //!  - records where `type == "assistant"` and `message.usage` is present
@@ -16,12 +16,12 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
+use crate::client::Client;
+use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
-    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Upper bound on how many recent transcripts we scan for synthetic
@@ -33,12 +33,12 @@ use crate::session::{
 const PLAN_USAGE_RECENT_FILE_SCAN_LIMIT: usize = 50;
 
 #[derive(Debug)]
-pub struct ClaudeProvider {
+pub struct ClaudeClient {
     pub projects_root: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for ClaudeProvider {
+impl Default for ClaudeClient {
     fn default() -> Self {
         // Honor $CLAUDE_CONFIG_DIR like the original.
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -52,9 +52,9 @@ impl Default for ClaudeProvider {
     }
 }
 
-impl Provider for ClaudeProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Claude
+impl Client for ClaudeClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Claude
     }
 
     fn display_name(&self) -> &'static str {
@@ -308,7 +308,7 @@ fn find_latest_limit_hit(projects_root: &Path) -> Option<(DateTime<Utc>, Option<
     latest
 }
 
-/// Build the single `PlanUsage` entry (or none) for the Claude provider.
+/// Build the single `PlanUsage` entry (or none) for the Claude client.
 /// Exposed as a free function for ease of testing with a mocked
 /// `projects_root`.
 fn plan_usage_for(projects_root: &Path) -> Result<Vec<PlanUsage>> {
@@ -349,7 +349,7 @@ fn plan_usage_for(projects_root: &Path) -> Result<Vec<PlanUsage>> {
     };
 
     Ok(vec![PlanUsage {
-        provider: ProviderKind::Claude,
+        client: ClientKind::Claude,
         label,
         plan_name,
         windows,
@@ -429,7 +429,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let last_active = mtime(path).or(earliest);
 
     Ok(SessionSummary {
-        provider: ProviderKind::Claude,
+        client: ClientKind::Claude,
         subscription: None,
         session_id,
         started_at: earliest,
@@ -490,11 +490,11 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         .clone()
         .ok_or_else(|| Error::NoUsage(summary.session_id.clone()))?;
     let rates =
-        pricing::lookup(ProviderKind::Claude, &model).ok_or_else(|| Error::UnknownPricing {
-            provider: "claude".into(),
+        pricing::lookup(ClientKind::Claude, &model).ok_or_else(|| Error::UnknownPricing {
+            client: "claude".into(),
             model: model.clone(),
         })?;
-    let included = matches!(plan.mode_for(ProviderKind::Claude), PlanMode::Included);
+    let included = matches!(plan.mode_for(ClientKind::Claude), PlanMode::Included);
     let cost = pricing::compute_cost(&totals, &rates, included);
 
     Ok(SessionAnalysis {
@@ -584,8 +584,7 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
                 *effective_model = Some(m.to_string());
             }
 
-            if let Some(window) =
-                pricing::context_window(ProviderKind::Claude, m).filter(|w| *w > 0)
+            if let Some(window) = pricing::context_window(ClientKind::Claude, m).filter(|w| *w > 0)
             {
                 let g = |k: &str| usage.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
                 let cache_creation = usage
@@ -911,7 +910,7 @@ mod tests {
         let out = plan_usage_for(&projects_root).unwrap();
         assert_eq!(out.len(), 1);
         let pu = &out[0];
-        assert_eq!(pu.provider, ProviderKind::Claude);
+        assert_eq!(pu.client, ClientKind::Claude);
         assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
         assert_eq!(pu.label, "Claude Code · Max 5x");
         let expected_ts = parse_ts(expected_ts_str).unwrap();
@@ -988,15 +987,15 @@ mod tests {
             ],
         );
 
-        let provider = ClaudeProvider {
+        let client = ClaudeClient {
             projects_root: projects.clone(),
             discover_cache: std::sync::Mutex::default(),
         };
 
         // First call
-        let r1 = provider.list_sessions();
+        let r1 = client.list_sessions();
         // Second call - should use cache and return same results
-        let r2 = provider.list_sessions();
+        let r2 = client.list_sessions();
 
         match (r1, r2) {
             (Ok(s1), Ok(s2)) => {
@@ -1010,7 +1009,7 @@ mod tests {
     fn children_returns_empty_when_subagent_dir_is_missing() {
         let td = TestDir::new();
         let projects = td.path().join("projects");
-        let provider = ClaudeProvider {
+        let client = ClaudeClient {
             projects_root: projects,
             discover_cache: std::sync::Mutex::default(),
         };
@@ -1025,7 +1024,7 @@ mod tests {
             ],
         );
         let parent = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             Some("Max 5x".to_string()),
             "02742fb3-d98e-4fa2-8184-2fddd7ee544d".to_string(),
             None,
@@ -1039,7 +1038,7 @@ mod tests {
             None,
         );
 
-        let children = crate::provider::Provider::children(&provider, &parent).unwrap();
+        let children = crate::client::Client::children(&client, &parent).unwrap();
 
         assert!(children.is_empty());
     }
@@ -1048,7 +1047,7 @@ mod tests {
     fn children_returns_subagent_summary_and_inherits_subscription() {
         let td = TestDir::new();
         let projects = td.path().join("projects");
-        let provider = ClaudeProvider {
+        let client = ClaudeClient {
             projects_root: projects,
             discover_cache: std::sync::Mutex::default(),
         };
@@ -1073,7 +1072,7 @@ mod tests {
             ],
         );
         let parent = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             Some("Max 5x".to_string()),
             session_id.to_string(),
             None,
@@ -1087,7 +1086,7 @@ mod tests {
             None,
         );
 
-        let children = crate::provider::Provider::children(&provider, &parent).unwrap();
+        let children = crate::client::Client::children(&client, &parent).unwrap();
 
         assert_eq!(children.len(), 1);
         let child = &children[0];

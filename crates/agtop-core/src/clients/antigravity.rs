@@ -1,4 +1,4 @@
-//! Antigravity provider — VSCode-fork IDE ("Jetski" agent).
+//! Antigravity client — VSCode-fork IDE ("Jetski" agent).
 //!
 //! Antigravity stores session state in a SQLite `.vscdb` file with
 //! protobuf-encoded blobs. Without the proto schema we cannot decode
@@ -10,11 +10,11 @@
 
 use std::path::PathBuf;
 
+use crate::client::Client;
+use crate::clients::util::mtime;
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
-use crate::providers::util::mtime;
-use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 /// SQLite key that holds session trajectory summaries (protobuf blob).
 const TRAJECTORY_KEY: &str = "antigravityUnifiedStateSync.trajectorySummaries";
@@ -22,11 +22,11 @@ const TRAJECTORY_KEY: &str = "antigravityUnifiedStateSync.trajectorySummaries";
 const USER_STATUS_KEY: &str = "antigravityUnifiedStateSync.userStatus";
 
 #[derive(Debug, Clone)]
-pub struct AntigravityProvider {
+pub struct AntigravityClient {
     pub state_db: PathBuf,
 }
 
-impl Default for AntigravityProvider {
+impl Default for AntigravityClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
@@ -40,9 +40,9 @@ impl Default for AntigravityProvider {
     }
 }
 
-impl Provider for AntigravityProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Antigravity
+impl Client for AntigravityClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Antigravity
     }
 
     fn display_name(&self) -> &'static str {
@@ -90,7 +90,7 @@ impl Provider for AntigravityProvider {
             .into_iter()
             .map(|id| {
                 SessionSummary::new(
-                    ProviderKind::Antigravity,
+                    ClientKind::Antigravity,
                     subscription.clone(),
                     id,
                     None,     // started_at — not decodable without schema
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = AntigravityProvider {
+        let p = AntigravityClient {
             state_db: std::path::PathBuf::from("/tmp/does-not-exist-agtop-test/state.vscdb"),
         };
         assert!(p.list_sessions().unwrap().is_empty());

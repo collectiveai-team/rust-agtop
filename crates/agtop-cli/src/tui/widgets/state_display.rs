@@ -30,7 +30,7 @@ pub fn display_state(
 mod tests {
     use super::*;
     use agtop_core::session::{
-        CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
     };
     use chrono::TimeZone;
     use std::path::PathBuf;
@@ -38,7 +38,7 @@ mod tests {
     fn analysis(state: Option<&str>, last_active: Option<DateTime<Utc>>) -> SessionAnalysis {
         SessionAnalysis::new(
             SessionSummary::new(
-                ProviderKind::Claude,
+                ClientKind::Claude,
                 None,
                 "sess".into(),
                 last_active,

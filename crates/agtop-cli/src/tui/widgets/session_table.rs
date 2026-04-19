@@ -265,11 +265,11 @@ fn row_for<'a>(
         Style::new()
     };
 
-    // Provider color: cheap "tag" for eye-tracking.
-    let provider_style = match s.provider {
-        agtop_core::session::ProviderKind::Claude => th::PROVIDER_CLAUDE,
-        agtop_core::session::ProviderKind::Codex => th::PROVIDER_CODEX,
-        agtop_core::session::ProviderKind::OpenCode => th::PROVIDER_OPENCODE,
+    // Client color: cheap "tag" for eye-tracking.
+    let client_style = match s.client {
+        agtop_core::session::ClientKind::Claude => th::CLIENT_CLAUDE,
+        agtop_core::session::ClientKind::Codex => th::CLIENT_CODEX,
+        agtop_core::session::ClientKind::OpenCode => th::CLIENT_OPENCODE,
         _ => Style::new(),
     };
 
@@ -280,7 +280,7 @@ fn row_for<'a>(
     let cells: Vec<Cell<'a>> = visible
         .iter()
         .map(|&col_id| match col_id {
-            ColumnId::Provider => Cell::from(s.provider.as_str()).style(provider_style),
+            ColumnId::Client => Cell::from(s.client.as_str()).style(client_style),
             ColumnId::Subscription => Cell::from(subscription.clone()),
             ColumnId::Session => Cell::from(short.clone()),
             ColumnId::Started => Cell::from(started.clone()),

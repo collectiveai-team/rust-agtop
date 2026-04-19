@@ -1,7 +1,7 @@
 //! Integration test for Codex session parsing.
 //!
 //! Builds a minimal `.jsonl` fixture inline with `serde_json::json!` and
-//! asserts that `CodexProvider::analyze` extracts the right token counts,
+//! asserts that `CodexClient::analyze` extracts the right token counts,
 //! cost, tool-call count, and duration without touching the real filesystem.
 
 use std::fs;
@@ -12,8 +12,8 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agtop_core::providers::codex::CodexProvider;
-use agtop_core::{Plan, Provider, ProviderKind, SessionSummary};
+use agtop_core::clients::codex::CodexClient;
+use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------
 // Minimal temp-dir helper (mirrors the one in the codex unit tests)
@@ -176,13 +176,13 @@ fn write_codex_metadata_fixture(dir: &std::path::Path) -> PathBuf {
 fn codex_fixture_extracts_effort_and_waiting_state() {
     let tmp = TmpDir::new("metadata");
     let fixture_path = write_codex_metadata_fixture(tmp.0.as_path());
-    let provider = CodexProvider {
+    let client = CodexClient {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
         discover_cache: Mutex::default(),
     };
 
-    let sessions = provider.list_sessions().expect("list_sessions");
+    let sessions = client.list_sessions().expect("list_sessions");
     let summary = sessions
         .into_iter()
         .find(|s| s.data_path == fixture_path)
@@ -210,7 +210,7 @@ fn codex_fixture_token_counts_are_summed() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -224,13 +224,13 @@ fn codex_fixture_token_counts_are_summed() {
         None,
     );
 
-    let provider = CodexProvider {
+    let client = CodexClient {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"), // won't be read for analyze()
         discover_cache: Mutex::default(),
     };
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -249,7 +249,7 @@ fn codex_fixture_tool_call_count() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -263,13 +263,13 @@ fn codex_fixture_tool_call_count() {
         None,
     );
 
-    let provider = CodexProvider {
+    let client = CodexClient {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
         discover_cache: Mutex::default(),
     };
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -286,7 +286,7 @@ fn codex_fixture_duration_from_timestamps() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -300,13 +300,13 @@ fn codex_fixture_duration_from_timestamps() {
         None,
     );
 
-    let provider = CodexProvider {
+    let client = CodexClient {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
         discover_cache: Mutex::default(),
     };
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -324,7 +324,7 @@ fn codex_fixture_retail_cost_is_positive() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -338,13 +338,13 @@ fn codex_fixture_retail_cost_is_positive() {
         None,
     );
 
-    let provider = CodexProvider {
+    let client = CodexClient {
         sessions_root: tmp.0.clone(),
         auth_path: tmp.0.join("auth.json"),
         discover_cache: Mutex::default(),
     };
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 

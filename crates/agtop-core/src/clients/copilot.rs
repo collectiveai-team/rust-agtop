@@ -1,4 +1,4 @@
-//! GitHub Copilot provider — VS Code chat session discovery + quota API.
+//! GitHub Copilot client — VS Code chat session discovery + quota API.
 //!
 //! Session transcripts are stored in VS Code's workspace storage:
 //!   `~/.config/Code/User/workspaceStorage/<hash>/chatSessions/<uuid>.json`
@@ -14,20 +14,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
+use crate::client::Client;
+use crate::clients::util::{mtime, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
-use crate::providers::util::{mtime, DiscoverCache};
 use crate::session::{
-    CostBreakdown, PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary,
-    TokenTotals,
+    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Quota API cache TTL.
 const QUOTA_CACHE_SECS: u64 = 300;
 
 /// Data extracted from a single Copilot session JSON that is needed by
-/// both `list_sessions` and `analyze`. Stored in a provider-level cache
+/// both `list_sessions` and `analyze`. Stored in a client-level cache
 /// so the file is parsed exactly once per refresh cycle.
 #[derive(Debug, Clone)]
 struct CopilotParsed {
@@ -36,18 +35,18 @@ struct CopilotParsed {
 }
 
 #[derive(Debug)]
-pub struct CopilotProvider {
+pub struct CopilotClient {
     pub workspace_storage_root: PathBuf,
     pub gh_hosts_path: PathBuf,
     pub vim_hosts_path: PathBuf,
     /// Parsed data from the last `list_sessions` call, keyed by session
     /// file path. Shared via `Arc<RwLock<…>>` so `Clone` shares the cache
-    /// (correct — provider instances are shared across threads via `Arc`).
+    /// (correct — client instances are shared across threads via `Arc`).
     cache: Arc<RwLock<HashMap<PathBuf, CopilotParsed>>>,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for CopilotProvider {
+impl Default for CopilotClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         // VS Code on Linux uses ~/.config/Code; on macOS ~/Library/Application Support/Code.
@@ -73,9 +72,9 @@ impl Default for CopilotProvider {
     }
 }
 
-impl Provider for CopilotProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Copilot
+impl Client for CopilotClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Copilot
     }
 
     fn display_name(&self) -> &'static str {
@@ -245,7 +244,7 @@ fn parse_session_all(
     };
 
     let summary = SessionSummary::new(
-        ProviderKind::Copilot,
+        ClientKind::Copilot,
         None, // subscription set by list_sessions caller if available
         session_id,
         started_at,
@@ -466,7 +465,7 @@ fn fetch_copilot_quota(gh_token: &str) -> Result<Vec<PlanUsage>> {
     }
 
     Ok(vec![PlanUsage::new(
-        ProviderKind::Copilot,
+        ClientKind::Copilot,
         label,
         plan_name,
         windows,
@@ -500,11 +499,11 @@ mod tests {
 
     #[test]
     fn missing_root_returns_empty() {
-        let p = CopilotProvider {
+        let p = CopilotClient {
             workspace_storage_root: std::path::PathBuf::from("/no/such/path"),
             gh_hosts_path: std::path::PathBuf::from("/no/such/hosts.yml"),
             vim_hosts_path: std::path::PathBuf::from("/no/such/hosts.json"),
-            ..CopilotProvider::default()
+            ..CopilotClient::default()
         };
         assert!(p.list_sessions().unwrap().is_empty());
     }
@@ -531,11 +530,11 @@ mod tests {
             .write_all(content.as_bytes())
             .unwrap();
 
-        let p = CopilotProvider {
+        let p = CopilotClient {
             workspace_storage_root: td.path.clone(),
             gh_hosts_path: std::path::PathBuf::from("/no/such/hosts.yml"),
             vim_hosts_path: std::path::PathBuf::from("/no/such/hosts.json"),
-            ..CopilotProvider::default()
+            ..CopilotClient::default()
         };
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
@@ -544,7 +543,7 @@ mod tests {
             "02742fb3-d98e-4fa2-8184-2fddd7ee544d"
         );
         assert_eq!(sessions[0].model.as_deref(), Some("copilot/gpt-4.1"));
-        assert_eq!(sessions[0].provider, ProviderKind::Copilot);
+        assert_eq!(sessions[0].client, ClientKind::Copilot);
     }
 
     #[test]
@@ -592,11 +591,11 @@ mod tests {
         }"#;
         fs::write(&session_file, content).unwrap();
 
-        let p = CopilotProvider {
+        let p = CopilotClient {
             workspace_storage_root: td.path.clone(),
             gh_hosts_path: std::path::PathBuf::from("/no"),
             vim_hosts_path: std::path::PathBuf::from("/no"),
-            ..CopilotProvider::default()
+            ..CopilotClient::default()
         };
 
         // list_sessions fills the cache

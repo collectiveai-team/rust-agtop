@@ -20,7 +20,7 @@ pub use history::{UsageHistory, UsagePoint, CHART_WINDOW_MINS};
 pub use sort::{SortColumn, SortDir};
 
 use filter::matches_filter;
-use history::provider_idx;
+use history::client_idx;
 use sort::sort_key;
 
 use std::cell::RefCell;
@@ -38,7 +38,7 @@ use super::column_config::ColumnConfig;
 /// Which section the Config tab cursor is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigSection {
-    Providers,
+    Clients,
     Columns,
 }
 
@@ -90,8 +90,8 @@ impl Tab {
 /// Sub-tab for the Cost Summary dashboard panel (group-by dimension).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CostTab {
-    /// Group costs by agentic provider (Claude Code, Codex, OpenCode).
-    Provider,
+    /// Group costs by agentic client (Claude Code, Codex, OpenCode).
+    Client,
     /// Group costs by billing subscription (Claude Max, ChatGPT Plus, …).
     Subscription,
     /// Group costs by model name.
@@ -103,7 +103,7 @@ pub enum CostTab {
 impl CostTab {
     pub fn all() -> &'static [CostTab] {
         &[
-            CostTab::Provider,
+            CostTab::Client,
             CostTab::Subscription,
             CostTab::Model,
             CostTab::Project,
@@ -112,7 +112,7 @@ impl CostTab {
 
     pub fn title(self) -> &'static str {
         match self {
-            Self::Provider => "Provider",
+            Self::Client => "Client",
             Self::Subscription => "Subscription",
             Self::Model => "Model",
             Self::Project => "Project",
@@ -121,17 +121,17 @@ impl CostTab {
 
     pub fn cycle_forward(self) -> Self {
         match self {
-            Self::Provider => Self::Subscription,
+            Self::Client => Self::Subscription,
             Self::Subscription => Self::Model,
             Self::Model => Self::Project,
-            Self::Project => Self::Provider,
+            Self::Project => Self::Client,
         }
     }
 
     pub fn cycle_back(self) -> Self {
         match self {
-            Self::Provider => Self::Project,
-            Self::Subscription => Self::Provider,
+            Self::Client => Self::Project,
+            Self::Subscription => Self::Client,
             Self::Model => Self::Subscription,
             Self::Project => Self::Model,
         }
@@ -201,7 +201,7 @@ pub struct App {
     ui_mode: UiMode,
     /// Rolling aggregate usage points for spark/line charts.
     history: UsageHistory,
-    /// Plan usage snapshots per provider.
+    /// Plan usage snapshots per client.
     plan_usage: Vec<agtop_core::PlanUsage>,
     /// Active sub-tab in the Cost Summary dashboard panel.
     cost_tab: CostTab,
@@ -222,10 +222,10 @@ pub struct App {
     view_cache: RefCell<Option<Vec<usize>>>,
     /// Session IDs that are currently expanded to show their children.
     expanded_sessions: std::collections::HashSet<String>,
-    /// Shared enabled-provider set. Some when running under the TUI (set
+    /// Shared enabled-client set. Some when running under the TUI (set
     /// by `tui::run`); None in unit tests that don't need the wire-up.
     enabled_arc: Option<
-        std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ProviderKind>>>,
+        std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ClientKind>>>,
     >,
 }
 
@@ -255,7 +255,7 @@ impl App {
             ui_mode: UiMode::Classic,
             history: UsageHistory::default(),
             plan_usage: Vec::new(),
-            cost_tab: CostTab::Provider,
+            cost_tab: CostTab::Client,
             cost_period: CostPeriod::Total,
             cost_scroll: 0,
             plan_selected: 0,
@@ -356,15 +356,15 @@ impl App {
         self.config_cursor = idx.min(max);
     }
 
-    /// Total virtual rows in the Config tab: providers + columns.
+    /// Total virtual rows in the Config tab: clients + columns.
     pub fn config_total_rows(&self) -> usize {
-        self.column_config.providers.len() + self.column_config.columns.len()
+        self.column_config.clients.len() + self.column_config.columns.len()
     }
 
     /// Which section the current cursor is in.
     pub fn config_section_at(&self, idx: usize) -> ConfigSection {
-        if idx < self.column_config.providers.len() {
-            ConfigSection::Providers
+        if idx < self.column_config.clients.len() {
+            ConfigSection::Clients
         } else {
             ConfigSection::Columns
         }
@@ -373,8 +373,8 @@ impl App {
     /// Section-local index. Callers combine this with `config_section_at`.
     pub fn config_local_idx(&self, idx: usize) -> usize {
         match self.config_section_at(idx) {
-            ConfigSection::Providers => idx,
-            ConfigSection::Columns => idx - self.column_config.providers.len(),
+            ConfigSection::Clients => idx,
+            ConfigSection::Columns => idx - self.column_config.clients.len(),
         }
     }
 
@@ -395,12 +395,12 @@ impl App {
     /// and mouse (click on row).
     pub fn toggle_cursor_item(&mut self) {
         match self.config_section_at(self.config_cursor) {
-            ConfigSection::Providers => {
+            ConfigSection::Clients => {
                 let local = self.config_local_idx(self.config_cursor);
-                self.column_config.toggle_provider(local);
+                self.column_config.toggle_client(local);
                 if let Some(arc) = &self.enabled_arc {
                     if let Ok(mut guard) = arc.write() {
-                        *guard = self.column_config.enabled_providers();
+                        *guard = self.column_config.enabled_clients();
                     }
                 }
             }
@@ -413,7 +413,7 @@ impl App {
     }
 
     /// Reorder only applies to the Columns section; no-op when the cursor
-    /// sits on a provider row. Keeps keyboard shortcuts harmless.
+    /// sits on a client row. Keeps keyboard shortcuts harmless.
     pub fn config_move_column_up(&mut self) {
         if self.config_section_at(self.config_cursor) != ConfigSection::Columns {
             return;
@@ -439,16 +439,16 @@ impl App {
         }
     }
 
-    /// Read-only snapshot of the currently-enabled providers (for tests
+    /// Read-only snapshot of the currently-enabled clients (for tests
     /// and for seeding the shared Arc<RwLock<...>> at startup).
     #[cfg_attr(not(test), allow(dead_code))]
-    pub fn enabled_providers_set(&self) -> std::collections::HashSet<agtop_core::ProviderKind> {
-        self.column_config.enabled_providers()
+    pub fn enabled_clients_set(&self) -> std::collections::HashSet<agtop_core::ClientKind> {
+        self.column_config.enabled_clients()
     }
 
     pub fn attach_enabled_arc(
         &mut self,
-        arc: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ProviderKind>>>,
+        arc: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ClientKind>>>,
     ) {
         self.enabled_arc = Some(arc);
     }
@@ -581,15 +581,15 @@ impl App {
         sessions: Vec<SessionAnalysis>,
         plan_usage: Vec<agtop_core::PlanUsage>,
     ) {
-        let mut tokens_by_provider = [0u64; 7];
+        let mut tokens_by_client = [0u64; 7];
         for a in &sessions {
-            let idx = provider_idx(a.summary.provider);
+            let idx = client_idx(a.summary.client);
             let tok = a.tokens.grand_total();
-            tokens_by_provider[idx] += tok;
+            tokens_by_client[idx] += tok;
         }
         self.history.push(UsagePoint {
             ts: Utc::now(),
-            tokens_by_provider,
+            tokens_by_client,
         });
 
         self.sessions = sessions;
@@ -753,7 +753,7 @@ impl App {
         };
     }
 
-    /// Cycle the Cost Summary panel sub-tab forward (Provider → Subscription → Model → Project → …).
+    /// Cycle the Cost Summary panel sub-tab forward (Client → Subscription → Model → Project → …).
     pub fn cycle_cost_tab_forward(&mut self) {
         self.cost_tab = self.cost_tab.cycle_forward();
         self.cost_scroll = 0;
@@ -854,19 +854,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{CostBreakdown, ProviderKind, SessionSummary, TokenTotals};
+    use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
     use chrono::{TimeZone, Utc};
     use std::path::PathBuf;
 
     fn sample(
         id: &str,
-        provider: ProviderKind,
+        client: ClientKind,
         model: &str,
         cost: f64,
         tokens: u64,
     ) -> SessionAnalysis {
         let summary = SessionSummary::new(
-            provider,
+            client,
             None,
             id.into(),
             Some(Utc.with_ymd_and_hms(2026, 4, 10, 12, 0, 0).unwrap()),
@@ -898,10 +898,10 @@ mod tests {
     }
 
     fn sample_with_children(parent_id: &str, child_ids: &[&str]) -> SessionAnalysis {
-        let mut parent = sample(parent_id, ProviderKind::Claude, "claude-opus-4-6", 1.0, 100);
+        let mut parent = sample(parent_id, ClientKind::Claude, "claude-opus-4-6", 1.0, 100);
         parent.children = child_ids
             .iter()
-            .map(|id| sample(id, ProviderKind::Claude, "claude-opus-4-6", 0.5, 50))
+            .map(|id| sample(id, ClientKind::Claude, "claude-opus-4-6", 0.5, 50))
             .collect();
         parent
     }
@@ -948,8 +948,8 @@ mod tests {
     fn set_sessions_selects_first_row() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
         ]);
         assert_eq!(app.view_len(), 2);
         let (idx, sel) = app.selected().expect("selection set after first snapshot");
@@ -961,8 +961,8 @@ mod tests {
     fn move_selection_saturates() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
         ]);
         app.move_selection(-5);
         assert_eq!(app.selected_idx(), Some(0));
@@ -974,11 +974,11 @@ mod tests {
     fn select_first_last() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
             sample(
                 "c",
-                ProviderKind::OpenCode,
+                ClientKind::OpenCode,
                 "anthropic/claude-haiku-4.5",
                 3.0,
                 300,
@@ -994,8 +994,8 @@ mod tests {
     fn filter_matches_id_or_model_or_cwd() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("abcd", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("efgh", ProviderKind::Codex, "gpt-5", 2.0, 200),
+            sample("abcd", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("efgh", ClientKind::Codex, "gpt-5", 2.0, 200),
         ]);
         app.enter_filter_mode();
         for c in "opus".chars() {
@@ -1012,7 +1012,7 @@ mod tests {
         let mut app = App::new();
         app.set_sessions(vec![sample(
             "abcd",
-            ProviderKind::Claude,
+            ClientKind::Claude,
             "Claude-Opus-4-6",
             1.0,
             100,
@@ -1028,9 +1028,9 @@ mod tests {
     fn sort_cost_desc_is_default_for_cost_column() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Claude, "claude-opus-4-6", 3.0, 200),
-            sample("c", ProviderKind::Claude, "claude-opus-4-6", 2.0, 300),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Claude, "claude-opus-4-6", 3.0, 200),
+            sample("c", ClientKind::Claude, "claude-opus-4-6", 2.0, 300),
         ]);
         while app.sort_col() != SortColumn::Cost {
             app.cycle_sort_column();
@@ -1044,9 +1044,9 @@ mod tests {
     fn sort_tokens_desc_ranks_high_token_first() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Claude, "claude-opus-4-6", 1.0, 900),
-            sample("c", ProviderKind::Claude, "claude-opus-4-6", 1.0, 500),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Claude, "claude-opus-4-6", 1.0, 900),
+            sample("c", ClientKind::Claude, "claude-opus-4-6", 1.0, 500),
         ]);
         while app.sort_col() != SortColumn::Tokens {
             app.cycle_sort_column();
@@ -1061,8 +1061,8 @@ mod tests {
     fn flip_sort_direction_inverts_order() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Claude, "claude-opus-4-6", 3.0, 200),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Claude, "claude-opus-4-6", 3.0, 200),
         ]);
         while app.sort_col() != SortColumn::Cost {
             app.cycle_sort_column();
@@ -1076,18 +1076,18 @@ mod tests {
     fn selection_follows_session_across_refresh() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
-            sample("c", ProviderKind::OpenCode, "gpt-5", 3.0, 300),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
+            sample("c", ClientKind::OpenCode, "gpt-5", 3.0, 300),
         ]);
         app.move_selection(1);
         assert_eq!(app.selected().unwrap().1.summary.session_id, "b");
 
         app.set_sessions(vec![
-            sample("z", ProviderKind::Claude, "claude-opus-4-6", 5.0, 500),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("c", ProviderKind::OpenCode, "gpt-5", 3.0, 300),
+            sample("z", ClientKind::Claude, "claude-opus-4-6", 5.0, 500),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("c", ClientKind::OpenCode, "gpt-5", 3.0, 300),
         ]);
         let (_, sel) = app.selected().unwrap();
         assert_eq!(sel.summary.session_id, "b");
@@ -1097,14 +1097,14 @@ mod tests {
     fn selection_clamps_when_session_disappears() {
         let mut app = App::new();
         app.set_sessions(vec![
-            sample("a", ProviderKind::Claude, "claude-opus-4-6", 1.0, 100),
-            sample("b", ProviderKind::Codex, "gpt-5", 2.0, 200),
-            sample("c", ProviderKind::OpenCode, "gpt-5", 3.0, 300),
+            sample("a", ClientKind::Claude, "claude-opus-4-6", 1.0, 100),
+            sample("b", ClientKind::Codex, "gpt-5", 2.0, 200),
+            sample("c", ClientKind::OpenCode, "gpt-5", 3.0, 300),
         ]);
         app.move_selection(2);
         app.set_sessions(vec![sample(
             "a",
-            ProviderKind::Claude,
+            ClientKind::Claude,
             "claude-opus-4-6",
             1.0,
             100,
@@ -1117,7 +1117,7 @@ mod tests {
         let mut app = App::new();
         app.set_sessions(vec![sample(
             "a",
-            ProviderKind::Claude,
+            ClientKind::Claude,
             "claude-opus-4-6",
             1.0,
             100,
@@ -1213,36 +1213,33 @@ mod tests {
     }
 
     #[test]
-    fn config_cursor_walks_providers_then_columns() {
+    fn config_cursor_walks_clients_then_columns() {
         let app = App::new();
-        let n_providers = app.column_config().providers.len();
+        let n_clients = app.column_config().clients.len();
         let n_columns = app.column_config().columns.len();
-        assert_eq!(app.config_total_rows(), n_providers + n_columns);
-        assert_eq!(app.config_section_at(0), ConfigSection::Providers);
-        assert_eq!(
-            app.config_section_at(n_providers - 1),
-            ConfigSection::Providers
-        );
-        assert_eq!(app.config_section_at(n_providers), ConfigSection::Columns);
+        assert_eq!(app.config_total_rows(), n_clients + n_columns);
+        assert_eq!(app.config_section_at(0), ConfigSection::Clients);
+        assert_eq!(app.config_section_at(n_clients - 1), ConfigSection::Clients);
+        assert_eq!(app.config_section_at(n_clients), ConfigSection::Columns);
     }
 
     #[test]
     fn toggle_cursor_item_on_provider_flips_enabled() {
         let mut app = App::new();
-        let kind = app.column_config().providers[0].kind;
-        let before = app.enabled_providers_set().contains(&kind);
+        let kind = app.column_config().clients[0].kind;
+        let before = app.enabled_clients_set().contains(&kind);
         app.set_config_cursor(0);
         app.toggle_cursor_item();
-        let after = app.enabled_providers_set().contains(&kind);
+        let after = app.enabled_clients_set().contains(&kind);
         assert_ne!(before, after);
     }
 
     #[test]
     fn toggle_cursor_item_on_column_flips_visibility() {
         let mut app = App::new();
-        let n_providers = app.column_config().providers.len();
-        // Place cursor at first column entry (after all provider rows).
-        app.set_config_cursor(n_providers);
+        let n_clients = app.column_config().clients.len();
+        // Place cursor at first column entry (after all client rows).
+        app.set_config_cursor(n_clients);
         let was = app.column_config().columns[0].visible;
         app.toggle_cursor_item();
         assert_eq!(app.column_config().columns[0].visible, !was);
@@ -1259,24 +1256,21 @@ mod tests {
     }
 
     #[test]
-    fn toggle_provider_updates_shared_enabled_arc() {
-        use agtop_core::ProviderKind;
+    fn toggle_client_updates_shared_enabled_arc() {
+        use agtop_core::ClientKind;
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
         let mut app = App::new();
-        let arc: Arc<RwLock<HashSet<ProviderKind>>> =
-            Arc::new(RwLock::new(ProviderKind::all().iter().copied().collect()));
+        let arc: Arc<RwLock<HashSet<ClientKind>>> =
+            Arc::new(RwLock::new(ClientKind::all().iter().copied().collect()));
         app.attach_enabled_arc(Arc::clone(&arc));
 
-        let kind = app.column_config().providers[0].kind;
+        let kind = app.column_config().clients[0].kind;
         app.set_config_cursor(0);
         app.toggle_cursor_item();
 
         let live = arc.read().unwrap();
-        assert!(
-            !live.contains(&kind),
-            "disabled provider still in shared set"
-        );
+        assert!(!live.contains(&kind), "disabled client still in shared set");
     }
 }

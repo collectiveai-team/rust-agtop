@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
 };
 
-use agtop_core::session::ProviderKind;
+use agtop_core::session::ClientKind;
 
 use crate::fmt;
 use crate::tui::app::{App, CHART_WINDOW_MINS};
@@ -29,13 +29,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let now = Utc::now();
     let claude = app
         .history()
-        .buckets_by_provider(now, N_BUCKETS, ProviderKind::Claude);
+        .buckets_by_client(now, N_BUCKETS, ClientKind::Claude);
     let codex = app
         .history()
-        .buckets_by_provider(now, N_BUCKETS, ProviderKind::Codex);
+        .buckets_by_client(now, N_BUCKETS, ClientKind::Codex);
     let opencode = app
         .history()
-        .buckets_by_provider(now, N_BUCKETS, ProviderKind::OpenCode);
+        .buckets_by_client(now, N_BUCKETS, ClientKind::OpenCode);
 
     let pts_claude: Vec<(f64, f64)> = claude
         .iter()
@@ -94,7 +94,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .history()
         .points()
         .back()
-        .map(|p| p.tokens_by_provider)
+        .map(|p| p.tokens_by_client)
         .unwrap_or([0, 0, 0, 0, 0, 0, 0]);
     let summary = format!(
         " now: claude {} /m · codex {} /m · opencode {} /m ",

@@ -8,13 +8,14 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 
 use crate::tui::app::{SortColumn, SortDir};
-use agtop_core::ProviderKind;
+use agtop_core::ClientKind;
 
 /// All column identifiers in the session table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColumnId {
-    Provider,
+    #[serde(alias = "provider")]
+    Client,
     Subscription,
     Session,
     Started,
@@ -46,7 +47,7 @@ impl ColumnId {
             ColumnId::LastActive,
             ColumnId::Age,
             ColumnId::Duration,
-            ColumnId::Provider,
+            ColumnId::Client,
             ColumnId::Subscription,
             ColumnId::Model,
             ColumnId::Effort,
@@ -67,7 +68,7 @@ impl ColumnId {
 
     pub fn label(self) -> &'static str {
         match self {
-            ColumnId::Provider => "PROVIDER",
+            ColumnId::Client => "CLIENT",
             ColumnId::Subscription => "SUB",
             ColumnId::Session => "SESSION",
             ColumnId::Started => "STARTED",
@@ -93,7 +94,7 @@ impl ColumnId {
 
     pub fn description(self) -> &'static str {
         match self {
-            ColumnId::Provider => "Agentic provider (claude/codex/opencode)",
+            ColumnId::Client => "Agentic client (claude/codex/opencode)",
             ColumnId::Subscription => "Billing subscription label",
             ColumnId::Session => "Short session ID",
             ColumnId::Started => "Session start timestamp",
@@ -120,7 +121,7 @@ impl ColumnId {
     /// Fixed display width in terminal columns. `None` for flexible columns.
     pub fn fixed_width(self) -> Option<u16> {
         match self {
-            ColumnId::Provider => Some(8),
+            ColumnId::Client => Some(8),
             ColumnId::Subscription => Some(16),
             ColumnId::Session => Some(12),
             ColumnId::Started => Some(16),
@@ -147,7 +148,7 @@ impl ColumnId {
     /// The corresponding sort column, if this column is sortable.
     pub fn sort_col(self) -> Option<SortColumn> {
         match self {
-            ColumnId::Provider => Some(SortColumn::Provider),
+            ColumnId::Client => Some(SortColumn::Client),
             ColumnId::Subscription => None,
             ColumnId::Session => None,
             ColumnId::Started => Some(SortColumn::Started),
@@ -196,9 +197,9 @@ pub struct ColumnConfig {
     /// Active sort direction. Defaults to the sort column's natural direction.
     #[serde(default = "default_sort_dir")]
     pub sort_dir: SortDir,
-    /// Which providers are shown. Defaults to all enabled.
-    #[serde(default = "default_providers_cfg")]
-    pub providers: Vec<ProviderEntry>,
+    /// Which clients are shown. Defaults to all enabled.
+    #[serde(default = "default_clients_cfg")]
+    pub clients: Vec<ClientEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,15 +209,15 @@ pub struct ColumnEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderEntry {
-    pub kind: ProviderKind,
+pub struct ClientEntry {
+    pub kind: ClientKind,
     pub enabled: bool,
 }
 
-fn default_providers_cfg() -> Vec<ProviderEntry> {
-    ProviderKind::all()
+fn default_clients_cfg() -> Vec<ClientEntry> {
+    ClientKind::all()
         .iter()
-        .map(|&kind| ProviderEntry {
+        .map(|&kind| ClientEntry {
             kind,
             enabled: true,
         })
@@ -235,7 +236,7 @@ impl Default for ColumnConfig {
                         id,
                         ColumnId::Session
                             | ColumnId::Age
-                            | ColumnId::Provider
+                            | ColumnId::Client
                             | ColumnId::Subscription
                             | ColumnId::Model
                             | ColumnId::Effort
@@ -251,7 +252,7 @@ impl Default for ColumnConfig {
                 .collect(),
             sort_col,
             sort_dir: sort_col.default_direction(),
-            providers: default_providers_cfg(),
+            clients: default_clients_cfg(),
         }
     }
 }
@@ -295,20 +296,20 @@ impl ColumnConfig {
         }
     }
 
-    // ---- Provider filtering -------------------------------------------------
+    // ---- Client filtering -------------------------------------------------
 
-    /// All currently-enabled providers as a set (the shape the worker wants).
-    pub fn enabled_providers(&self) -> HashSet<ProviderKind> {
-        self.providers
+    /// All currently-enabled clients as a set (the shape the worker wants).
+    pub fn enabled_clients(&self) -> HashSet<ClientKind> {
+        self.clients
             .iter()
             .filter(|e| e.enabled)
             .map(|e| e.kind)
             .collect()
     }
 
-    /// Flip enabled state of provider at `idx` and persist to disk.
-    pub fn toggle_provider(&mut self, idx: usize) {
-        if let Some(entry) = self.providers.get_mut(idx) {
+    /// Flip enabled state of client at `idx` and persist to disk.
+    pub fn toggle_client(&mut self, idx: usize) {
+        if let Some(entry) = self.clients.get_mut(idx) {
             entry.enabled = !entry.enabled;
             self.save();
         }
@@ -376,63 +377,97 @@ impl<'de> Deserialize<'de> for ColumnConfig {
             sort_col: SortColumn,
             #[serde(default = "default_sort_dir")]
             sort_dir: SortDir,
-            #[serde(default = "default_providers_cfg")]
-            providers: Vec<ProviderEntry>,
+            clients: Option<Vec<ClientEntry>>,
+            providers: Option<Vec<ClientEntry>>,
         }
 
         let raw = RawColumnConfig::deserialize(deserializer)?;
+        let clients = match (raw.clients, raw.providers) {
+            (Some(clients), _) => clients,
+            (None, Some(providers)) => providers,
+            (None, None) => default_clients_cfg(),
+        };
         Ok(Self {
             columns: raw.columns,
             sort_col: raw.sort_col,
             sort_dir: raw.sort_dir,
-            providers: raw.providers,
+            clients,
         }
         .normalize())
     }
 }
 
 #[cfg(test)]
-mod cfg_provider_tests {
+mod cfg_client_tests {
     use super::*;
-    use agtop_core::ProviderKind;
+    use agtop_core::ClientKind;
 
     #[test]
-    fn default_enables_all_providers() {
+    fn default_enables_all_clients() {
         let cfg = ColumnConfig::default();
-        assert_eq!(cfg.providers.len(), ProviderKind::all().len());
-        assert!(cfg.providers.iter().all(|e| e.enabled));
+        assert_eq!(cfg.clients.len(), ClientKind::all().len());
+        assert!(cfg.clients.iter().all(|e| e.enabled));
     }
 
     #[test]
-    fn enabled_providers_returns_hashset_of_enabled_kinds() {
+    fn provider_column_uses_client_labeling() {
+        assert_eq!(ColumnId::Client.label(), "CLIENT");
+        assert_eq!(
+            ColumnId::Client.description(),
+            "Agentic client (claude/codex/opencode)"
+        );
+    }
+
+    #[test]
+    fn enabled_clients_returns_hashset_of_enabled_kinds() {
         let mut cfg = ColumnConfig::default();
         // Disable the first entry.
-        let disabled_kind = cfg.providers[0].kind;
-        cfg.providers[0].enabled = false;
-        let live = cfg.enabled_providers();
+        let disabled_kind = cfg.clients[0].kind;
+        cfg.clients[0].enabled = false;
+        let live = cfg.enabled_clients();
         assert!(!live.contains(&disabled_kind));
-        assert_eq!(live.len(), cfg.providers.len() - 1);
+        assert_eq!(live.len(), cfg.clients.len() - 1);
     }
 
     #[test]
-    fn toggle_provider_flips_enabled_flag() {
+    fn toggle_client_flips_enabled_flag() {
         let mut cfg = ColumnConfig::default();
-        let was = cfg.providers[0].enabled;
-        cfg.toggle_provider(0);
-        assert_eq!(cfg.providers[0].enabled, !was);
+        let was = cfg.clients[0].enabled;
+        cfg.toggle_client(0);
+        assert_eq!(cfg.clients[0].enabled, !was);
     }
 
     #[test]
-    fn deserialize_missing_providers_field_defaults_to_all_enabled() {
-        // Historical config format with no `providers` field.
+    fn deserialize_missing_clients_field_defaults_to_all_enabled() {
+        // Historical config format with no `clients` field.
         let json = r#"{
             "columns": [],
             "sort_col": "last_active",
             "sort_dir": "desc"
         }"#;
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(cfg.providers.len(), ProviderKind::all().len());
-        assert!(cfg.providers.iter().all(|e| e.enabled));
+        assert_eq!(cfg.clients.len(), ClientKind::all().len());
+        assert!(cfg.clients.iter().all(|e| e.enabled));
+    }
+
+    #[test]
+    fn deserialize_legacy_provider_config_migrates_to_clients() {
+        let json = r#"{
+            "columns": [{"id": "provider", "visible": true}],
+            "sort_col": "provider",
+            "sort_dir": "asc",
+            "providers": [{"kind": "claude", "enabled": true}]
+        }"#;
+
+        let cfg: ColumnConfig =
+            serde_json::from_str(json).expect("deserialize legacy provider config");
+        assert_eq!(cfg.columns.len(), 1);
+        assert_eq!(cfg.columns[0].id, ColumnId::Client);
+        assert_eq!(cfg.sort_col, SortColumn::Client);
+        assert_eq!(cfg.sort_dir, SortDir::Asc);
+        assert_eq!(cfg.clients.len(), 1);
+        assert_eq!(cfg.clients[0].kind, ClientKind::Claude);
+        assert!(cfg.clients[0].enabled);
     }
 
     #[test]
@@ -441,7 +476,7 @@ mod cfg_provider_tests {
             "columns": [],
             "sort_col": "cost",
             "sort_dir": "desc",
-            "providers": []
+            "clients": []
         }"#;
 
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
@@ -455,7 +490,7 @@ mod cfg_provider_tests {
             "columns": [],
             "sort_col": "tokens",
             "sort_dir": "asc",
-            "providers": []
+            "clients": []
         }"#;
 
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
@@ -471,7 +506,7 @@ mod cfg_provider_tests {
         for id in &[
             ColumnId::Session,
             ColumnId::Age,
-            ColumnId::Provider,
+            ColumnId::Client,
             ColumnId::Model,
             ColumnId::Tokens,
             ColumnId::Context,

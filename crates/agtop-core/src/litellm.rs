@@ -31,7 +31,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::pricing::Rates;
-use crate::session::ProviderKind;
+use crate::session::ClientKind;
 
 /// Upstream URL of the LiteLLM model pricing table.
 pub const LITELLM_URL: &str =
@@ -157,7 +157,7 @@ impl PricingIndex {
             if let Some(ctx) = entry.max_input_tokens.filter(|w| *w > 0) {
                 ctx_by_key.insert(key.clone(), ctx);
             }
-            // … and also store variants that strip LiteLLM's provider
+            // … and also store variants that strip LiteLLM's upstream
             // prefixes so transcripts that report a bare model name still
             // hit. e.g. "anthropic.claude-opus-4-7" → also index under
             // "claude-opus-4-7"; "us.anthropic.claude-opus-4-7" → same.
@@ -182,7 +182,7 @@ impl PricingIndex {
     /// Look up a model by best-effort matching. Tries the exact key, then
     /// a few prefix normalizations. Returns `None` when nothing matches;
     /// the caller is expected to fall back to the built-in table.
-    pub fn lookup(&self, provider: ProviderKind, model: &str) -> Option<Rates> {
+    pub fn lookup(&self, client: ClientKind, model: &str) -> Option<Rates> {
         // Exact.
         if let Some(r) = self.by_key.get(model) {
             return Some(*r);
@@ -194,8 +194,8 @@ impl PricingIndex {
                 return Some(*r);
             }
         }
-        // Provider prefix ("anthropic.claude-opus-4-7", "openai/gpt-5.3-codex").
-        for candidate in prefix_candidates(provider, model) {
+        // Client prefix ("anthropic.claude-opus-4-7", "openai/gpt-5.3-codex").
+        for candidate in prefix_candidates(client, model) {
             if let Some(r) = self.by_key.get(&candidate) {
                 return Some(*r);
             }
@@ -213,7 +213,7 @@ impl PricingIndex {
         best.map(|(_, r)| r)
     }
 
-    pub fn lookup_context_window(&self, provider: ProviderKind, model: &str) -> Option<u64> {
+    pub fn lookup_context_window(&self, client: ClientKind, model: &str) -> Option<u64> {
         if let Some(w) = self.ctx_by_key.get(model).copied() {
             return Some(w);
         }
@@ -223,7 +223,7 @@ impl PricingIndex {
                 return Some(w);
             }
         }
-        for candidate in prefix_candidates(provider, model) {
+        for candidate in prefix_candidates(client, model) {
             if let Some(w) = self.ctx_by_key.get(&candidate).copied() {
                 return Some(w);
             }
@@ -246,21 +246,21 @@ impl PricingIndex {
 // ---------------------------------------------------------------------------
 
 /// Produce candidate keys for a model after adding/removing the common
-/// provider prefixes LiteLLM uses.
-fn prefix_candidates(provider: ProviderKind, model: &str) -> Vec<String> {
+/// upstream prefixes LiteLLM uses.
+fn prefix_candidates(client: ClientKind, model: &str) -> Vec<String> {
     let mut out = Vec::with_capacity(4);
-    // Strip "provider/model" → "model" (OpenCode reports these).
+    // Strip upstream-qualified model IDs like `anthropic/foo` → `foo`.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if !suffix.is_empty() {
             out.push(suffix.to_string());
         }
     }
-    match provider {
-        ProviderKind::Claude | ProviderKind::OpenCode => {
+    match client {
+        ClientKind::Claude | ClientKind::OpenCode => {
             out.push(format!("anthropic.{}", model));
             out.push(format!("anthropic/{}", model));
         }
-        ProviderKind::Codex => {
+        ClientKind::Codex => {
             out.push(format!("openai/{}", model));
         }
         _ => {}
@@ -280,8 +280,8 @@ fn strip_provider_prefixes(key: &str) -> Vec<String> {
             break;
         }
     }
-    const PROVIDERS: &[&str] = &["anthropic.", "openai.", "bedrock_converse."];
-    for p in PROVIDERS {
+    const PREFIXES: &[&str] = &["anthropic.", "openai.", "bedrock_converse."];
+    for p in PREFIXES {
         if let Some(rest) = work.strip_prefix(p) {
             out.push(rest.to_string());
         }
@@ -475,9 +475,9 @@ mod tests {
     fn index_filters_non_chat_modes() {
         let idx = PricingIndex::from_json(&sample_json());
         // dall-e-3 must be gone.
-        assert!(idx.lookup(ProviderKind::Codex, "dall-e-3").is_none());
+        assert!(idx.lookup(ClientKind::Codex, "dall-e-3").is_none());
         // sample_spec never gets stored.
-        assert!(idx.lookup(ProviderKind::Codex, "sample_spec").is_none());
+        assert!(idx.lookup(ClientKind::Codex, "sample_spec").is_none());
     }
 
     #[test]
@@ -487,7 +487,7 @@ mod tests {
         // "us.anthropic.claude-opus-4-7". Must match through prefix
         // stripping during indexing.
         let r = idx
-            .lookup(ProviderKind::Claude, "claude-opus-4-7")
+            .lookup(ClientKind::Claude, "claude-opus-4-7")
             .expect("claude opus 4-7 must be resolvable");
         assert!((r.input_per_m - 5.5).abs() < 1e-9);
         assert!((r.output_per_m - 27.5).abs() < 1e-9);
@@ -500,7 +500,7 @@ mod tests {
     fn index_units_are_usd_per_million() {
         let idx = PricingIndex::from_json(&sample_json());
         let r = idx
-            .lookup(ProviderKind::Codex, "gpt-5.4")
+            .lookup(ClientKind::Codex, "gpt-5.4")
             .expect("gpt-5.4 present");
         // 2.5e-06 per token → $2.50 per million.
         assert!((r.input_per_m - 2.5).abs() < 1e-9);
@@ -511,7 +511,7 @@ mod tests {
     #[test]
     fn index_supports_responses_mode_for_codex() {
         let idx = PricingIndex::from_json(&sample_json());
-        assert!(idx.lookup(ProviderKind::Codex, "gpt-5.3-codex").is_some());
+        assert!(idx.lookup(ClientKind::Codex, "gpt-5.3-codex").is_some());
     }
 
     #[test]
@@ -526,7 +526,7 @@ mod tests {
             }
         }));
         assert!(idx
-            .lookup(ProviderKind::Claude, "claude-sonnet-4-5-20250929")
+            .lookup(ClientKind::Claude, "claude-sonnet-4-5-20250929")
             .is_some());
     }
 
@@ -542,16 +542,16 @@ mod tests {
             }
         }));
         assert!(idx
-            .lookup(ProviderKind::OpenCode, "anthropic/claude-haiku-4-5")
+            .lookup(ClientKind::OpenCode, "anthropic/claude-haiku-4-5")
             .is_some());
     }
 
     #[test]
-    fn prefix_candidates_ignore_unmapped_providers() {
-        assert!(prefix_candidates(ProviderKind::Copilot, "gpt-4.1").is_empty());
-        assert!(prefix_candidates(ProviderKind::GeminiCli, "gemini-2.5-pro").is_empty());
-        assert!(prefix_candidates(ProviderKind::Cursor, "claude-sonnet-4-5").is_empty());
-        assert!(prefix_candidates(ProviderKind::Antigravity, "sonnet").is_empty());
+    fn prefix_candidates_ignore_unmapped_clients() {
+        assert!(prefix_candidates(ClientKind::Copilot, "gpt-4.1").is_empty());
+        assert!(prefix_candidates(ClientKind::GeminiCli, "gemini-2.5-pro").is_empty());
+        assert!(prefix_candidates(ClientKind::Cursor, "claude-sonnet-4-5").is_empty());
+        assert!(prefix_candidates(ClientKind::Antigravity, "sonnet").is_empty());
     }
 
     #[test]

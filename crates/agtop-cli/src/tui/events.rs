@@ -302,9 +302,9 @@ mod tests {
         let mut app = App::new();
         app.set_tab(Tab::Config);
         // Place cursor in the Columns section at local index 1 so that it can
-        // legitimately move both down and up. Providers occupy the first N rows.
-        let n_providers = app.column_config().providers.len();
-        app.set_config_cursor(n_providers + 1);
+        // legitimately move both down and up. Clients occupy the first N rows.
+        let n_clients = app.column_config().clients.len();
+        app.set_config_cursor(n_clients + 1);
         let cursor_before = app.config_cursor();
         let local_before = app.config_local_idx(cursor_before);
         let before = full_order(&app);
@@ -336,8 +336,8 @@ mod tests {
         app.set_tab(Tab::Config);
         // Place cursor in the Columns section at local index 1 so that it can
         // move up within the Columns section.
-        let n_providers = app.column_config().providers.len();
-        app.set_config_cursor(n_providers + 1);
+        let n_clients = app.column_config().clients.len();
+        app.set_config_cursor(n_clients + 1);
         let cursor_before = app.config_cursor();
         let local_before = app.config_local_idx(cursor_before);
         let before = full_order(&app);
@@ -359,8 +359,8 @@ mod tests {
         let mut app = App::new();
         app.set_tab(Tab::Config);
         // Place cursor at the start of the Columns section so Shift+Down works.
-        let n_providers = app.column_config().providers.len();
-        app.set_config_cursor(n_providers);
+        let n_clients = app.column_config().clients.len();
+        app.set_config_cursor(n_clients);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Down));
@@ -374,8 +374,8 @@ mod tests {
         let mut app = App::new();
         app.set_tab(Tab::Config);
         // Place cursor in the Columns section at local index 1 so Shift+Up can move up.
-        let n_providers = app.column_config().providers.len();
-        app.set_config_cursor(n_providers + 1);
+        let n_clients = app.column_config().clients.len();
+        app.set_config_cursor(n_clients + 1);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Up));
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn dashboard_j_key_routes_to_plan_selection() {
-        use agtop_core::session::{PlanUsage, ProviderKind};
+        use agtop_core::session::{ClientKind, PlanUsage};
 
         let mut app = App::new();
         app.toggle_ui_mode(); // Dashboard mode
@@ -452,7 +452,7 @@ mod tests {
         // Populate plan_usage with 2 entries so plan_select_next has room to move.
         let make_pu = |label: &str| {
             PlanUsage::new(
-                ProviderKind::Claude,
+                ClientKind::Claude,
                 label.to_string(),
                 None,
                 Vec::new(),

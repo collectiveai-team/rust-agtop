@@ -1,4 +1,4 @@
-//! Gemini CLI provider — `~/.gemini/tmp/<slug>/chats/session-*.(json|jsonl)`.
+//! Gemini CLI client — `~/.gemini/tmp/<slug>/chats/session-*.(json|jsonl)`.
 //!
 //! Older Gemini CLI builds wrote JSONL session headers; current builds store
 //! the full session as a single JSON document.
@@ -13,19 +13,19 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
+use crate::client::Client;
+use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
-use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 #[derive(Debug)]
-pub struct GeminiCliProvider {
+pub struct GeminiCliClient {
     pub gemini_dir: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for GeminiCliProvider {
+impl Default for GeminiCliClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
@@ -35,9 +35,9 @@ impl Default for GeminiCliProvider {
     }
 }
 
-impl Provider for GeminiCliProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::GeminiCli
+impl Client for GeminiCliClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::GeminiCli
     }
 
     fn display_name(&self) -> &'static str {
@@ -138,11 +138,11 @@ impl Provider for GeminiCliProvider {
         );
 
         let effective_model = summary.model.clone();
-        let included = matches!(plan.mode_for(ProviderKind::GeminiCli), PlanMode::Included);
+        let included = matches!(plan.mode_for(ClientKind::GeminiCli), PlanMode::Included);
 
         let cost = match &effective_model {
             Some(m) if tokens.grand_total() > 0 => {
-                match pricing::lookup(ProviderKind::GeminiCli, m) {
+                match pricing::lookup(ClientKind::GeminiCli, m) {
                     Some(rates) => pricing::compute_cost(&tokens, &rates, included),
                     None => CostBreakdown::default(),
                 }
@@ -270,7 +270,7 @@ fn parse_gemini_session(
     let last_active = last_updated.or_else(|| mtime(path));
 
     Ok(SessionSummary::new(
-        ProviderKind::GeminiCli,
+        ClientKind::GeminiCli,
         subscription,
         session_id,
         started_at,
@@ -329,7 +329,7 @@ fn parse_gemini_session_json(
         .or(global_model);
 
     Ok(SessionSummary::new(
-        ProviderKind::GeminiCli,
+        ClientKind::GeminiCli,
         subscription,
         session_id,
         started_at,
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: std::path::PathBuf::from("/no/such/path"),
             discover_cache: Mutex::default(),
         };
@@ -454,14 +454,14 @@ mod tests {
             .write_all(line.as_bytes())
             .unwrap();
 
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: td.path.clone(),
             discover_cache: Mutex::default(),
         };
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "sess-001");
-        assert_eq!(sessions[0].provider, ProviderKind::GeminiCli);
+        assert_eq!(sessions[0].client, ClientKind::GeminiCli);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/home/user/myproject"));
     }
 
@@ -518,7 +518,7 @@ mod tests {
         )
         .unwrap();
 
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: td.path.clone(),
             discover_cache: Mutex::default(),
         };
@@ -526,7 +526,7 @@ mod tests {
 
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, "sess-002");
-        assert_eq!(sessions[0].provider, ProviderKind::GeminiCli);
+        assert_eq!(sessions[0].client, ClientKind::GeminiCli);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/home/user/myproject"));
         assert_eq!(sessions[0].model.as_deref(), Some("gemini-3-flash-preview"));
     }

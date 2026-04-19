@@ -12,8 +12,9 @@ use agtop_core::session::{SessionAnalysis, TokenTotals};
 pub enum SortColumn {
     /// Last-active timestamp (descending = most recent first). Default.
     LastActive,
-    /// Provider name, then session id (ascending, alphabetical).
-    Provider,
+    /// Client name, then session id (ascending, alphabetical).
+    #[serde(alias = "provider")]
+    Client,
     /// Session started-at timestamp (descending = newest first).
     Started,
     /// Model string (ascending). Unknowns sort last.
@@ -42,8 +43,8 @@ impl SortColumn {
     /// Column immediately after `self` in the cycle order. Wraps around.
     pub fn next(self) -> Self {
         match self {
-            Self::LastActive => Self::Provider,
-            Self::Provider => Self::Started,
+            Self::LastActive => Self::Client,
+            Self::Client => Self::Started,
             Self::Started => Self::Model,
             Self::Model => Self::Cost,
             Self::Cost => Self::Tokens,
@@ -62,7 +63,7 @@ impl SortColumn {
     pub fn label(self) -> &'static str {
         match self {
             Self::LastActive => "last-active",
-            Self::Provider => "provider",
+            Self::Client => "client",
             Self::Started => "started",
             Self::Model => "model",
             Self::Cost => "cost",
@@ -91,7 +92,7 @@ impl SortColumn {
             | Self::Duration
             | Self::AgentTurns
             | Self::UserTurns => SortDir::Desc,
-            Self::Provider | Self::Model | Self::Project => SortDir::Asc,
+            Self::Client | Self::Model | Self::Project => SortDir::Asc,
         }
     }
 }
@@ -128,8 +129,8 @@ pub(super) fn sort_key(
     use std::cmp::Ordering;
     match col {
         SortColumn::LastActive => a.summary.last_active.cmp(&b.summary.last_active),
-        SortColumn::Provider => {
-            let p = a.summary.provider.as_str().cmp(b.summary.provider.as_str());
+        SortColumn::Client => {
+            let p = a.summary.client.as_str().cmp(b.summary.client.as_str());
             if p == Ordering::Equal {
                 a.summary.session_id.cmp(&b.summary.session_id)
             } else {

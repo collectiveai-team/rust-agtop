@@ -12,7 +12,7 @@ use agtop_core::session::PlanUsage;
 // Merged subscription data
 // ---------------------------------------------------------------------------
 
-/// One subscription entry after deduplication across providers/agents.
+/// One subscription entry after deduplication across clients/agents.
 struct MergedPlan<'a> {
     /// Human-readable subscription name ("Max 5x", "ChatGPT Plus", …).
     subscription_name: String,
@@ -333,11 +333,11 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{PlanUsage, PlanWindow, ProviderKind};
+    use agtop_core::session::{ClientKind, PlanUsage, PlanWindow};
 
     fn make_pu(label: &str, plan_name: Option<&str>) -> PlanUsage {
         PlanUsage::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             label.to_string(),
             plan_name.map(|s| s.to_string()),
             Vec::new(),

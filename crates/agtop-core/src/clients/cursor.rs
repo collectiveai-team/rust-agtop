@@ -1,4 +1,4 @@
-//! Cursor provider — agent transcript JSONL + SQLite state DB.
+//! Cursor client — agent transcript JSONL + SQLite state DB.
 //!
 //! Agent transcripts live at:
 //!   `~/.cursor/projects/<workspace>/agent-transcripts/<uuid>/<uuid>.jsonl`
@@ -18,20 +18,20 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
+use crate::client::Client;
+use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
-use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 #[derive(Debug)]
-pub struct CursorProvider {
+pub struct CursorClient {
     pub projects_root: PathBuf,
     pub state_db: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for CursorProvider {
+impl Default for CursorClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
 
@@ -52,9 +52,9 @@ impl Default for CursorProvider {
     }
 }
 
-impl Provider for CursorProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Cursor
+impl Client for CursorClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Cursor
     }
 
     fn display_name(&self) -> &'static str {
@@ -207,7 +207,7 @@ fn parse_cursor_transcript(
     let last_active = latest.or_else(|| mtime(path));
 
     Ok(SessionSummary::new(
-        ProviderKind::Cursor,
+        ClientKind::Cursor,
         subscription,
         session_id,
         earliest,
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = CursorProvider {
+        let p = CursorClient {
             projects_root: std::path::PathBuf::from("/no/such/path"),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
             discover_cache: Mutex::default(),
@@ -360,7 +360,7 @@ mod tests {
         writeln!(f, "{}", line1).unwrap();
         writeln!(f, "{}", line2).unwrap();
 
-        let p = CursorProvider {
+        let p = CursorClient {
             projects_root: td.path.clone(),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
             discover_cache: Mutex::default(),
@@ -368,7 +368,7 @@ mod tests {
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, composer_id);
-        assert_eq!(sessions[0].provider, ProviderKind::Cursor);
+        assert_eq!(sessions[0].client, ClientKind::Cursor);
         assert_eq!(sessions[0].model.as_deref(), Some("gpt-4.1"));
         assert_eq!(sessions[0].cwd.as_deref(), Some("myworkspace"));
     }

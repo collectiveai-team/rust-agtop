@@ -1,4 +1,4 @@
-//! Concrete [`Provider`](crate::Provider) implementations.
+//! Concrete [`Client`](crate::Client) implementations.
 pub mod antigravity;
 pub mod claude;
 pub mod codex;

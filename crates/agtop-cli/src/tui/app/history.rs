@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Utc};
 
-use agtop_core::session::ProviderKind;
+use agtop_core::session::ClientKind;
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -21,11 +21,11 @@ const RETENTION_SECS: i64 = CHART_WINDOW_MINS * 60 * 2;
 // Types
 // ---------------------------------------------------------------------------
 
-/// A single data point: one snapshot of per-provider cumulative token totals.
+/// A single data point: one snapshot of per-client cumulative token totals.
 #[derive(Debug, Clone)]
 pub struct UsagePoint {
     pub ts: DateTime<Utc>,
-    pub tokens_by_provider: [u64; 7],
+    pub tokens_by_client: [u64; 7],
 }
 
 /// Bounded ring-buffer of [`UsagePoint`]s used to draw the spark / line charts
@@ -51,24 +51,19 @@ impl UsageHistory {
     }
 
     /// Aggregate the last `CHART_WINDOW_MINS` of data into `n_buckets` evenly
-    /// spaced buckets for the given provider.  Each bucket holds the *maximum*
+    /// spaced buckets for the given client. Each bucket holds the *maximum*
     /// token value seen in that interval (max rather than sum because individual
     /// points are already cumulative snapshots, not deltas).
-    pub fn buckets_by_provider(
+    pub fn buckets_by_client(
         &self,
         now: DateTime<Utc>,
         n_buckets: usize,
-        provider: ProviderKind,
+        client: ClientKind,
     ) -> Vec<u64> {
-        self.buckets_by_provider_idx(now, n_buckets, provider_idx(provider))
+        self.buckets_by_client_idx(now, n_buckets, client_idx(client))
     }
 
-    fn buckets_by_provider_idx(
-        &self,
-        now: DateTime<Utc>,
-        n_buckets: usize,
-        idx: usize,
-    ) -> Vec<u64> {
+    fn buckets_by_client_idx(&self, now: DateTime<Utc>, n_buckets: usize, idx: usize) -> Vec<u64> {
         if n_buckets == 0 {
             return Vec::new();
         }
@@ -87,7 +82,7 @@ impl UsageHistory {
                 continue;
             }
             let bucket = n_buckets - 1 - bucket_from_end;
-            let v = p.tokens_by_provider[idx];
+            let v = p.tokens_by_client[idx];
             out[bucket] = out[bucket].max(v);
         }
 
@@ -99,16 +94,16 @@ impl UsageHistory {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Map a `ProviderKind` to the index used in `UsagePoint::tokens_by_provider`.
-pub(super) fn provider_idx(kind: ProviderKind) -> usize {
+/// Map a `ClientKind` to the index used in `UsagePoint::tokens_by_client`.
+pub(super) fn client_idx(kind: ClientKind) -> usize {
     match kind {
-        ProviderKind::Claude => 0,
-        ProviderKind::Codex => 1,
-        ProviderKind::OpenCode => 2,
-        ProviderKind::Copilot => 3,
-        ProviderKind::GeminiCli => 4,
-        ProviderKind::Cursor => 5,
-        ProviderKind::Antigravity => 6,
+        ClientKind::Claude => 0,
+        ClientKind::Codex => 1,
+        ClientKind::OpenCode => 2,
+        ClientKind::Copilot => 3,
+        ClientKind::GeminiCli => 4,
+        ClientKind::Cursor => 5,
+        ClientKind::Antigravity => 6,
         _ => 0, // fallback for any future variants; accumulate into Claude bucket
     }
 }

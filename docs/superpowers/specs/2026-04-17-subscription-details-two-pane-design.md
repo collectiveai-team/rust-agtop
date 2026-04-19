@@ -5,11 +5,11 @@
 
 ## Overview
 
-Redesign the Subscription Details pane in the agtop TUI dashboard from a single scrolling list of provider cards to a two-pane interactive view: a left subscription list with usage bars and a right details panel showing all usage windows with colored progress bars and reset times.
+Redesign the Subscription Details pane in the agtop TUI dashboard from a single scrolling list of client cards to a two-pane interactive view: a left subscription list with usage bars and a right details panel showing all usage windows with colored progress bars and reset times.
 
 ## Goals
 
-- Show one card per subscription (e.g. "Claude Max", "ChatGPT Plus"), not one per agent/provider combination.
+- Show one card per subscription (e.g. "Claude Max", "ChatGPT Plus"), not one per agent/client combination.
 - Show all usage windows (5-Hour, 7-Day, 7-Day Sonnet, Weekly, etc.) in the details pane with colored bars.
 - Show next reset datetime (local timezone) per window.
 - Use traffic-light coloring for bars: green <30%, yellow 30–80%, red ≥80%.
@@ -19,7 +19,7 @@ Redesign the Subscription Details pane in the agtop TUI dashboard from a single 
 
 - Predicting future usage.
 - Showing cost information (that is the Cost Summary pane's job).
-- Changing the data collection layer or provider integrations.
+- Changing the data collection layer or client integrations.
 
 ## Layout
 
@@ -53,7 +53,7 @@ The existing `dashboard_plan` area is split horizontally **40% left / 60% right*
 
 A `canonical_subscription_name(pu: &PlanUsage) -> String` helper:
 1. Use `pu.plan_name` if set.
-2. Otherwise, strip known agent suffixes from `pu.label`: ` via Claude Code`, ` via OpenCode`, ` via Codex`; strip ` · ` provider prefixes.
+2. Otherwise, strip known agent suffixes from `pu.label`: ` via Claude Code`, ` via OpenCode`, ` via Codex`; strip ` · ` client prefixes.
 3. Resulting name must not contain agent/tool names.
 
 Examples:

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ProviderKind {
+pub enum ClientKind {
     Claude,
     Codex,
     OpenCode,
@@ -17,7 +17,7 @@ pub enum ProviderKind {
     Antigravity,
 }
 
-impl ProviderKind {
+impl ClientKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -31,11 +31,11 @@ impl ProviderKind {
         }
     }
 
-    /// Every `ProviderKind` variant, in a stable display order.
+    /// Every `ClientKind` variant, in a stable display order.
     /// Keep this in sync with the enum definition — a missing variant
-    /// here silently excludes that provider from default-enabled sets.
+    /// here silently excludes that client from default-enabled sets.
     #[must_use]
-    pub const fn all() -> &'static [ProviderKind] {
+    pub const fn all() -> &'static [ClientKind] {
         &[
             Self::Claude,
             Self::Codex,
@@ -48,7 +48,7 @@ impl ProviderKind {
     }
 }
 
-impl std::fmt::Display for ProviderKind {
+impl std::fmt::Display for ClientKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -58,7 +58,8 @@ impl std::fmt::Display for ProviderKind {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
-    pub provider: ProviderKind,
+    #[serde(alias = "provider")]
+    pub client: ClientKind,
     /// Billing/auth bucket for this session when known, e.g. "Max 5x",
     /// "ChatGPT Plus", or "API key".
     #[serde(default)]
@@ -72,16 +73,16 @@ pub struct SessionSummary {
     /// Coarse workflow state such as `waiting` or `stopped`.
     #[serde(default)]
     pub state: Option<String>,
-    /// Provider-specific explanation of the derived state.
+    /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
-    /// Explicit reasoning/model effort when the provider exposes it.
+    /// Explicit reasoning/model effort when the client exposes it.
     #[serde(default)]
     pub model_effort: Option<String>,
-    /// Provider-specific explanation of where the effort came from.
+    /// Client-specific explanation of where the effort came from.
     #[serde(default)]
     pub model_effort_detail: Option<String>,
-    /// Human-readable session title when the provider stores one (e.g. the
+    /// Human-readable session title when the client stores one (e.g. the
     /// first user message summary in OpenCode).
     #[serde(default)]
     pub session_title: Option<String>,
@@ -91,7 +92,7 @@ pub struct SessionSummary {
 
 /// Aggregated token counts across all turns in a session.
 ///
-/// Fields map to the vocabulary each provider exposes; not every provider
+/// Fields map to the vocabulary each client exposes; not every client
 /// populates every field.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -115,7 +116,7 @@ impl SessionSummary {
     /// when new (non-exhaustive) fields are added.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        provider: ProviderKind,
+        client: ClientKind,
         subscription: Option<String>,
         session_id: String,
         started_at: Option<DateTime<Utc>>,
@@ -129,7 +130,7 @@ impl SessionSummary {
         model_effort_detail: Option<String>,
     ) -> Self {
         Self {
-            provider,
+            client,
             subscription,
             session_id,
             started_at,
@@ -187,11 +188,11 @@ pub struct SessionAnalysis {
     pub effective_model: Option<String>,
     /// Number of Claude subagent sidechain transcripts folded into
     /// `tokens` / `cost` (0 when the session has none, or for non-Claude
-    /// providers). Defaults to 0 on deserialization so older JSON
+    /// clients). Defaults to 0 on deserialization so older JSON
     /// consumers remain compatible.
     #[serde(default)]
     pub subagent_file_count: usize,
-    /// Number of tool invocations observed in the transcript (provider
+    /// Number of tool invocations observed in the transcript (client
     /// specific best-effort). `None` when unavailable.
     #[serde(default)]
     pub tool_call_count: Option<u64>,
@@ -200,7 +201,7 @@ pub struct SessionAnalysis {
     #[serde(default)]
     pub duration_secs: Option<u64>,
     /// Peak per-turn context usage as a percentage of the model context
-    /// window (0..=100+), when the provider exposes both values.
+    /// window (0..=100+), when the client exposes both values.
     #[serde(default)]
     pub context_used_pct: Option<f64>,
     /// Raw token count at the peak-utilization turn (numerator of
@@ -211,16 +212,16 @@ pub struct SessionAnalysis {
     /// `context_used_pct`. `None` when `context_used_pct` is `None`.
     #[serde(default)]
     pub context_window: Option<u64>,
-    /// Child subagent sessions, if this provider exposes a parent/child
+    /// Child subagent sessions, if this client exposes a parent/child
     /// relationship. Empty by default; populated by the refresh layer.
     #[serde(default)]
     pub children: Vec<SessionAnalysis>,
     /// Number of agent/assistant turns observed in the transcript.
-    /// `None` when the provider does not expose this information.
+    /// `None` when the client does not expose this information.
     #[serde(default)]
     pub agent_turns: Option<u64>,
     /// Number of user turns observed in the transcript.
-    /// `None` when the provider does not expose this information.
+    /// `None` when the client does not expose this information.
     #[serde(default)]
     pub user_turns: Option<u64>,
     /// Inferred project name (e.g. from `git remote get-url origin`).
@@ -288,7 +289,7 @@ impl PlanWindow {
 impl PlanUsage {
     /// Construct a [`PlanUsage`] with all fields explicitly specified.
     pub fn new(
-        provider: ProviderKind,
+        client: ClientKind,
         label: String,
         plan_name: Option<String>,
         windows: Vec<PlanWindow>,
@@ -296,7 +297,7 @@ impl PlanUsage {
         note: Option<String>,
     ) -> Self {
         Self {
-            provider,
+            client,
             label,
             plan_name,
             windows,
@@ -313,7 +314,7 @@ impl PlanUsage {
 /// One rate-limit window (e.g. Anthropic's 5-hour rolling cap).
 ///
 /// `utilization` is a fraction in 0.0..=1.0 where available; `reset_at` is
-/// the UTC time the window resets, also when available. Providers may
+/// the UTC time the window resets, also when available. Clients may
 /// populate only a subset of these fields; renderers must treat every
 /// field as optional.
 #[non_exhaustive]
@@ -321,12 +322,12 @@ impl PlanUsage {
 pub struct PlanWindow {
     /// Short label shown next to the gauge, e.g. "5h" or "7d".
     pub label: String,
-    /// Utilization as a fraction [0.0, 1.0]. `None` when the provider
+    /// Utilization as a fraction [0.0, 1.0]. `None` when the client
     /// does not expose a gauge (e.g. Claude Code).
     pub utilization: Option<f64>,
     /// When the window resets, in UTC. `None` when unknown.
     pub reset_at: Option<DateTime<Utc>>,
-    /// Free-form human text from the provider (e.g. Claude's "resets 3pm
+    /// Free-form human text from the client (e.g. Claude's "resets 3pm
     /// (America/Buenos_Aires)"). Used when we have no structured reset_at.
     pub reset_hint: Option<String>,
     /// True when this window is the representative/binding one for the plan
@@ -335,17 +336,18 @@ pub struct PlanWindow {
     pub binding: bool,
 }
 
-/// Plan + usage snapshot for a (provider, auth) pair.
+/// Plan + usage snapshot for a (client, auth) pair.
 ///
-/// A single provider can contribute multiple entries when the user has
+/// A single client can contribute multiple entries when the user has
 /// more than one auth (e.g. Claude Code on Anthropic Max AND OpenCode on
 /// the same Anthropic Max — each produces its own `PlanUsage` because the
 /// data sources are different).
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanUsage {
-    pub provider: ProviderKind,
-    /// Provider-qualified label for the card header, e.g. "Claude Code ·
+    #[serde(alias = "provider")]
+    pub client: ClientKind,
+    /// Client-qualified label for the card header, e.g. "Claude Code ·
     /// Max 5x" or "OpenCode · anthropic (Max)". Free-form; renderers
     /// display verbatim.
     pub label: String,
@@ -357,7 +359,7 @@ pub struct PlanUsage {
     #[serde(default)]
     pub windows: Vec<PlanWindow>,
     /// Most recent moment the user was observed to hit a rate limit.
-    /// Used for providers that don't expose gauges but do record
+    /// Used for clients that don't expose gauges but do record
     /// limit-hit events (Claude Code's synthetic error messages).
     pub last_limit_hit: Option<DateTime<Utc>>,
     /// Free-form note rendered below the gauges, e.g. "waiting for
@@ -368,13 +370,54 @@ pub struct PlanUsage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn provider_kind_all_lists_every_variant() {
-        let all = ProviderKind::all();
-        assert_eq!(all.len(), 7, "expected all 7 providers: {all:?}");
+    fn client_kind_all_lists_every_variant() {
+        let all = ClientKind::all();
+        assert_eq!(all.len(), 7, "expected all 7 clients: {all:?}");
         // Spot-check a couple of variants to guard against silent drift.
-        assert!(all.contains(&ProviderKind::Claude));
-        assert!(all.contains(&ProviderKind::Antigravity));
+        assert!(all.contains(&ClientKind::Claude));
+        assert!(all.contains(&ClientKind::Antigravity));
+    }
+
+    #[test]
+    fn session_summary_deserializes_legacy_provider_field() {
+        let raw = json!({
+            "provider": "claude",
+            "subscription": "Max 5x",
+            "session_id": "abc",
+            "started_at": null,
+            "last_active": null,
+            "model": null,
+            "cwd": null,
+            "state": null,
+            "state_detail": null,
+            "model_effort": null,
+            "model_effort_detail": null,
+            "session_title": null,
+            "data_path": "/tmp/demo"
+        });
+
+        let summary: SessionSummary =
+            serde_json::from_value(raw).expect("deserialize legacy summary");
+        assert_eq!(summary.client, ClientKind::Claude);
+        assert_eq!(summary.subscription.as_deref(), Some("Max 5x"));
+    }
+
+    #[test]
+    fn plan_usage_deserializes_legacy_provider_field() {
+        let raw = json!({
+            "provider": "codex",
+            "label": "Codex · Plus",
+            "plan_name": "plus",
+            "windows": [],
+            "last_limit_hit": null,
+            "note": null
+        });
+
+        let usage: PlanUsage = serde_json::from_value(raw).expect("deserialize legacy plan usage");
+        assert_eq!(usage.client, ClientKind::Codex);
+        assert_eq!(usage.plan_name.as_deref(), Some("plus"));
     }
 }

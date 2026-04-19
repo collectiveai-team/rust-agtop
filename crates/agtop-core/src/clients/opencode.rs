@@ -1,4 +1,4 @@
-//! OpenCode provider — `~/.local/share/opencode/`.
+//! OpenCode client — `~/.local/share/opencode/`.
 //!
 //! **Storage format history:**
 //! - v1.1.x and earlier: JSON files under `storage/session/<projectId>/ses_*.json`
@@ -6,7 +6,7 @@
 //! - v1.4.x+: SQLite database at `opencode.db` with `session` and `message` tables.
 //!   Message data is stored as JSON in the `data` column.
 //!
-//! This provider tries SQLite first (preferred), then falls back to the legacy
+//! This client tries SQLite first (preferred), then falls back to the legacy
 //! JSON layout so that old session history is still visible.
 
 use std::collections::HashMap;
@@ -20,12 +20,12 @@ use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use crate::client::Client;
+use crate::clients::util::{dir_exists, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Provider;
-use crate::providers::util::{dir_exists, DiscoverCache};
 use crate::session::{
-    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -33,12 +33,12 @@ const MAX_LIVE_USAGE_RESPONSE_BYTES: usize = 256 * 1024;
 const LIVE_USAGE_REFRESH_COOLDOWN: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
-pub struct OpenCodeProvider {
+pub struct OpenCodeClient {
     pub storage_root: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for OpenCodeProvider {
+impl Default for OpenCodeClient {
     fn default() -> Self {
         // XDG data dir; fallback to ~/.local/share.
         let base = dirs::data_dir().unwrap_or_else(|| {
@@ -54,9 +54,9 @@ impl Default for OpenCodeProvider {
     }
 }
 
-impl Provider for OpenCodeProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::OpenCode
+impl Client for OpenCodeClient {
+    fn kind(&self) -> ClientKind {
+        ClientKind::OpenCode
     }
 
     fn display_name(&self) -> &'static str {
@@ -189,7 +189,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
     let auth_entries = read_auth_entries(storage_root);
     let db_path = storage_root.join("opencode.db");
 
-    let mut oauth_providers: Vec<String> = auth_kinds
+    let mut oauth_client_ids: Vec<String> = auth_kinds
         .iter()
         .filter_map(|(provider_id, kind)| {
             if *kind == AuthKind::Oauth {
@@ -199,9 +199,9 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             }
         })
         .collect();
-    oauth_providers.sort();
+    oauth_client_ids.sort();
 
-    if oauth_providers.is_empty() {
+    if oauth_client_ids.is_empty() {
         return Vec::new();
     }
 
@@ -254,7 +254,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
     }
 
     let mut out = Vec::new();
-    for provider_id in oauth_providers {
+    for provider_id in oauth_client_ids {
         let live_usage = auth_entries
             .get(&provider_id)
             .and_then(|entry| {
@@ -273,7 +273,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
         if provider_id == "anthropic" {
             if let Some(live) = live_usage {
                 out.push(PlanUsage {
-                    provider: ProviderKind::OpenCode,
+                    client: ClientKind::OpenCode,
                     label: format!("OpenCode · {}", live.plan_name),
                     plan_name: Some(live.plan_name),
                     windows: live.windows,
@@ -284,7 +284,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             }
 
             out.push(PlanUsage {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 label: "OpenCode · Max 5x".to_string(),
                 plan_name: Some("Max 5x".to_string()),
                 windows: anthropic_windows.clone(),
@@ -297,7 +297,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
         if let Some(live) = live_usage {
             let plan_name = live.plan_name;
             out.push(PlanUsage {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 label: format!("OpenCode · {plan_name}"),
                 plan_name: Some(plan_name),
                 windows: live.windows,
@@ -312,7 +312,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             .cloned()
             .unwrap_or_else(|| format!("{} (OAuth)", title_case_words(&provider_id)));
         out.push(PlanUsage {
-            provider: ProviderKind::OpenCode,
+            client: ClientKind::OpenCode,
             label: format!("OpenCode · {plan_name}"),
             plan_name: Some(plan_name),
             windows: Vec::new(),
@@ -544,12 +544,12 @@ fn session_activity_timestamp(summary: &SessionSummary) -> Option<DateTime<Utc>>
 fn session_matches_live_usage_provider(summary: &SessionSummary, provider_id: &str) -> bool {
     match provider_id {
         "anthropic" => {
-            summary.provider == ProviderKind::Claude
+            summary.client == ClientKind::Claude
                 || subscription_matches(summary.subscription.as_deref(), &["max"])
                 || model_matches_family(summary.model.as_deref(), "anthropic")
         }
         "openai" => {
-            summary.provider == ProviderKind::Codex
+            summary.client == ClientKind::Codex
                 || subscription_matches(summary.subscription.as_deref(), &["chatgpt"])
                 || model_matches_family(summary.model.as_deref(), "openai")
         }
@@ -840,32 +840,32 @@ fn title_case_words(raw: &str) -> String {
 
 fn resolve_subscription(
     subscriptions: &HashMap<String, String>,
-    provider_id: Option<&str>,
+    service_id: Option<&str>,
     model: Option<&str>,
 ) -> Option<String> {
-    if let Some(provider) = provider_id {
-        if let Some(name) = subscriptions.get(provider) {
+    if let Some(service) = service_id {
+        if let Some(name) = subscriptions.get(service) {
             return Some(name.clone());
         }
     }
 
-    let inferred_provider = model.and_then(infer_provider_from_model);
-    inferred_provider.and_then(|provider| subscriptions.get(provider).cloned())
+    let inferred_service = model.and_then(infer_service_from_model);
+    inferred_service.and_then(|service| subscriptions.get(service).cloned())
 }
 
-fn infer_provider_from_model(model: &str) -> Option<&'static str> {
+fn infer_service_from_model(model: &str) -> Option<&'static str> {
     let lower = model.to_ascii_lowercase();
-    for provider in [
+    for service in [
         "anthropic",
         "openai",
         "github-copilot",
         "amazon-bedrock",
         "opencode",
     ] {
-        let slash = format!("{provider}/");
-        let dot = format!("{provider}.");
+        let slash = format!("{service}/");
+        let dot = format!("{service}.");
         if lower.starts_with(&slash) || lower.starts_with(&dot) {
-            return Some(provider);
+            return Some(service);
         }
     }
     None
@@ -1055,7 +1055,7 @@ fn list_sessions_sqlite(
                     (None, None)
                 };
             SessionSummary {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 subscription,
                 session_id: id.clone(),
                 started_at,
@@ -1114,7 +1114,7 @@ fn list_child_sessions_sqlite(
                         .map_or((None, None), |(e, d)| (Some(e), Some(d)))
                 };
             SessionSummary {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 subscription,
                 session_id: id.clone(),
                 started_at,
@@ -1240,7 +1240,7 @@ impl TurnAccumulator {
         }
         if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
             if let Some(window) =
-                pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
+                pricing::context_window(ClientKind::OpenCode, m).filter(|w| *w > 0)
             {
                 let turn_total = v
                     .get("tokens")
@@ -1295,11 +1295,11 @@ impl TurnAccumulator {
         }
         self.totals.cached_input = self.totals.cache_read;
 
-        let included = matches!(plan.mode_for(ProviderKind::OpenCode), PlanMode::Included);
+        let included = matches!(plan.mode_for(ClientKind::OpenCode), PlanMode::Included);
         let cost = match self
             .model
             .as_deref()
-            .and_then(|m| pricing::lookup(ProviderKind::OpenCode, m))
+            .and_then(|m| pricing::lookup(ClientKind::OpenCode, m))
         {
             Some(rates) => pricing::compute_cost(&self.totals, &rates, included),
             None => {
@@ -1487,7 +1487,7 @@ fn summarize_opencode_session_json(
     };
 
     Ok(SessionSummary {
-        provider: ProviderKind::OpenCode,
+        client: ClientKind::OpenCode,
         subscription,
         session_id,
         started_at: created,
@@ -1922,7 +1922,7 @@ mod tests {
         let tmp = TestDir::new("agtop-opencode-json-variant-order");
         let session_file = write_json_session(&tmp.path, "ses_1");
 
-        // The legacy JSON layout uses `msg_*.json` files. The provider should
+        // The legacy JSON layout uses `msg_*.json` files. The client should
         // choose the earliest user-message variant by message sequence, not by
         // raw directory iteration order or lexicographic filename order.
         write_json_message(
@@ -1995,11 +1995,11 @@ mod tests {
         });
         insert_message(&tmp.path, data, 1_774_290_000_000);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
         assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
@@ -2022,22 +2022,22 @@ mod tests {
         write_auth_json(&tmp.path, "api");
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
     }
 
     #[test]
     fn plan_usage_missing_db_returns_empty_without_auth() {
         let tmp = TestDir::new("agtop-opencode-plan-missing-db");
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
     }
 
@@ -2047,11 +2047,11 @@ mod tests {
         write_auth_json(&tmp.path, "oauth");
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
         assert_eq!(pu.note.as_deref(), Some("no recent rate-limit snapshot"));
@@ -2059,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_usage_emits_cards_for_multiple_oauth_providers() {
+    fn plan_usage_emits_cards_for_multiple_oauth_clients() {
         let tmp = TestDir::new("agtop-opencode-plan-multi-oauth");
         let auth = serde_json::json!({
             "anthropic": {"type": "oauth", "access": "x"},
@@ -2069,11 +2069,11 @@ mod tests {
         write_auth_json_value(&tmp.path, auth);
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
 
         assert_eq!(out.len(), 3);
         let anthropic = out
@@ -2343,7 +2343,7 @@ mod tests {
     #[test]
     fn anthropic_activity_matches_claude_and_opencode_sessions() {
         let claude = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             Some("Max 5x".to_string()),
             "c1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
@@ -2357,7 +2357,7 @@ mod tests {
             None,
         );
         let opencode = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             Some("Max 5x".to_string()),
             "o1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
@@ -2371,7 +2371,7 @@ mod tests {
             None,
         );
         let codex = SessionSummary::new(
-            ProviderKind::Codex,
+            ClientKind::Codex,
             Some("ChatGPT Plus".to_string()),
             "x1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 40, 0).unwrap()),
@@ -2395,7 +2395,7 @@ mod tests {
     #[test]
     fn openai_activity_matches_codex_and_opencode_sessions() {
         let codex = SessionSummary::new(
-            ProviderKind::Codex,
+            ClientKind::Codex,
             Some("ChatGPT Plus".to_string()),
             "x1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
@@ -2409,7 +2409,7 @@ mod tests {
             None,
         );
         let opencode = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             Some("ChatGPT Plus".to_string()),
             "o1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
@@ -2430,7 +2430,7 @@ mod tests {
     }
 
     #[test]
-    fn read_subscriptions_maps_multiple_providers() {
+    fn read_subscriptions_maps_multiple_clients() {
         let tmp = TestDir::new("agtop-opencode-subscriptions");
         let auth = serde_json::json!({
             "anthropic": {"type": "oauth", "access": "x"},

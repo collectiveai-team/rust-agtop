@@ -6,7 +6,7 @@ use agtop_core::session::SessionAnalysis;
 ///
 /// An empty filter matches everything. The filter is compared
 /// case-insensitively against: session id, model, effective_model, cwd,
-/// provider name, and subscription — covering the fields users typically
+/// client name, and subscription — covering the fields users typically
 /// search for.
 pub(super) fn matches_filter(a: &SessionAnalysis, filter_lower: &str) -> bool {
     if filter_lower.is_empty() {
@@ -18,7 +18,7 @@ pub(super) fn matches_filter(a: &SessionAnalysis, filter_lower: &str) -> bool {
         s.model.as_deref(),
         a.effective_model.as_deref(),
         s.cwd.as_deref(),
-        Some(s.provider.as_str()),
+        Some(s.client.as_str()),
         s.subscription.as_deref(),
     ];
     candidates
