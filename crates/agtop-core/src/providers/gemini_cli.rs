@@ -1,6 +1,7 @@
-//! Gemini CLI provider — `~/.gemini/tmp/<slug>/chats/session-*.jsonl`.
+//! Gemini CLI provider — `~/.gemini/tmp/<slug>/chats/session-*.(json|jsonl)`.
 //!
-//! Session files are JSONL with a `ConversationRecord` as first line.
+//! Older Gemini CLI builds wrote JSONL session headers; current builds store
+//! the full session as a single JSON document.
 //! Token counts are only available when the user has enabled local
 //! telemetry in `~/.gemini/settings.json`; they are read from
 //! `~/.gemini/telemetry.log` and matched to sessions by timestamp range.
@@ -96,7 +97,8 @@ impl Provider for GeminiCliProvider {
 
             for chat_entry in chat_files.flatten() {
                 let path = chat_entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                let ext = path.extension().and_then(|e| e.to_str());
+                if !matches!(ext, Some("json") | Some("jsonl")) {
                     continue;
                 }
                 let cwd2 = cwd.clone();
@@ -184,7 +186,11 @@ fn read_projects_map(gemini_dir: &std::path::Path) -> HashMap<String, String> {
     let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
         return HashMap::new();
     };
-    let Some(obj) = v.as_object() else {
+    let obj = v
+        .get("projects")
+        .and_then(|projects| projects.as_object())
+        .or_else(|| v.as_object());
+    let Some(obj) = obj else {
         return HashMap::new();
     };
     // Invert: value (slug) → key (absolute path).
@@ -220,6 +226,10 @@ fn parse_gemini_session(
     global_model: Option<String>,
     subscription: Option<String>,
 ) -> Result<SessionSummary> {
+    if path.extension().and_then(|e| e.to_str()) == Some("json") {
+        return parse_gemini_session_json(path, cwd, global_model, subscription);
+    }
+
     let mut session_id: Option<String> = None;
     let mut started_at: Option<DateTime<Utc>> = None;
     let mut last_updated: Option<DateTime<Utc>> = None;
@@ -266,6 +276,65 @@ fn parse_gemini_session(
         started_at,
         last_active,
         global_model,
+        cwd,
+        path.to_path_buf(),
+        None,
+        None,
+        None,
+        None,
+    ))
+}
+
+fn parse_gemini_session_json(
+    path: &std::path::Path,
+    cwd: Option<String>,
+    global_model: Option<String>,
+    subscription: Option<String>,
+) -> Result<SessionSummary> {
+    let bytes = fs::read(path)?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes)?;
+
+    let session_id = v
+        .get("sessionId")
+        .and_then(|x| x.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string()
+        });
+
+    let started_at = v
+        .get("startTime")
+        .and_then(|x| x.as_str())
+        .and_then(parse_ts);
+    let last_active = v
+        .get("lastUpdated")
+        .and_then(|x| x.as_str())
+        .and_then(parse_ts)
+        .or_else(|| mtime(path));
+
+    let model = v
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .and_then(|messages| {
+            messages.iter().rev().find_map(|message| {
+                message
+                    .get("model")
+                    .and_then(|model| model.as_str())
+                    .map(str::to_string)
+            })
+        })
+        .or(global_model);
+
+    Ok(SessionSummary::new(
+        ProviderKind::GeminiCli,
+        subscription,
+        session_id,
+        started_at,
+        last_active,
+        model,
         cwd,
         path.to_path_buf(),
         None,
@@ -394,6 +463,72 @@ mod tests {
         assert_eq!(sessions[0].session_id, "sess-001");
         assert_eq!(sessions[0].provider, ProviderKind::GeminiCli);
         assert_eq!(sessions[0].cwd.as_deref(), Some("/home/user/myproject"));
+    }
+
+    #[test]
+    fn parses_current_projects_json_shape() {
+        let td = TestDir::new("projects-v2");
+        fs::write(
+            td.path.join("projects.json"),
+            r#"{"projects":{"/home/user/myproject":"myproject"}}"#,
+        )
+        .unwrap();
+
+        let projects = read_projects_map(&td.path);
+        assert_eq!(
+            projects.get("myproject").map(String::as_str),
+            Some("/home/user/myproject")
+        );
+    }
+
+    #[test]
+    fn parses_current_session_json_format() {
+        let td = TestDir::new("session-json");
+        let chats_dir = td.path.join("tmp").join("myproject").join("chats");
+        fs::create_dir_all(&chats_dir).unwrap();
+
+        fs::write(
+            td.path.join("projects.json"),
+            r#"{"projects":{"/home/user/myproject":"myproject"}}"#,
+        )
+        .unwrap();
+
+        let session_file = chats_dir.join("session-abc123.json");
+        fs::write(
+            &session_file,
+            r#"{
+  "sessionId": "sess-002",
+  "startTime": "2026-04-10T10:00:00Z",
+  "lastUpdated": "2026-04-10T11:00:00Z",
+  "messages": [
+    {
+      "type": "gemini",
+      "model": "gemini-3-flash-preview",
+      "tokens": {
+        "input": 100,
+        "output": 50,
+        "cached": 20,
+        "thoughts": 10,
+        "tool": 0,
+        "total": 180
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let p = GeminiCliProvider {
+            gemini_dir: td.path.clone(),
+            discover_cache: Mutex::default(),
+        };
+        let sessions = p.list_sessions().unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "sess-002");
+        assert_eq!(sessions[0].provider, ProviderKind::GeminiCli);
+        assert_eq!(sessions[0].cwd.as_deref(), Some("/home/user/myproject"));
+        assert_eq!(sessions[0].model.as_deref(), Some("gemini-3-flash-preview"));
     }
 
     #[test]
