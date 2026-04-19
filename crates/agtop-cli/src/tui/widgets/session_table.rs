@@ -280,10 +280,7 @@ fn row_for<'a>(
     let cells: Vec<Cell<'a>> = visible
         .iter()
         .map(|&col_id| match col_id {
-            ColumnId::Provider => {
-                let label = format!("{} {}", s.provider.icon(), s.provider.as_str());
-                Cell::from(label).style(provider_style)
-            }
+            ColumnId::Provider => Cell::from(s.provider.as_str()).style(provider_style),
             ColumnId::Subscription => Cell::from(subscription.clone()),
             ColumnId::Session => Cell::from(short.clone()),
             ColumnId::Started => Cell::from(started.clone()),
