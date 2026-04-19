@@ -121,6 +121,18 @@ fn init_db(root: &Path) -> PathBuf {
     let db_path = root.join("opencode.db");
     let conn = rusqlite::Connection::open(&db_path).expect("open db");
     conn.execute(
+        "CREATE TABLE session (
+             id            TEXT PRIMARY KEY,
+             parent_id     TEXT,
+             directory     TEXT,
+             time_created  INTEGER,
+             time_updated  INTEGER,
+             time_archived INTEGER
+         )",
+        [],
+    )
+    .expect("create session table");
+    conn.execute(
         "CREATE TABLE message (
              id           TEXT PRIMARY KEY,
              session_id   TEXT NOT NULL,
@@ -145,6 +157,29 @@ fn insert_assistant_msg(root: &Path, msg_id: &str, session_id: &str, data: &serd
         ],
     )
     .expect("insert message");
+}
+
+fn insert_session(
+    root: &Path,
+    session_id: &str,
+    parent_id: Option<&str>,
+    directory: &str,
+    time_created_ms: i64,
+    time_updated_ms: i64,
+) {
+    let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open db");
+    conn.execute(
+        "INSERT INTO session(id, parent_id, directory, time_created, time_updated, time_archived)
+         VALUES(?1, ?2, ?3, ?4, ?5, NULL)",
+        rusqlite::params![
+            session_id,
+            parent_id,
+            directory,
+            time_created_ms,
+            time_updated_ms,
+        ],
+    )
+    .expect("insert session");
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +290,74 @@ fn opencode_sqlite_retail_cost_is_positive() {
         "retail cost should be positive (got {})",
         analysis.cost.total
     );
+}
+
+#[test]
+fn opencode_sqlite_children_follow_parent_id() {
+    let tmp = TmpDir::new("sqlite-children");
+    init_db(&tmp.0);
+    insert_session(
+        &tmp.0,
+        SESSION_ID,
+        None,
+        "/tmp/opencode-parent",
+        1_744_880_100_000,
+        1_744_880_200_000,
+    );
+    insert_session(
+        &tmp.0,
+        "ses_child_b",
+        Some(SESSION_ID),
+        "/tmp/opencode-child-b",
+        1_744_880_300_000,
+        1_744_880_500_000,
+    );
+    insert_session(
+        &tmp.0,
+        "ses_child_a",
+        Some(SESSION_ID),
+        "/tmp/opencode-child-a",
+        1_744_880_250_000,
+        1_744_880_400_000,
+    );
+    insert_assistant_msg(
+        &tmp.0,
+        "msg_child_b",
+        "ses_child_b",
+        &serde_json::json!({
+            "role": "assistant",
+            "modelID": MODEL_ID,
+            "providerID": "anthropic",
+            "finish": "stop"
+        }),
+    );
+    insert_assistant_msg(
+        &tmp.0,
+        "msg_child_a",
+        "ses_child_a",
+        &serde_json::json!({
+            "role": "assistant",
+            "modelID": MODEL_ID,
+            "providerID": "anthropic",
+            "finish": "tool-calls"
+        }),
+    );
+
+    let provider = OpenCodeProvider {
+        storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
+    };
+    let parent = make_summary(tmp.0.join("opencode.db"));
+
+    let children = provider.children(&parent).expect("children should succeed");
+
+    assert_eq!(children.len(), 2, "two child sessions should be returned");
+    assert_eq!(children[0].session_id, "ses_child_b");
+    assert_eq!(children[1].session_id, "ses_child_a");
+    assert_eq!(children[0].cwd.as_deref(), Some("/tmp/opencode-child-b"));
+    assert_eq!(children[0].model.as_deref(), Some(MODEL_ID));
+    assert_eq!(children[0].state.as_deref(), Some("stopped"));
+    assert_eq!(children[1].state.as_deref(), Some("waiting"));
 }
 
 // ---------------------------------------------------------------------------
