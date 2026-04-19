@@ -106,6 +106,31 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                         "retail".to_string()
                     },
                 ),
+                kv_line("total_tokens", {
+                    let cache_total = a.tokens.cache_read
+                        + a.tokens.cache_write_5m
+                        + a.tokens.cache_write_1h
+                        + a.tokens.cached_input;
+                    compact_tokens(a.tokens.input + a.tokens.output + cache_total)
+                }),
+                kv_line("out_tokens", compact_tokens(a.tokens.output)),
+                kv_line(
+                    "cache_tokens",
+                    compact_tokens(
+                        a.tokens.cache_read
+                            + a.tokens.cache_write_5m
+                            + a.tokens.cache_write_1h
+                            + a.tokens.cached_input,
+                    ),
+                ),
+                kv_line(
+                    "cost",
+                    if a.cost.included {
+                        "included".to_string()
+                    } else {
+                        format!("${:.4}", a.cost.total)
+                    },
+                ),
             ];
             if let Some(detail) = &s.state_detail {
                 lines.push(kv_line("state_detail", detail.clone()));

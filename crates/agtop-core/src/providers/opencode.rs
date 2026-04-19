@@ -1127,6 +1127,8 @@ struct TurnAccumulator {
     cost_reported: f64,
     saw: bool,
     tool_call_count: u64,
+    agent_turns: u64,
+    user_turns: u64,
     context_used_pct: Option<f64>,
     context_used_tokens: Option<u64>,
     context_window: Option<u64>,
@@ -1140,6 +1142,8 @@ impl TurnAccumulator {
             cost_reported: 0.0,
             saw: false,
             tool_call_count: 0,
+            agent_turns: 0,
+            user_turns: 0,
             context_used_pct: None,
             context_used_tokens: None,
             context_window: None,
@@ -1148,6 +1152,7 @@ impl TurnAccumulator {
 
     /// Ingest one assistant-role message value.
     fn process_turn(&mut self, v: &serde_json::Value) {
+        self.agent_turns += 1;
         if self.model.is_none() {
             if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
                 self.model = Some(m.to_string());
@@ -1253,6 +1258,17 @@ impl TurnAccumulator {
             context_used_pct: self.context_used_pct,
             context_used_tokens: self.context_used_tokens,
             context_window: self.context_window,
+            agent_turns: if self.agent_turns > 0 {
+                Some(self.agent_turns)
+            } else {
+                None
+            },
+            user_turns: if self.user_turns > 0 {
+                Some(self.user_turns)
+            } else {
+                None
+            },
+            project_name: None,
         })
     }
 }
@@ -1263,6 +1279,18 @@ fn analyze_session_sqlite(
     db_path: &Path,
 ) -> Result<SessionAnalysis> {
     let conn = open_db(db_path)?;
+
+    // Count user turns separately (cheap scalar query).
+    let user_turns: u64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM message \
+             WHERE session_id = ?1 \
+               AND json_extract(data, '$.role') = 'user'",
+            rusqlite::params![&summary.session_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n.max(0) as u64)
+        .unwrap_or(0);
 
     let mut stmt = conn.prepare(
         "SELECT data FROM message \
@@ -1288,6 +1316,7 @@ fn analyze_session_sqlite(
         acc.process_turn(&v);
     }
 
+    acc.user_turns = user_turns;
     acc.finish(summary, plan)
 }
 
@@ -1513,10 +1542,11 @@ fn analyze_opencode_session_json(
             Ok(v) => v,
             Err(_) => continue,
         };
-        if v.get("role").and_then(|x| x.as_str()) != Some("assistant") {
-            continue;
+        match v.get("role").and_then(|x| x.as_str()) {
+            Some("assistant") => acc.process_turn(&v),
+            Some("user") => acc.user_turns += 1,
+            _ => {}
         }
-        acc.process_turn(&v);
     }
 
     acc.finish(summary, plan)

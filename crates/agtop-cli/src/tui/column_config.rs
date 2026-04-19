@@ -30,28 +30,36 @@ pub enum ColumnId {
     LastActive,
     State,
     Effort,
+    AgentTurns,
+    UserTurns,
+    Context,
+    Project,
 }
 
 impl ColumnId {
     /// All columns in their default order.
     pub fn all() -> &'static [ColumnId] {
         &[
-            ColumnId::Provider,
-            ColumnId::Subscription,
             ColumnId::Session,
             ColumnId::Started,
+            ColumnId::LastActive,
             ColumnId::Age,
+            ColumnId::Duration,
+            ColumnId::Provider,
+            ColumnId::Subscription,
             ColumnId::Model,
-            ColumnId::Cwd,
+            ColumnId::Effort,
+            ColumnId::State,
             ColumnId::Tokens,
             ColumnId::OutputTokens,
             ColumnId::CacheTokens,
-            ColumnId::Cost,
             ColumnId::ToolCalls,
-            ColumnId::Duration,
-            ColumnId::LastActive,
-            ColumnId::State,
-            ColumnId::Effort,
+            ColumnId::AgentTurns,
+            ColumnId::UserTurns,
+            ColumnId::Context,
+            ColumnId::Cost,
+            ColumnId::Project,
+            ColumnId::Cwd,
         ]
     }
 
@@ -64,7 +72,7 @@ impl ColumnId {
             ColumnId::Age => "AGE",
             ColumnId::Model => "MODEL",
             ColumnId::Cwd => "CWD",
-            ColumnId::Tokens => "TOK",
+            ColumnId::Tokens => "TOKENS",
             ColumnId::OutputTokens => "OUT",
             ColumnId::CacheTokens => "CACHE",
             ColumnId::Cost => "COST$",
@@ -73,6 +81,10 @@ impl ColumnId {
             ColumnId::LastActive => "LAST ACTIVE",
             ColumnId::State => "STATE",
             ColumnId::Effort => "EFFORT",
+            ColumnId::AgentTurns => "AGENT",
+            ColumnId::UserTurns => "USER",
+            ColumnId::Context => "CONTEXT",
+            ColumnId::Project => "PROJECT",
         }
     }
 
@@ -85,7 +97,7 @@ impl ColumnId {
             ColumnId::Age => "Time since last activity",
             ColumnId::Model => "Model name",
             ColumnId::Cwd => "Working directory",
-            ColumnId::Tokens => "Total token count",
+            ColumnId::Tokens => "Total token count (input + output + cache)",
             ColumnId::OutputTokens => "Output tokens",
             ColumnId::CacheTokens => "Cache tokens (read + write)",
             ColumnId::Cost => "Dollar cost",
@@ -94,6 +106,10 @@ impl ColumnId {
             ColumnId::LastActive => "Last active timestamp",
             ColumnId::State => "Session workflow state",
             ColumnId::Effort => "Model reasoning effort",
+            ColumnId::AgentTurns => "Number of agent/assistant turns",
+            ColumnId::UserTurns => "Number of user turns",
+            ColumnId::Context => "Peak context window usage",
+            ColumnId::Project => "Inferred project name (from git remote)",
         }
     }
 
@@ -116,6 +132,10 @@ impl ColumnId {
             ColumnId::LastActive => Some(16),
             ColumnId::State => Some(10),
             ColumnId::Effort => Some(8),
+            ColumnId::AgentTurns => Some(6),
+            ColumnId::UserTurns => Some(6),
+            ColumnId::Context => Some(20),
+            ColumnId::Project => Some(16),
         }
     }
 
@@ -138,6 +158,10 @@ impl ColumnId {
             ColumnId::LastActive => Some(SortColumn::LastActive),
             ColumnId::State => None,
             ColumnId::Effort => None,
+            ColumnId::AgentTurns => Some(SortColumn::AgentTurns),
+            ColumnId::UserTurns => Some(SortColumn::UserTurns),
+            ColumnId::Context => None,
+            ColumnId::Project => Some(SortColumn::Project),
         }
     }
 
@@ -201,8 +225,22 @@ impl Default for ColumnConfig {
                 .iter()
                 .map(|&id| ColumnEntry {
                     id,
-                    // Hide ToolCalls and Duration by default to keep the table width manageable.
-                    visible: !matches!(id, ColumnId::ToolCalls | ColumnId::Duration),
+                    visible: matches!(
+                        id,
+                        ColumnId::Session
+                            | ColumnId::Age
+                            | ColumnId::Provider
+                            | ColumnId::Subscription
+                            | ColumnId::Model
+                            | ColumnId::Effort
+                            | ColumnId::State
+                            | ColumnId::Tokens
+                            | ColumnId::OutputTokens
+                            | ColumnId::CacheTokens
+                            | ColumnId::Context
+                            | ColumnId::Cost
+                            | ColumnId::Project
+                    ),
                 })
                 .collect(),
             sort_col,
@@ -354,5 +392,44 @@ mod cfg_provider_tests {
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(cfg.providers.len(), ProviderKind::all().len());
         assert!(cfg.providers.iter().all(|e| e.enabled));
+    }
+
+    #[test]
+    fn default_visible_columns_match_design() {
+        let cfg = ColumnConfig::default();
+        let visible: Vec<ColumnId> = cfg.visible();
+        // These should be on by default.
+        for id in &[
+            ColumnId::Session,
+            ColumnId::Age,
+            ColumnId::Provider,
+            ColumnId::Model,
+            ColumnId::Tokens,
+            ColumnId::Context,
+            ColumnId::Cost,
+            ColumnId::Project,
+        ] {
+            assert!(
+                visible.contains(id),
+                "{:?} should be visible by default",
+                id
+            );
+        }
+        // These should be off by default.
+        for id in &[
+            ColumnId::Started,
+            ColumnId::LastActive,
+            ColumnId::Duration,
+            ColumnId::Cwd,
+            ColumnId::ToolCalls,
+            ColumnId::AgentTurns,
+            ColumnId::UserTurns,
+        ] {
+            assert!(
+                !visible.contains(id),
+                "{:?} should be hidden by default",
+                id
+            );
+        }
     }
 }

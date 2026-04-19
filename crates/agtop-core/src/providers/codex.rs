@@ -509,6 +509,8 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
     let mut saw_usage = false;
     let mut effective_model = summary.model.clone();
     let mut tool_call_count: u64 = 0;
+    let mut agent_turns: u64 = 0;
+    let mut user_turns: u64 = 0;
     let mut first_ts = summary.started_at;
     let mut last_ts = summary.last_active;
     let mut context_used_pct: Option<f64> = None;
@@ -543,6 +545,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         }
 
         if ty == "turn_context" {
+            user_turns += 1;
             if let Some(p) = payload {
                 if let Some(m) = p.get("model").and_then(|x| x.as_str()) {
                     effective_model = Some(m.to_string());
@@ -558,6 +561,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
             if p.get("type").and_then(|x| x.as_str()) != Some("token_count") {
                 return;
             }
+            agent_turns += 1;
             let info = match p.get("info") {
                 Some(i) if !i.is_null() => i,
                 _ => return,
@@ -628,6 +632,17 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         context_used_pct,
         context_used_tokens,
         context_window,
+        agent_turns: if agent_turns > 0 {
+            Some(agent_turns)
+        } else {
+            None
+        },
+        user_turns: if user_turns > 0 {
+            Some(user_turns)
+        } else {
+            None
+        },
+        project_name: None,
     })
 }
 

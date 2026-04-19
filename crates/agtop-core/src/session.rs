@@ -206,6 +206,18 @@ pub struct SessionAnalysis {
     /// `context_used_pct`. `None` when `context_used_pct` is `None`.
     #[serde(default)]
     pub context_window: Option<u64>,
+    /// Number of agent/assistant turns observed in the transcript.
+    /// `None` when the provider does not expose this information.
+    #[serde(default)]
+    pub agent_turns: Option<u64>,
+    /// Number of user turns observed in the transcript.
+    /// `None` when the provider does not expose this information.
+    #[serde(default)]
+    pub user_turns: Option<u64>,
+    /// Inferred project name (e.g. from `git remote get-url origin`).
+    /// `None` when unavailable.
+    #[serde(default)]
+    pub project_name: Option<String>,
 }
 
 impl SessionAnalysis {
@@ -237,6 +249,9 @@ impl SessionAnalysis {
             context_used_pct,
             context_used_tokens,
             context_window,
+            agent_turns: None,
+            user_turns: None,
+            project_name: None,
         }
     }
 }

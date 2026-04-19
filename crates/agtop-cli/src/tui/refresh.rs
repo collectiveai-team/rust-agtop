@@ -179,6 +179,7 @@ pub fn spawn(
         let mut generation: u64 = 0;
         let mut manual_rx = manual_rx;
         let mut session_cache: SessionCache = HashMap::new();
+        let mut project_name_cache: ProjectNameCache = HashMap::new();
         let mut plan_cache_key: Option<u64> = None;
         let mut plan_cache_val: Vec<agtop_core::PlanUsage> = Vec::new();
         loop {
@@ -205,13 +206,15 @@ pub fn spawn(
                 .collect();
 
             generation = generation.wrapping_add(1);
-            // Move the cache into the blocking task; recover it in the result.
+            // Move the caches into the blocking task; recover them in the result.
             let cache_in = std::mem::take(&mut session_cache);
+            let project_cache_in = std::mem::take(&mut project_name_cache);
             let plan_cache_key_in = plan_cache_key;
             let plan_cache_val_in = plan_cache_val.clone();
             let result = tokio::task::spawn_blocking(move || {
                 let summaries = discover_all(&live);
-                let (analyses, cache_out) = cached_analyze_all(&live, &summaries, plan, cache_in);
+                let (analyses, cache_out, project_cache_out) =
+                    cached_analyze_all(&live, &summaries, plan, cache_in, project_cache_in);
 
                 let new_key = hash_summaries_for_cache(&summaries);
                 let (plan_usage, new_cache_key, new_cache_val) =
@@ -231,14 +234,16 @@ pub fn spawn(
                     analyses,
                     plan_usage,
                     cache_out,
+                    project_cache_out,
                     new_cache_key,
                     new_cache_val,
                 )
             })
             .await;
             let msg = match result {
-                Ok((analyses, plan_usage, cache_out, new_key, new_val)) => {
+                Ok((analyses, plan_usage, cache_out, project_cache_out, new_key, new_val)) => {
                     session_cache = cache_out;
+                    project_name_cache = project_cache_out;
                     plan_cache_key = new_key;
                     plan_cache_val = new_val;
                     RefreshMsg::Snapshot {
@@ -293,11 +298,17 @@ pub fn spawn(
 /// Cache entry: (last_active timestamp, pre-computed analysis).
 type SessionCache = HashMap<String, (Option<DateTime<Utc>>, SessionAnalysis)>;
 
+/// Cache of resolved project names keyed by canonical cwd path.
+type ProjectNameCache = HashMap<std::path::PathBuf, Option<String>>;
+
 /// Like `analyze_all_from_summaries` but skips sessions whose
 /// `last_active` timestamp hasn't changed since the previous refresh,
 /// reusing the cached `SessionAnalysis` instead.
 ///
-/// Returns the new analyses vec and the updated cache (to be stored by
+/// Also resolves project names via `agtop_core::project::resolve_project_name`,
+/// caching results across cycles so git is only invoked when a new cwd appears.
+///
+/// Returns the new analyses vec and the updated caches (to be stored by
 /// the caller for the next cycle). Prunes cache entries for sessions no
 /// longer present in `summaries`.
 fn cached_analyze_all(
@@ -305,20 +316,39 @@ fn cached_analyze_all(
     summaries: &[agtop_core::session::SessionSummary],
     plan: agtop_core::pricing::Plan,
     mut cache: SessionCache,
-) -> (Vec<SessionAnalysis>, SessionCache) {
+    mut project_cache: ProjectNameCache,
+) -> (Vec<SessionAnalysis>, SessionCache, ProjectNameCache) {
     use std::collections::HashSet;
 
     // Remove entries for sessions that no longer exist.
     let live_ids: HashSet<&str> = summaries.iter().map(|s| s.session_id.as_str()).collect();
     cache.retain(|id, _| live_ids.contains(id.as_str()));
 
+    // Pre-resolve project names for all unique cwds (cache misses only).
+    for summary in summaries {
+        if let Some(cwd) = &summary.cwd {
+            let key = std::path::PathBuf::from(cwd);
+            project_cache
+                .entry(key.clone())
+                .or_insert_with(|| agtop_core::project::resolve_project_name(&key));
+        }
+    }
+
     let mut out = Vec::with_capacity(summaries.len());
 
     for summary in summaries {
         // Cache hit: session unchanged since last refresh.
-        if let Some((cached_ts, cached_analysis)) = cache.get(&summary.session_id) {
-            if *cached_ts == summary.last_active {
-                out.push(cached_analysis.clone());
+        if let Some((cached_ts, mut cached_analysis)) = cache.get(&summary.session_id).cloned() {
+            if cached_ts == summary.last_active {
+                // Inject the (possibly newly-resolved) project name.
+                if cached_analysis.project_name.is_none() {
+                    if let Some(cwd) = &summary.cwd {
+                        let key = std::path::PathBuf::from(cwd);
+                        cached_analysis.project_name =
+                            project_cache.get(&key).and_then(|v| v.clone());
+                    }
+                }
+                out.push(cached_analysis);
                 continue;
             }
         }
@@ -329,7 +359,12 @@ fn cached_analyze_all(
             None => continue,
         };
         match provider.analyze(summary, plan) {
-            Ok(analysis) => {
+            Ok(mut analysis) => {
+                // Inject project name.
+                if let Some(cwd) = &summary.cwd {
+                    let key = std::path::PathBuf::from(cwd);
+                    analysis.project_name = project_cache.get(&key).and_then(|v| v.clone());
+                }
                 cache.insert(
                     summary.session_id.clone(),
                     (summary.last_active, analysis.clone()),
@@ -344,7 +379,7 @@ fn cached_analyze_all(
         }
     }
 
-    (out, cache)
+    (out, cache, project_cache)
 }
 
 #[cfg(test)]

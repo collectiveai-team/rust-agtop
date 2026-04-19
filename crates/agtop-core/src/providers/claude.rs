@@ -433,6 +433,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut effective_model = summary.model.clone();
     let mut totals = TokenTotals::default();
     let mut tool_call_count: u64 = 0;
+    let mut agent_turns: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
@@ -458,6 +459,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let main_file_totals = sum_jsonl_usage(path, &mut effective_model)?;
     add_file_totals(&mut totals, &main_file_totals);
     tool_call_count += main_file_totals.tool_call_count;
+    add_agent_turns(&mut agent_turns, &main_file_totals);
     merge_context(&main_file_totals);
 
     // Subagent sidechain transcripts (if any). They live in a directory
@@ -479,6 +481,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
             Ok(sub_totals) => {
                 add_file_totals(&mut totals, &sub_totals);
                 tool_call_count += sub_totals.tool_call_count;
+                add_agent_turns(&mut agent_turns, &sub_totals);
                 merge_context(&sub_totals);
             }
             Err(e) => tracing::debug!(path = %sub.display(), error = %e, "skip subagent file"),
@@ -523,6 +526,13 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         context_used_pct,
         context_used_tokens,
         context_window,
+        agent_turns: if agent_turns > 0 {
+            Some(agent_turns)
+        } else {
+            None
+        },
+        user_turns: None,
+        project_name: None,
     })
 }
 
@@ -549,6 +559,7 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     // progresses; only the final write has correct totals. Keep the last.
     let mut last_snapshot: HashMap<String, Snapshot> = HashMap::new();
     let mut keyless = Snapshot::default();
+    let mut keyless_turns: u64 = 0; // keyless assistant records each count as one turn
     let mut tool_call_count: u64 = 0;
     let mut context_used_pct: Option<f64> = None;
     let mut context_used_tokens: Option<u64> = None;
@@ -628,7 +639,10 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
             Some(k) => {
                 last_snapshot.insert(k, snap);
             }
-            None => keyless.add(&snap),
+            None => {
+                keyless.add(&snap);
+                keyless_turns += 1;
+            }
         }
     })?;
 
@@ -646,6 +660,8 @@ fn sum_jsonl_usage(path: &Path, effective_model: &mut Option<String>) -> Result<
     ft.cache_write_5m += keyless.cache_write_5m;
     ft.cache_write_1h += keyless.cache_write_1h;
     ft.tool_call_count = tool_call_count;
+    // Each unique requestId is one agent turn; keyless assistant records each count as one.
+    ft.agent_turns = last_snapshot.len() as u64 + keyless_turns;
     ft.context_used_pct = context_used_pct;
     ft.context_used_tokens = context_used_tokens;
     ft.context_window = context_window_size;
@@ -658,6 +674,10 @@ fn add_file_totals(totals: &mut TokenTotals, ft: &FileTotals) {
     totals.cache_read += ft.cache_read;
     totals.cache_write_5m += ft.cache_write_5m;
     totals.cache_write_1h += ft.cache_write_1h;
+}
+
+fn add_agent_turns(agent_turns: &mut u64, ft: &FileTotals) {
+    *agent_turns += ft.agent_turns;
 }
 
 /// Return sorted list of subagent JSONL files for a main transcript.
@@ -694,6 +714,8 @@ struct FileTotals {
     cache_write_5m: u64,
     cache_write_1h: u64,
     tool_call_count: u64,
+    /// Number of distinct agent turns (unique requestIds).
+    agent_turns: u64,
     context_used_pct: Option<f64>,
     /// Raw token count at the peak-utilization turn.
     context_used_tokens: Option<u64>,

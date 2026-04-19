@@ -14,6 +14,7 @@
 pub mod error;
 pub mod litellm;
 pub mod pricing;
+pub mod project;
 pub mod provider;
 pub mod providers;
 pub mod session;

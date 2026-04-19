@@ -135,6 +135,37 @@ fn header_cell(s: &'static str) -> Cell<'static> {
     Cell::from(s)
 }
 
+/// Format and colorize the context usage column.
+///
+/// Returns `(text, style)`. The color threshold gates are:
+/// - < 30%  → green
+/// - 30–80% → yellow
+/// - ≥ 80%  → red
+fn format_context(
+    used_tokens: Option<u64>,
+    window: Option<u64>,
+    pct: Option<f64>,
+) -> (String, Style) {
+    let Some(pct_val) = pct else {
+        return ("-".to_string(), Style::new());
+    };
+
+    let text = match (used_tokens, window) {
+        (Some(u), Some(w)) => format!("{}/{} ({:.1}%)", fmt::compact(u), fmt::compact(w), pct_val),
+        _ => format!("({:.1}%)", pct_val),
+    };
+
+    let style = if pct_val >= 80.0 {
+        th::PLAN_BAR_RED
+    } else if pct_val >= 30.0 {
+        th::PLAN_BAR_YELLOW
+    } else {
+        th::PLAN_BAR_GREEN
+    };
+
+    (text, style)
+}
+
 /// Append a direction arrow to the column header when it matches the
 /// app's active sort column. This is what htop does with F6.
 fn header_with_marker(
@@ -207,6 +238,10 @@ fn row_for<'a>(
         _ => Style::new(),
     };
 
+    // Context column: pre-compute text and style.
+    let (context_text, context_style) =
+        format_context(a.context_used_tokens, a.context_window, a.context_used_pct);
+
     let cells: Vec<Cell<'a>> = visible
         .iter()
         .map(|&col_id| match col_id {
@@ -234,6 +269,18 @@ fn row_for<'a>(
             ColumnId::LastActive => Cell::from(last_active_abs.clone()),
             ColumnId::State => Cell::from(state.clone()),
             ColumnId::Effort => Cell::from(effort.clone()),
+            ColumnId::AgentTurns => Cell::from(
+                a.agent_turns
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".into()),
+            ),
+            ColumnId::UserTurns => Cell::from(
+                a.user_turns
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "-".into()),
+            ),
+            ColumnId::Context => Cell::from(context_text.clone()).style(context_style),
+            ColumnId::Project => Cell::from(a.project_name.clone().unwrap_or_else(|| "-".into())),
         })
         .collect();
 

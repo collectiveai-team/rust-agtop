@@ -30,6 +30,12 @@ pub enum SortColumn {
     ToolCalls,
     /// Session wall-clock duration in seconds (descending). None sorts last.
     Duration,
+    /// Number of agent turns (descending). None sorts last.
+    AgentTurns,
+    /// Number of user turns (descending). None sorts last.
+    UserTurns,
+    /// Project name (ascending, alphabetical). None sorts last.
+    Project,
 }
 
 impl SortColumn {
@@ -45,7 +51,10 @@ impl SortColumn {
             Self::OutputTokens => Self::CacheTokens,
             Self::CacheTokens => Self::ToolCalls,
             Self::ToolCalls => Self::Duration,
-            Self::Duration => Self::LastActive,
+            Self::Duration => Self::AgentTurns,
+            Self::AgentTurns => Self::UserTurns,
+            Self::UserTurns => Self::Project,
+            Self::Project => Self::LastActive,
         }
     }
 
@@ -62,6 +71,9 @@ impl SortColumn {
             Self::CacheTokens => "cache",
             Self::ToolCalls => "tool-calls",
             Self::Duration => "duration",
+            Self::AgentTurns => "agent-turns",
+            Self::UserTurns => "user-turns",
+            Self::Project => "project",
         }
     }
 
@@ -76,8 +88,10 @@ impl SortColumn {
             | Self::OutputTokens
             | Self::CacheTokens
             | Self::ToolCalls
-            | Self::Duration => SortDir::Desc,
-            Self::Provider | Self::Model => SortDir::Asc,
+            | Self::Duration
+            | Self::AgentTurns
+            | Self::UserTurns => SortDir::Desc,
+            Self::Provider | Self::Model | Self::Project => SortDir::Asc,
         }
     }
 }
@@ -134,6 +148,9 @@ pub(super) fn sort_key(
         SortColumn::CacheTokens => cache_total(&a.tokens).cmp(&cache_total(&b.tokens)),
         SortColumn::ToolCalls => cmp_opt_u64(a.tool_call_count, b.tool_call_count),
         SortColumn::Duration => cmp_opt_u64(a.duration_secs, b.duration_secs),
+        SortColumn::AgentTurns => cmp_opt_u64(a.agent_turns, b.agent_turns),
+        SortColumn::UserTurns => cmp_opt_u64(a.user_turns, b.user_turns),
+        SortColumn::Project => cmp_opt_str(a.project_name.as_deref(), b.project_name.as_deref()),
     }
 }
 
