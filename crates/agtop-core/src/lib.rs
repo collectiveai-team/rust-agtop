@@ -48,16 +48,24 @@ pub fn default_providers() -> Vec<Arc<dyn Provider>> {
 /// Errors from individual providers are logged and skipped; the caller still
 /// receives partial results. This mirrors the original agtop's behavior of
 /// degrading gracefully when one data source is unavailable.
+///
+/// Providers are queried in parallel via rayon.
 pub fn discover_all(providers: &[Arc<dyn Provider>]) -> Vec<SessionSummary> {
-    let mut out = Vec::new();
-    for p in providers {
-        match p.list_sessions() {
-            Ok(sessions) => out.extend(sessions),
+    use rayon::prelude::*;
+    let mut out: Vec<SessionSummary> = providers
+        .par_iter()
+        .flat_map(|p| match p.list_sessions() {
+            Ok(v) => v,
             Err(e) => {
-                tracing::warn!(provider = p.kind().as_str(), error = %e, "list_sessions failed")
+                tracing::warn!(
+                    provider = p.kind().as_str(),
+                    error = %e,
+                    "list_sessions failed"
+                );
+                Vec::new()
             }
-        }
-    }
+        })
+        .collect();
     out.sort_by(|a, b| b.started_at.cmp(&a.started_at));
     out
 }
@@ -72,20 +80,27 @@ pub fn plan_usage_all(providers: &[Arc<dyn Provider>]) -> Vec<PlanUsage> {
 }
 
 /// Collect plan-usage snapshots using already-discovered session summaries.
+///
+/// Providers are queried in parallel via rayon.
 pub fn plan_usage_all_from_summaries(
     providers: &[Arc<dyn Provider>],
     sessions: &[SessionSummary],
 ) -> Vec<PlanUsage> {
-    let mut out = Vec::new();
-    for p in providers {
-        match p.plan_usage_with_sessions(sessions) {
-            Ok(entries) => out.extend(entries),
+    use rayon::prelude::*;
+    providers
+        .par_iter()
+        .flat_map(|p| match p.plan_usage_with_sessions(sessions) {
+            Ok(entries) => entries,
             Err(e) => {
-                tracing::warn!(provider = p.kind().as_str(), error = %e, "plan_usage failed")
+                tracing::warn!(
+                    provider = p.kind().as_str(),
+                    error = %e,
+                    "plan_usage failed"
+                );
+                Vec::new()
             }
-        }
-    }
-    out
+        })
+        .collect()
 }
 
 /// Analyze sessions using already-discovered summaries (tokens + cost).
@@ -200,5 +215,52 @@ mod tests {
             "expected the mock's token count"
         );
         assert_eq!(analyses[0].summary.session_id, "test-session-1");
+    }
+
+    /// Two mock providers each sleep 200ms in list_sessions. Sequential
+    /// discover_all → ≥400ms wall time. Parallel via rayon → <300ms.
+    #[test]
+    fn discover_all_runs_providers_in_parallel() {
+        use std::time::{Duration, Instant};
+
+        #[derive(Debug)]
+        struct SlowMockA;
+        #[derive(Debug)]
+        struct SlowMockB;
+        impl Provider for SlowMockA {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Claude
+            }
+            fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(vec![])
+            }
+            fn analyze(&self, _s: &SessionSummary, _p: crate::Plan) -> Result<SessionAnalysis> {
+                unreachable!()
+            }
+        }
+        impl Provider for SlowMockB {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Codex
+            }
+            fn list_sessions(&self) -> Result<Vec<SessionSummary>> {
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(vec![])
+            }
+            fn analyze(&self, _s: &SessionSummary, _p: crate::Plan) -> Result<SessionAnalysis> {
+                unreachable!()
+            }
+        }
+
+        let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(SlowMockA), Arc::new(SlowMockB)];
+        let t0 = Instant::now();
+        let _ = discover_all(&providers);
+        let elapsed = t0.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(350),
+            "discover_all was sequential ({}ms) — expected parallel (<350ms)",
+            elapsed.as_millis()
+        );
     }
 }

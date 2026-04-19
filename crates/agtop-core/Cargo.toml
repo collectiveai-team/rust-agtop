@@ -21,6 +21,7 @@ walkdir.workspace = true
 tracing.workspace = true
 ureq.workspace = true
 rusqlite.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 tempfile = "3"

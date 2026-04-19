@@ -29,6 +29,7 @@ ureq = { version = "3", default-features = false, features = [
     "json",
 ] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+rayon = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
