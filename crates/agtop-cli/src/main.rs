@@ -62,9 +62,9 @@ struct Cli {
     #[arg(short = 'D', long)]
     dashboard: bool,
 
-    /// Force a synchronous fetch of the LiteLLM pricing table before
-    /// analyzing sessions. Network required; errors are logged and the
-    /// built-in tables are used as a fallback.
+    /// Force a synchronous fetch of the pricing tables (models.dev +
+    /// LiteLLM) before analyzing sessions. Network required; errors are
+    /// logged and the built-in tables are used as a fallback.
     #[arg(long)]
     refresh_pricing: bool,
 
@@ -238,26 +238,38 @@ fn run_watch(
     result
 }
 
-/// Prime the LiteLLM pricing index. The first lookup will auto-load
-/// from the on-disk cache regardless; this function only handles the
-/// explicit-refresh and no-network paths:
-///
-/// - `--no-pricing-refresh`: install an empty index so `lookup` never
-///   reads the cache file. The built-in tables alone apply.
-/// - `--refresh-pricing`: fetch from upstream and swap in the fresh
-///   index. On failure, log and fall through to the on-disk cache.
-/// - Otherwise (default): if the cache is missing *or* stale, do a
-///   synchronous refresh once at startup. The stale-but-present case is
-///   tolerated silently: we'd rather start fast than block users behind
-///   GitHub.
 fn setup_pricing(refresh: bool, disable: bool) {
-    use agtop_core::litellm;
+    use agtop_core::{litellm, models_dev};
 
     if disable {
-        // Install an empty index so auto-load never fires. The built-in
-        // tables stay in charge.
         agtop_core::pricing::set_pricing_index(litellm::PricingIndex::default());
+        agtop_core::pricing::set_models_dev_index(models_dev::ModelsDevIndex::default());
         return;
+    }
+
+    let md_cache = models_dev::cache_path();
+    let md_have_any = md_cache.as_deref().map(|p| p.exists()).unwrap_or(false);
+    let should_fetch_md = refresh || !md_have_any;
+
+    if should_fetch_md {
+        match models_dev::refresh_cache() {
+            Ok(idx) => {
+                tracing::info!(
+                    entries = idx.len(),
+                    "installed fresh models.dev pricing index"
+                );
+                agtop_core::pricing::set_models_dev_index(idx);
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "models.dev refresh failed; falling back");
+            }
+        }
+    } else if let Some(path) = md_cache.as_deref() {
+        if !models_dev::is_cache_fresh(path) {
+            if let Ok(idx) = models_dev::refresh_cache() {
+                agtop_core::pricing::set_models_dev_index(idx);
+            }
+        }
     }
 
     let cache = litellm::cache_path();
@@ -267,7 +279,6 @@ fn setup_pricing(refresh: bool, disable: bool) {
         .unwrap_or(false);
     let have_any_cache = cache.as_deref().map(|p| p.exists()).unwrap_or(false);
 
-    // Explicit refresh, or: no cache at all and we're online-permissive.
     let should_fetch = refresh || !have_any_cache;
     if should_fetch {
         match litellm::refresh_cache() {
@@ -276,22 +287,14 @@ fn setup_pricing(refresh: bool, disable: bool) {
                 agtop_core::pricing::set_pricing_index(idx);
             }
             Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "LiteLLM refresh failed; falling back to on-disk cache (if any) + built-ins"
-                );
+                tracing::warn!(error = %e, "LiteLLM refresh failed; falling back");
             }
         }
     } else if !have_fresh_cache {
-        // Cache exists but is stale. Do a quiet background-ish refresh
-        // (synchronous, but bounded by FETCH_TIMEOUT in litellm.rs).
-        // Failure is silent: the stale cache still loads via autoload.
         if let Ok(idx) = litellm::refresh_cache() {
             agtop_core::pricing::set_pricing_index(idx);
         }
     }
-    // Otherwise cache is fresh — let `pricing::lookup`'s autoload
-    // handle the on-disk read at first use.
 }
 
 fn init_logging(verbose: bool, tui_mode: bool) {
