@@ -20,10 +20,10 @@ use walkdir::WalkDir;
 
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Provider;
+use crate::provider::Client;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
-    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Number of most-recently-modified rollout files to scan when looking
@@ -53,9 +53,9 @@ impl Default for CodexProvider {
     }
 }
 
-impl Provider for CodexProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Codex
+impl Client for CodexProvider {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Codex
     }
 
     fn display_name(&self) -> &'static str {
@@ -150,7 +150,7 @@ fn collect_plan_usage(auth_path: &Path, sessions_root: &Path) -> Vec<PlanUsage> 
     };
 
     vec![PlanUsage {
-        provider: ProviderKind::Codex,
+        client: ClientKind::Codex,
         label,
         plan_name,
         windows: scan.windows,
@@ -483,7 +483,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let last_active = mtime(path).or(started_at);
 
     Ok(SessionSummary {
-        provider: ProviderKind::Codex,
+        client: ClientKind::Codex,
         subscription: None,
         session_id: session_id.unwrap_or_else(|| {
             path.file_stem()
@@ -611,11 +611,11 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         .clone()
         .ok_or_else(|| Error::NoUsage(summary.session_id.clone()))?;
     let rates =
-        pricing::lookup(ProviderKind::Codex, &model).ok_or_else(|| Error::UnknownPricing {
+        pricing::lookup(ClientKind::Codex, &model).ok_or_else(|| Error::UnknownPricing {
             provider: "codex".into(),
             model: model.clone(),
         })?;
-    let included = matches!(plan.mode_for(ProviderKind::Codex), PlanMode::Included);
+    let included = matches!(plan.mode_for(ClientKind::Codex), PlanMode::Included);
     let cost = pricing::compute_cost(&totals, &rates, included);
     let duration_secs = match (first_ts, last_ts) {
         (Some(start), Some(end)) if end >= start => Some((end - start).num_seconds() as u64),
@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(usages.len(), 1);
         let u = &usages[0];
         assert_eq!(u.plan_name.as_deref(), Some("ChatGPT Plus"));
-        assert_eq!(u.provider, ProviderKind::Codex);
+        assert_eq!(u.client, ClientKind::Codex);
         assert_eq!(u.label, "Codex · ChatGPT Plus");
     }
 

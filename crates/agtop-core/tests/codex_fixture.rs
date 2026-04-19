@@ -13,7 +13,7 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::providers::codex::CodexProvider;
-use agtop_core::{Plan, Provider, ProviderKind, SessionSummary};
+use agtop_core::{Plan, Client, ClientKind, SessionSummary};
 
 // ---------------------------------------------------------------------------
 // Minimal temp-dir helper (mirrors the one in the codex unit tests)
@@ -210,7 +210,7 @@ fn codex_fixture_token_counts_are_summed() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -249,7 +249,7 @@ fn codex_fixture_tool_call_count() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -286,7 +286,7 @@ fn codex_fixture_duration_from_timestamps() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,
@@ -324,7 +324,7 @@ fn codex_fixture_retail_cost_is_positive() {
     let fixture_path = write_codex_fixture(tmp.0.as_path());
 
     let summary = SessionSummary::new(
-        ProviderKind::Codex,
+        ClientKind::Codex,
         None,
         "aabbccddeeff-fixture-session".into(),
         None,

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ProviderKind {
+pub enum ClientKind {
     Claude,
     Codex,
     OpenCode,
@@ -17,7 +17,7 @@ pub enum ProviderKind {
     Antigravity,
 }
 
-impl ProviderKind {
+impl ClientKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -31,11 +31,11 @@ impl ProviderKind {
         }
     }
 
-    /// Every `ProviderKind` variant, in a stable display order.
+    /// Every `ClientKind` variant, in a stable display order.
     /// Keep this in sync with the enum definition — a missing variant
     /// here silently excludes that provider from default-enabled sets.
     #[must_use]
-    pub const fn all() -> &'static [ProviderKind] {
+    pub const fn all() -> &'static [ClientKind] {
         &[
             Self::Claude,
             Self::Codex,
@@ -48,7 +48,7 @@ impl ProviderKind {
     }
 }
 
-impl std::fmt::Display for ProviderKind {
+impl std::fmt::Display for ClientKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
     }
@@ -58,7 +58,7 @@ impl std::fmt::Display for ProviderKind {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
-    pub provider: ProviderKind,
+    pub client: ClientKind,
     /// Billing/auth bucket for this session when known, e.g. "Max 5x",
     /// "ChatGPT Plus", or "API key".
     #[serde(default)]
@@ -72,13 +72,13 @@ pub struct SessionSummary {
     /// Coarse workflow state such as `waiting` or `stopped`.
     #[serde(default)]
     pub state: Option<String>,
-    /// Provider-specific explanation of the derived state.
+    /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
     /// Explicit reasoning/model effort when the provider exposes it.
     #[serde(default)]
     pub model_effort: Option<String>,
-    /// Provider-specific explanation of where the effort came from.
+    /// Client-specific explanation of where the effort came from.
     #[serde(default)]
     pub model_effort_detail: Option<String>,
     /// Human-readable session title when the provider stores one (e.g. the
@@ -115,7 +115,7 @@ impl SessionSummary {
     /// when new (non-exhaustive) fields are added.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        provider: ProviderKind,
+        client: ClientKind,
         subscription: Option<String>,
         session_id: String,
         started_at: Option<DateTime<Utc>>,
@@ -129,7 +129,7 @@ impl SessionSummary {
         model_effort_detail: Option<String>,
     ) -> Self {
         Self {
-            provider,
+            client,
             subscription,
             session_id,
             started_at,
@@ -288,7 +288,7 @@ impl PlanWindow {
 impl PlanUsage {
     /// Construct a [`PlanUsage`] with all fields explicitly specified.
     pub fn new(
-        provider: ProviderKind,
+        client: ClientKind,
         label: String,
         plan_name: Option<String>,
         windows: Vec<PlanWindow>,
@@ -296,7 +296,7 @@ impl PlanUsage {
         note: Option<String>,
     ) -> Self {
         Self {
-            provider,
+            client,
             label,
             plan_name,
             windows,
@@ -344,8 +344,8 @@ pub struct PlanWindow {
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanUsage {
-    pub provider: ProviderKind,
-    /// Provider-qualified label for the card header, e.g. "Claude Code ·
+    pub client: ClientKind,
+    /// Client-qualified label for the card header, e.g. "Claude Code ·
     /// Max 5x" or "OpenCode · anthropic (Max)". Free-form; renderers
     /// display verbatim.
     pub label: String,
@@ -370,11 +370,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_kind_all_lists_every_variant() {
-        let all = ProviderKind::all();
+    fn client_kind_all_lists_every_variant() {
+        let all = ClientKind::all();
         assert_eq!(all.len(), 7, "expected all 7 providers: {all:?}");
         // Spot-check a couple of variants to guard against silent drift.
-        assert!(all.contains(&ProviderKind::Claude));
-        assert!(all.contains(&ProviderKind::Antigravity));
+        assert!(all.contains(&ClientKind::Claude));
+        assert!(all.contains(&ClientKind::Antigravity));
     }
 }

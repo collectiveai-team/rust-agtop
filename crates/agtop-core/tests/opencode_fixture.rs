@@ -12,7 +12,7 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::providers::opencode::OpenCodeProvider;
-use agtop_core::{Plan, Provider, ProviderKind, SessionSummary};
+use agtop_core::{Plan, Client, ClientKind, SessionSummary};
 
 // ---------------------------------------------------------------------------
 // Temp-dir helper
@@ -56,7 +56,7 @@ fn make_summary(data_path: PathBuf) -> SessionSummary {
     let started = Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap();
     let ended = Utc.with_ymd_and_hms(2026, 4, 17, 10, 5, 0).unwrap(); // 5 minutes
     SessionSummary::new(
-        ProviderKind::OpenCode,
+        ClientKind::OpenCode,
         None,
         SESSION_ID.into(),
         Some(started),

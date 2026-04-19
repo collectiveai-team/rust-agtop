@@ -20,9 +20,9 @@ use chrono::{DateTime, Utc};
 
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
+use crate::provider::Client;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
-use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 #[derive(Debug)]
 pub struct CursorProvider {
@@ -52,9 +52,9 @@ impl Default for CursorProvider {
     }
 }
 
-impl Provider for CursorProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Cursor
+impl Client for CursorProvider {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Cursor
     }
 
     fn display_name(&self) -> &'static str {
@@ -207,7 +207,7 @@ fn parse_cursor_transcript(
     let last_active = latest.or_else(|| mtime(path));
 
     Ok(SessionSummary::new(
-        ProviderKind::Cursor,
+        ClientKind::Cursor,
         subscription,
         session_id,
         earliest,
@@ -368,7 +368,7 @@ mod tests {
         let sessions = p.list_sessions().unwrap();
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].session_id, composer_id);
-        assert_eq!(sessions[0].provider, ProviderKind::Cursor);
+        assert_eq!(sessions[0].client, ClientKind::Cursor);
         assert_eq!(sessions[0].model.as_deref(), Some("gpt-4.1"));
         assert_eq!(sessions[0].cwd.as_deref(), Some("myworkspace"));
     }

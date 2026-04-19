@@ -16,11 +16,10 @@ use std::time::{Duration, SystemTime};
 
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
+use crate::provider::Client;
 use crate::providers::util::{mtime, DiscoverCache};
 use crate::session::{
-    CostBreakdown, PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary,
-    TokenTotals,
+    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Quota API cache TTL.
@@ -73,9 +72,9 @@ impl Default for CopilotProvider {
     }
 }
 
-impl Provider for CopilotProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Copilot
+impl Client for CopilotProvider {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Copilot
     }
 
     fn display_name(&self) -> &'static str {
@@ -245,7 +244,7 @@ fn parse_session_all(
     };
 
     let summary = SessionSummary::new(
-        ProviderKind::Copilot,
+        ClientKind::Copilot,
         None, // subscription set by list_sessions caller if available
         session_id,
         started_at,
@@ -466,7 +465,7 @@ fn fetch_copilot_quota(gh_token: &str) -> Result<Vec<PlanUsage>> {
     }
 
     Ok(vec![PlanUsage::new(
-        ProviderKind::Copilot,
+        ClientKind::Copilot,
         label,
         plan_name,
         windows,
@@ -544,7 +543,7 @@ mod tests {
             "02742fb3-d98e-4fa2-8184-2fddd7ee544d"
         );
         assert_eq!(sessions[0].model.as_deref(), Some("copilot/gpt-4.1"));
-        assert_eq!(sessions[0].provider, ProviderKind::Copilot);
+        assert_eq!(sessions[0].client, ClientKind::Copilot);
     }
 
     #[test]

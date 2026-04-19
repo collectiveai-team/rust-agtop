@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Provider;
+use crate::provider::Client;
 use crate::providers::util::{dir_exists, DiscoverCache};
 use crate::session::{
-    PlanUsage, PlanWindow, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -54,9 +54,9 @@ impl Default for OpenCodeProvider {
     }
 }
 
-impl Provider for OpenCodeProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::OpenCode
+impl Client for OpenCodeProvider {
+    fn kind(&self) -> ClientKind {
+        ClientKind::OpenCode
     }
 
     fn display_name(&self) -> &'static str {
@@ -273,7 +273,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
         if provider_id == "anthropic" {
             if let Some(live) = live_usage {
                 out.push(PlanUsage {
-                    provider: ProviderKind::OpenCode,
+                    client: ClientKind::OpenCode,
                     label: format!("OpenCode · {}", live.plan_name),
                     plan_name: Some(live.plan_name),
                     windows: live.windows,
@@ -284,7 +284,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             }
 
             out.push(PlanUsage {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 label: "OpenCode · Max 5x".to_string(),
                 plan_name: Some("Max 5x".to_string()),
                 windows: anthropic_windows.clone(),
@@ -297,7 +297,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
         if let Some(live) = live_usage {
             let plan_name = live.plan_name;
             out.push(PlanUsage {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 label: format!("OpenCode · {plan_name}"),
                 plan_name: Some(plan_name),
                 windows: live.windows,
@@ -312,7 +312,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             .cloned()
             .unwrap_or_else(|| format!("{} (OAuth)", title_case_words(&provider_id)));
         out.push(PlanUsage {
-            provider: ProviderKind::OpenCode,
+            client: ClientKind::OpenCode,
             label: format!("OpenCode · {plan_name}"),
             plan_name: Some(plan_name),
             windows: Vec::new(),
@@ -544,12 +544,12 @@ fn session_activity_timestamp(summary: &SessionSummary) -> Option<DateTime<Utc>>
 fn session_matches_live_usage_provider(summary: &SessionSummary, provider_id: &str) -> bool {
     match provider_id {
         "anthropic" => {
-            summary.provider == ProviderKind::Claude
+            summary.client == ClientKind::Claude
                 || subscription_matches(summary.subscription.as_deref(), &["max"])
                 || model_matches_family(summary.model.as_deref(), "anthropic")
         }
         "openai" => {
-            summary.provider == ProviderKind::Codex
+            summary.client == ClientKind::Codex
                 || subscription_matches(summary.subscription.as_deref(), &["chatgpt"])
                 || model_matches_family(summary.model.as_deref(), "openai")
         }
@@ -1055,7 +1055,7 @@ fn list_sessions_sqlite(
                     (None, None)
                 };
             SessionSummary {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 subscription,
                 session_id: id.clone(),
                 started_at,
@@ -1114,7 +1114,7 @@ fn list_child_sessions_sqlite(
                         .map_or((None, None), |(e, d)| (Some(e), Some(d)))
                 };
             SessionSummary {
-                provider: ProviderKind::OpenCode,
+                client: ClientKind::OpenCode,
                 subscription,
                 session_id: id.clone(),
                 started_at,
@@ -1240,7 +1240,7 @@ impl TurnAccumulator {
         }
         if let Some(m) = v.get("modelID").and_then(|x| x.as_str()) {
             if let Some(window) =
-                pricing::context_window(ProviderKind::OpenCode, m).filter(|w| *w > 0)
+                pricing::context_window(ClientKind::OpenCode, m).filter(|w| *w > 0)
             {
                 let turn_total = v
                     .get("tokens")
@@ -1295,11 +1295,11 @@ impl TurnAccumulator {
         }
         self.totals.cached_input = self.totals.cache_read;
 
-        let included = matches!(plan.mode_for(ProviderKind::OpenCode), PlanMode::Included);
+        let included = matches!(plan.mode_for(ClientKind::OpenCode), PlanMode::Included);
         let cost = match self
             .model
             .as_deref()
-            .and_then(|m| pricing::lookup(ProviderKind::OpenCode, m))
+            .and_then(|m| pricing::lookup(ClientKind::OpenCode, m))
         {
             Some(rates) => pricing::compute_cost(&self.totals, &rates, included),
             None => {
@@ -1487,7 +1487,7 @@ fn summarize_opencode_session_json(
     };
 
     Ok(SessionSummary {
-        provider: ProviderKind::OpenCode,
+        client: ClientKind::OpenCode,
         subscription,
         session_id,
         started_at: created,
@@ -2343,7 +2343,7 @@ mod tests {
     #[test]
     fn anthropic_activity_matches_claude_and_opencode_sessions() {
         let claude = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             Some("Max 5x".to_string()),
             "c1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
@@ -2357,7 +2357,7 @@ mod tests {
             None,
         );
         let opencode = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             Some("Max 5x".to_string()),
             "o1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
@@ -2371,7 +2371,7 @@ mod tests {
             None,
         );
         let codex = SessionSummary::new(
-            ProviderKind::Codex,
+            ClientKind::Codex,
             Some("ChatGPT Plus".to_string()),
             "x1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 40, 0).unwrap()),
@@ -2395,7 +2395,7 @@ mod tests {
     #[test]
     fn openai_activity_matches_codex_and_opencode_sessions() {
         let codex = SessionSummary::new(
-            ProviderKind::Codex,
+            ClientKind::Codex,
             Some("ChatGPT Plus".to_string()),
             "x1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
@@ -2409,7 +2409,7 @@ mod tests {
             None,
         );
         let opencode = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             Some("ChatGPT Plus".to_string()),
             "o1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),

@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use agtop_core::providers::claude::ClaudeProvider;
-use agtop_core::{Plan, Provider, ProviderKind, SessionSummary};
+use agtop_core::{Plan, Client, ClientKind, SessionSummary};
 
 fn fixture_main_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -19,7 +19,7 @@ fn fixture_main_path() -> PathBuf {
 
 fn summary_for_fixture() -> SessionSummary {
     SessionSummary::new(
-        ProviderKind::Claude,
+        ClientKind::Claude,
         None,
         "deadbeef-1234-5678-9abc-def012345678".into(),
         None,

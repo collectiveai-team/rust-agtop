@@ -1,5 +1,5 @@
 use crate::pricing::Plan;
-use crate::session::{PlanUsage, ProviderKind, SessionAnalysis, SessionSummary};
+use crate::session::{ClientKind, PlanUsage, SessionAnalysis, SessionSummary};
 use crate::Result;
 
 /// A provider knows how to:
@@ -9,8 +9,8 @@ use crate::Result;
 /// Implementations must be `Send + Sync` so the CLI/TUI can call them from
 /// any thread. They should be cheap to construct (no filesystem work in
 /// `Default::default()` or `new`); defer real work to `list_sessions`.
-pub trait Provider: std::fmt::Debug + Send + Sync {
-    fn kind(&self) -> ProviderKind;
+pub trait Client: std::fmt::Debug + Send + Sync {
+    fn kind(&self) -> ClientKind;
 
     /// Human-readable name (e.g. "Claude Code").
     fn display_name(&self) -> &'static str {

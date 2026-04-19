@@ -12,9 +12,9 @@ use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Provider;
+use crate::provider::Client;
 use crate::providers::util::mtime;
-use crate::session::{CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 /// SQLite key that holds session trajectory summaries (protobuf blob).
 const TRAJECTORY_KEY: &str = "antigravityUnifiedStateSync.trajectorySummaries";
@@ -40,9 +40,9 @@ impl Default for AntigravityProvider {
     }
 }
 
-impl Provider for AntigravityProvider {
-    fn kind(&self) -> ProviderKind {
-        ProviderKind::Antigravity
+impl Client for AntigravityProvider {
+    fn kind(&self) -> ClientKind {
+        ClientKind::Antigravity
     }
 
     fn display_name(&self) -> &'static str {
@@ -90,7 +90,7 @@ impl Provider for AntigravityProvider {
             .into_iter()
             .map(|id| {
                 SessionSummary::new(
-                    ProviderKind::Antigravity,
+                    ClientKind::Antigravity,
                     subscription.clone(),
                     id,
                     None,     // started_at — not decodable without schema
