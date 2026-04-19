@@ -23,6 +23,20 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         }
         Some((_, a)) => {
             let s = &a.summary;
+
+            // Check if the selected session is a child of any parent.
+            let parent_id: Option<String> = app.sessions().iter().find_map(|parent| {
+                if parent
+                    .children
+                    .iter()
+                    .any(|c| c.summary.session_id == s.session_id)
+                {
+                    Some(parent.summary.session_id.clone())
+                } else {
+                    None
+                }
+            });
+
             let fmt_dt = |dt: Option<DateTime<Utc>>| match dt {
                 Some(t) => t
                     .with_timezone(&Local)
@@ -33,7 +47,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // `kv_line` owns the value string so temporaries can't go
             // out of scope mid-render. Build everything as `String`
             // first, then hand it over.
-            let mut lines = vec![
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            // If this session is a subagent, show the parent backlink first.
+            if let Some(ref pid) = parent_id {
+                lines.push(kv_line("parent", pid.clone()));
+            }
+            lines.extend([
                 kv_line("agentic_provider", s.provider.as_str().to_string()),
                 kv_line(
                     "subscription",
@@ -91,14 +110,6 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
                 kv_line("data_path", s.data_path.display().to_string()),
                 kv_line(
-                    "subagents",
-                    if a.subagent_file_count == 0 {
-                        "-".to_string()
-                    } else {
-                        format!("{} file(s)", a.subagent_file_count)
-                    },
-                ),
-                kv_line(
                     "billing",
                     if a.cost.included {
                         "included (plan covers this)".to_string()
@@ -131,12 +142,57 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                         format!("${:.4}", a.cost.total)
                     },
                 ),
-            ];
+            ]);
             if let Some(detail) = &s.state_detail {
                 lines.push(kv_line("state_detail", detail.clone()));
             }
             if let Some(detail) = &s.model_effort_detail {
                 lines.push(kv_line("effort_detail", detail.clone()));
+            }
+            // Subagents section: shown only when the selected session has children.
+            if !a.children.is_empty() {
+                let total_tokens: u64 = a
+                    .children
+                    .iter()
+                    .map(|c| {
+                        c.tokens.input
+                            + c.tokens.output
+                            + c.tokens.cache_read
+                            + c.tokens.cache_write_5m
+                            + c.tokens.cache_write_1h
+                            + c.tokens.cached_input
+                    })
+                    .sum();
+                let total_cost: f64 = a.children.iter().map(|c| c.cost.total).sum();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{:>16}", "subagents"), th::INFO_KEY),
+                    Span::raw(format!(
+                        "  {} session(s) | {} tokens | ${:.4}",
+                        a.children.len(),
+                        compact_tokens(total_tokens),
+                        total_cost,
+                    )),
+                ]));
+                for child in &a.children {
+                    let cs = &child.summary;
+                    let child_tokens = child.tokens.input
+                        + child.tokens.output
+                        + child.tokens.cache_read
+                        + child.tokens.cache_write_5m
+                        + child.tokens.cache_write_1h
+                        + child.tokens.cached_input;
+                    let short_id = crate::fmt::short_id(&cs.session_id);
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{:>18}", "")),
+                        Span::styled(format!("{:<12}", short_id), th::INFO_KEY),
+                        Span::raw(format!(
+                            "  {} tok  ${:.4}  {}",
+                            compact_tokens(child_tokens),
+                            child.cost.total,
+                            cs.state.as_deref().unwrap_or("-"),
+                        )),
+                    ]));
+                }
             }
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
