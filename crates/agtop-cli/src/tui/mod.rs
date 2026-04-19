@@ -109,6 +109,7 @@ pub fn run(
     )
     .context("spawn background refresh worker")?;
     let mut app = App::new();
+    app.attach_enabled_arc(std::sync::Arc::clone(&enabled_arc));
     if start_dashboard {
         app.set_ui_mode(UiMode::Dashboard);
     }

@@ -220,6 +220,11 @@ pub struct App {
     /// Interior mutability so `view()` stays `&self` (required by all
     /// widget render functions that borrow `App` immutably).
     view_cache: RefCell<Option<Vec<usize>>>,
+    /// Shared enabled-provider set. Some when running under the TUI (set
+    /// by `tui::run`); None in unit tests that don't need the wire-up.
+    enabled_arc: Option<
+        std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ProviderKind>>>,
+    >,
 }
 
 impl Default for App {
@@ -255,6 +260,7 @@ impl App {
             column_config,
             config_cursor: 0,
             view_cache: RefCell::new(None),
+            enabled_arc: None,
         }
     }
 
@@ -383,6 +389,11 @@ impl App {
             ConfigSection::Providers => {
                 let local = self.config_local_idx(self.config_cursor);
                 self.column_config.toggle_provider(local);
+                if let Some(arc) = &self.enabled_arc {
+                    if let Ok(mut guard) = arc.write() {
+                        *guard = self.column_config.enabled_providers();
+                    }
+                }
             }
             ConfigSection::Columns => {
                 let local = self.config_local_idx(self.config_cursor);
@@ -423,6 +434,13 @@ impl App {
     /// and for seeding the shared Arc<RwLock<...>> at startup).
     pub fn enabled_providers_set(&self) -> std::collections::HashSet<agtop_core::ProviderKind> {
         self.column_config.enabled_providers()
+    }
+
+    pub fn attach_enabled_arc(
+        &mut self,
+        arc: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ProviderKind>>>,
+    ) {
+        self.enabled_arc = Some(arc);
     }
 
     /// Backward-compat alias used by events.rs until it's updated.
@@ -1143,5 +1161,27 @@ mod tests {
             app.config_move_down();
         }
         assert_eq!(app.config_cursor(), max);
+    }
+
+    #[test]
+    fn toggle_provider_updates_shared_enabled_arc() {
+        use agtop_core::ProviderKind;
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+
+        let mut app = App::new();
+        let arc: Arc<RwLock<HashSet<ProviderKind>>> =
+            Arc::new(RwLock::new(ProviderKind::all().iter().copied().collect()));
+        app.attach_enabled_arc(Arc::clone(&arc));
+
+        let kind = app.column_config().providers[0].kind;
+        app.set_config_cursor(0);
+        app.toggle_cursor_item();
+
+        let live = arc.read().unwrap();
+        assert!(
+            !live.contains(&kind),
+            "disabled provider still in shared set"
+        );
     }
 }
