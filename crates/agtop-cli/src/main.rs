@@ -51,8 +51,9 @@ struct Cli {
     #[arg(short = 'w', long)]
     watch: bool,
 
-    /// Seconds between refreshes in `--watch` mode (default: 2).
-    #[arg(short = 'd', long, default_value_t = 2u64, value_name = "SECS")]
+    /// Seconds between refreshes in `--watch` / TUI mode (default: 5).
+    /// Press `r` in the TUI to force an immediate refresh.
+    #[arg(short = 'd', long, default_value_t = 5u64, value_name = "SECS")]
     delay: u64,
 
     /// Start directly in the btop-style dashboard view.
