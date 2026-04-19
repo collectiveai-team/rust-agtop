@@ -424,6 +424,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         state_detail,
         model_effort: None,
         model_effort_detail: None,
+        session_title: None,
         data_path: path.to_path_buf(),
     })
 }

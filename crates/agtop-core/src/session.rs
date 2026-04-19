@@ -81,6 +81,10 @@ pub struct SessionSummary {
     /// Provider-specific explanation of where the effort came from.
     #[serde(default)]
     pub model_effort_detail: Option<String>,
+    /// Human-readable session title when the provider stores one (e.g. the
+    /// first user message summary in OpenCode).
+    #[serde(default)]
+    pub session_title: Option<String>,
     /// Primary data file / directory for this session.
     pub data_path: PathBuf,
 }
@@ -136,6 +140,7 @@ impl SessionSummary {
             state_detail,
             model_effort,
             model_effort_detail,
+            session_title: None,
             data_path,
         }
     }

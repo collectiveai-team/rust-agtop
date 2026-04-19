@@ -499,6 +499,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         state_detail,
         model_effort,
         model_effort_detail,
+        session_title: None,
         data_path: path.to_path_buf(),
     })
 }

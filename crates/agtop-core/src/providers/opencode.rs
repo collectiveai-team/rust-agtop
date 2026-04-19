@@ -978,7 +978,7 @@ fn list_sessions_sqlite(
 ) -> Result<Vec<SessionSummary>> {
     let conn = open_db(db_path)?;
     let mut stmt = conn.prepare(
-        "SELECT id, directory, time_created, time_updated FROM session \
+        "SELECT id, directory, time_created, time_updated, title FROM session \
          WHERE time_archived IS NULL OR time_archived = 0 \
          ORDER BY time_updated DESC",
     )?;
@@ -989,10 +989,11 @@ fn list_sessions_sqlite(
             let cwd: Option<String> = row.get(1)?;
             let created_ms: Option<i64> = row.get(2)?;
             let updated_ms: Option<i64> = row.get(3)?;
-            Ok((id, cwd, created_ms, updated_ms))
+            let title: Option<String> = row.get(4)?;
+            Ok((id, cwd, created_ms, updated_ms, title))
         })?
         .filter_map(|r| r.ok())
-        .map(|(id, cwd, created_ms, updated_ms)| {
+        .map(|(id, cwd, created_ms, updated_ms, title)| {
             let started_at = created_ms.and_then(ms_to_utc);
             let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
             let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
@@ -1018,6 +1019,7 @@ fn list_sessions_sqlite(
                 state_detail,
                 model_effort,
                 model_effort_detail,
+                session_title: title,
                 data_path: db_path.to_path_buf(),
             }
         })
@@ -1389,6 +1391,7 @@ fn summarize_opencode_session_json(
         state_detail,
         model_effort,
         model_effort_detail,
+        session_title: None,
         data_path: session_file.to_path_buf(),
     })
 }

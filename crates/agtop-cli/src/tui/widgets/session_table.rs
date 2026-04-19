@@ -282,6 +282,9 @@ fn row_for<'a>(
             ),
             ColumnId::Context => Cell::from(context_text.clone()).style(context_style),
             ColumnId::Project => Cell::from(a.project_name.clone().unwrap_or_else(|| "-".into())),
+            ColumnId::SessionName => {
+                Cell::from(s.session_title.clone().unwrap_or_else(|| "-".into()))
+            }
         })
         .collect();
 

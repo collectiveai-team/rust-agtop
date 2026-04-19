@@ -34,6 +34,7 @@ pub enum ColumnId {
     UserTurns,
     Context,
     Project,
+    SessionName,
 }
 
 impl ColumnId {
@@ -59,6 +60,7 @@ impl ColumnId {
             ColumnId::Context,
             ColumnId::Cost,
             ColumnId::Project,
+            ColumnId::SessionName,
             ColumnId::Cwd,
         ]
     }
@@ -85,6 +87,7 @@ impl ColumnId {
             ColumnId::UserTurns => "USER",
             ColumnId::Context => "CONTEXT",
             ColumnId::Project => "PROJECT",
+            ColumnId::SessionName => "NAME",
         }
     }
 
@@ -110,6 +113,7 @@ impl ColumnId {
             ColumnId::UserTurns => "Number of user turns",
             ColumnId::Context => "Peak context window usage",
             ColumnId::Project => "Inferred project name (from git remote)",
+            ColumnId::SessionName => "Session title/name set by the agent",
         }
     }
 
@@ -136,6 +140,7 @@ impl ColumnId {
             ColumnId::UserTurns => Some(6),
             ColumnId::Context => Some(20),
             ColumnId::Project => Some(16),
+            ColumnId::SessionName => Some(24),
         }
     }
 
@@ -162,6 +167,7 @@ impl ColumnId {
             ColumnId::UserTurns => Some(SortColumn::UserTurns),
             ColumnId::Context => None,
             ColumnId::Project => Some(SortColumn::Project),
+            ColumnId::SessionName => None,
         }
     }
 
