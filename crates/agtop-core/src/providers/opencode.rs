@@ -1258,6 +1258,7 @@ impl TurnAccumulator {
             context_used_pct: self.context_used_pct,
             context_used_tokens: self.context_used_tokens,
             context_window: self.context_window,
+            children: Vec::new(),
             agent_turns: if self.agent_turns > 0 {
                 Some(self.agent_turns)
             } else {

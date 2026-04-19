@@ -526,6 +526,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         context_used_pct,
         context_used_tokens,
         context_window,
+        children: Vec::new(),
         agent_turns: if agent_turns > 0 {
             Some(agent_turns)
         } else {
