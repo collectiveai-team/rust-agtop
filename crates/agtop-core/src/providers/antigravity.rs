@@ -80,9 +80,7 @@ impl Provider for AntigravityProvider {
                 |row| row.get(0),
             )
             .ok();
-        let subscription = sub_blob
-            .as_deref()
-            .and_then(|b| extract_subscription_hint(b));
+        let subscription = sub_blob.as_deref().and_then(extract_subscription_hint);
 
         // Extract UUID-like strings from the protobuf blob.
         let ids = extract_uuids(&blob);

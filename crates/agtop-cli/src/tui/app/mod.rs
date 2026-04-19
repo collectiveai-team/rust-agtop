@@ -432,6 +432,7 @@ impl App {
 
     /// Read-only snapshot of the currently-enabled providers (for tests
     /// and for seeding the shared Arc<RwLock<...>> at startup).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn enabled_providers_set(&self) -> std::collections::HashSet<agtop_core::ProviderKind> {
         self.column_config.enabled_providers()
     }

@@ -36,8 +36,10 @@ struct Cli {
     #[arg(short = 'p', long, default_value = "retail")]
     plan: String,
 
-    /// Only include sessions from this agentic provider (claude, codex, opencode).
-    /// May be given multiple times.
+    /// Only include sessions from this agentic provider (claude, codex,
+    /// opencode, copilot, gemini-cli, cursor, antigravity). May be given
+    /// multiple times. Affects the current run only — persisted
+    /// enable/disable lives in the TUI's Config tab.
     #[arg(
         long = "provider",
         alias = "backend",

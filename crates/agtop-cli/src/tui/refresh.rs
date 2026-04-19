@@ -56,7 +56,6 @@ pub struct RefreshHandle {
     /// Set to `true` before we drop the runtime so the worker doesn't
     /// start another `analyze_all` call while the runtime is shutting down.
     shutdown: Arc<AtomicBool>,
-    enabled: Arc<RwLock<HashSet<ProviderKind>>>, // used by the UI to mutate
     _runtime: tokio::runtime::Runtime,
 }
 
@@ -82,13 +81,6 @@ impl RefreshHandle {
         } else {
             None
         }
-    }
-
-    /// Return a clone of the shared enabled-provider set so the UI can
-    /// mutate it (e.g. to toggle a provider on/off). Changes are picked
-    /// up by the worker on the next refresh cycle.
-    pub fn enabled(&self) -> Arc<RwLock<HashSet<ProviderKind>>> {
-        Arc::clone(&self.enabled)
     }
 
     /// Ask the worker to run one refresh ASAP, outside the normal
@@ -294,7 +286,6 @@ pub fn spawn(
         rx,
         manual_tx,
         shutdown,
-        enabled,
         _runtime: runtime,
     })
 }

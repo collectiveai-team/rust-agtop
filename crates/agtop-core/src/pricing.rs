@@ -247,10 +247,11 @@ fn builtin_context_window(provider: ProviderKind, model: &str) -> Option<u64> {
             }
         }
         ProviderKind::GeminiCli => {
-            if model.starts_with("gemini-2.5") {
+            if model.starts_with("gemini-2.5")
+                || model.starts_with("gemini-2.0")
+                || model.starts_with("gemini-1.5")
+            {
                 Some(1_048_576) // 1M tokens
-            } else if model.starts_with("gemini-2.0") || model.starts_with("gemini-1.5") {
-                Some(1_048_576)
             } else {
                 None
             }
