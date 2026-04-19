@@ -6,11 +6,8 @@
 //!    `requestId`; the last write wins for that turn (same policy as the
 //!    original `extractClaudeSessionData`).
 //!
-//! Subagent sidechains (`<slug>/<uuid>/subagents/*.jsonl`) are folded into
-//! the parent session's totals so the reported cost reflects the full
-//! agent tree. Each sidechain file is a small Claude transcript in its
-//! own right — we reuse the same per-request dedup logic to sum it,
-//! then add the result to the parent.
+//! Subagent sidechains (`<slug>/<uuid>/subagents/*.jsonl`) are exposed as
+//! child sessions. Parent analysis only reflects direct transcript usage.
 
 use std::collections::HashMap;
 use std::fs;
@@ -129,6 +126,25 @@ impl Provider for ClaudeProvider {
 
     fn analyze(&self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
         analyze_claude_file(summary, plan)
+    }
+
+    fn children(&self, parent: &SessionSummary) -> Result<Vec<SessionSummary>> {
+        let mut out = Vec::new();
+        for path in list_subagent_files(&parent.data_path, &parent.session_id) {
+            let cached = {
+                let mut guard = self.discover_cache.lock().unwrap();
+                guard.get_or_insert_with(&path, || summarize_claude_file(&path))
+            };
+            match cached {
+                Ok(mut summary) if summary.model.is_some() => {
+                    summary.subscription = parent.subscription.clone();
+                    out.push(summary);
+                }
+                Ok(_) => continue,
+                Err(e) => tracing::debug!(path = %path.display(), error = %e, "skip claude child"),
+            }
+        }
+        Ok(out)
     }
 
     fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
@@ -463,32 +479,6 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     add_agent_turns(&mut agent_turns, &main_file_totals);
     merge_context(&main_file_totals);
 
-    // Subagent sidechain transcripts (if any). They live in a directory
-    // sibling to the main `<uuid>.jsonl`, named `<uuid>/subagents/*.jsonl`.
-    // Each sidechain is its own small Claude transcript, so we sum them
-    // exactly the same way. Subagents may run a different model than the
-    // main session (Haiku for "search" subagents, etc.); we still attribute
-    // their tokens to the main session's model for costing purposes —
-    // that's a small fidelity loss in exchange for keeping the cost math
-    // single-rate per session, matching the original JS agtop.
-    let subagent_files = list_subagent_files(path, &summary.session_id);
-    let subagent_file_count = subagent_files.len();
-    for sub in &subagent_files {
-        // `sum_jsonl_usage` updates `effective_model` if a subagent reports
-        // one and the main transcript didn't — fine. We intentionally pass
-        // the shared `effective_model` so a subagent-only session (rare
-        // but possible on an abandoned main transcript) still resolves.
-        match sum_jsonl_usage(sub, &mut effective_model) {
-            Ok(sub_totals) => {
-                add_file_totals(&mut totals, &sub_totals);
-                tool_call_count += sub_totals.tool_call_count;
-                add_agent_turns(&mut agent_turns, &sub_totals);
-                merge_context(&sub_totals);
-            }
-            Err(e) => tracing::debug!(path = %sub.display(), error = %e, "skip subagent file"),
-        }
-    }
-
     // Claude's "cached_input" bucket for our cost math is cache_read.
     totals.cached_input = totals.cache_read;
 
@@ -512,7 +502,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         tokens: totals,
         cost,
         effective_model,
-        subagent_file_count,
+        subagent_file_count: 0,
         tool_call_count: Some(tool_call_count),
         duration_secs: summary
             .started_at
@@ -527,6 +517,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         context_used_pct,
         context_used_tokens,
         context_window,
+        children: Vec::new(),
         agent_turns: if agent_turns > 0 {
             Some(agent_turns)
         } else {
@@ -1013,5 +1004,102 @@ mod tests {
             }
             _ => panic!("list_sessions failed"),
         }
+    }
+
+    #[test]
+    fn children_returns_empty_when_subagent_dir_is_missing() {
+        let td = TestDir::new();
+        let projects = td.path().join("projects");
+        let provider = ClaudeProvider {
+            projects_root: projects,
+            discover_cache: std::sync::Mutex::default(),
+        };
+        let parent_path = td
+            .path()
+            .join("proj")
+            .join("02742fb3-d98e-4fa2-8184-2fddd7ee544d.jsonl");
+        write_jsonl(
+            &parent_path,
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-sonnet-4","content":[]}}"#,
+            ],
+        );
+        let parent = SessionSummary::new(
+            ProviderKind::Claude,
+            Some("Max 5x".to_string()),
+            "02742fb3-d98e-4fa2-8184-2fddd7ee544d".to_string(),
+            None,
+            None,
+            Some("claude-sonnet-4".to_string()),
+            None,
+            parent_path,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let children = crate::provider::Provider::children(&provider, &parent).unwrap();
+
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn children_returns_subagent_summary_and_inherits_subscription() {
+        let td = TestDir::new();
+        let projects = td.path().join("projects");
+        let provider = ClaudeProvider {
+            projects_root: projects,
+            discover_cache: std::sync::Mutex::default(),
+        };
+        let session_id = "02742fb3-d98e-4fa2-8184-2fddd7ee544d";
+        let parent_path = td.path().join("proj").join(format!("{session_id}.jsonl"));
+        write_jsonl(
+            &parent_path,
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-sonnet-4","content":[]}}"#,
+            ],
+        );
+        let child_path = td
+            .path()
+            .join("proj")
+            .join(session_id)
+            .join("subagents")
+            .join("subagent-child.jsonl");
+        write_jsonl(
+            &child_path,
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:01:00Z","cwd":"/tmp/subagent","message":{"model":"claude-3-5-haiku-20241022","content":[],"stop_reason":"end_turn"}}"#,
+            ],
+        );
+        let parent = SessionSummary::new(
+            ProviderKind::Claude,
+            Some("Max 5x".to_string()),
+            session_id.to_string(),
+            None,
+            None,
+            Some("claude-sonnet-4".to_string()),
+            None,
+            parent_path,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let children = crate::provider::Provider::children(&provider, &parent).unwrap();
+
+        assert_eq!(children.len(), 1);
+        let child = &children[0];
+        assert_eq!(child.subscription.as_deref(), Some("Max 5x"));
+        assert_eq!(child.session_id, "subagent-child");
+        assert_eq!(child.model.as_deref(), Some("claude-3-5-haiku-20241022"));
+        assert_eq!(child.cwd.as_deref(), Some("/tmp/subagent"));
+        assert_eq!(child.state.as_deref(), Some("stopped"));
+        assert_eq!(
+            child.state_detail.as_deref(),
+            Some("assistant.stop_reason=end_turn")
+        );
+        assert_eq!(child.data_path, child_path);
     }
 }

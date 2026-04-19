@@ -225,6 +225,10 @@ pub struct SessionAnalysis {
     /// `context_used_pct`. `None` when `context_used_pct` is `None`.
     #[serde(default)]
     pub context_window: Option<u64>,
+    /// Child subagent sessions, if this provider exposes a parent/child
+    /// relationship. Empty by default; populated by the refresh layer.
+    #[serde(default)]
+    pub children: Vec<SessionAnalysis>,
     /// Number of agent/assistant turns observed in the transcript.
     /// `None` when the provider does not expose this information.
     #[serde(default)]
@@ -268,6 +272,7 @@ impl SessionAnalysis {
             context_used_pct,
             context_used_tokens,
             context_window,
+            children: Vec::new(),
             agent_turns: None,
             user_turns: None,
             project_name: None,

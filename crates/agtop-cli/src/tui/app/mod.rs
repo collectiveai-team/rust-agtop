@@ -220,6 +220,8 @@ pub struct App {
     /// Interior mutability so `view()` stays `&self` (required by all
     /// widget render functions that borrow `App` immutably).
     view_cache: RefCell<Option<Vec<usize>>>,
+    /// Session IDs that are currently expanded to show their children.
+    expanded_sessions: std::collections::HashSet<String>,
     /// Shared enabled-provider set. Some when running under the TUI (set
     /// by `tui::run`); None in unit tests that don't need the wire-up.
     enabled_arc: Option<
@@ -260,6 +262,7 @@ impl App {
             column_config,
             config_cursor: 0,
             view_cache: RefCell::new(None),
+            expanded_sessions: std::collections::HashSet::new(),
             enabled_arc: None,
         }
     }
@@ -463,6 +466,34 @@ impl App {
     /// `view_cache` and recomputed only when the cache is explicitly
     /// invalidated by a mutation method.
     pub fn view(&self) -> Vec<&SessionAnalysis> {
+        self.ensure_view_cache();
+        self.iter_with_kinds().into_iter().map(|(a, _)| a).collect()
+    }
+
+    /// Like `view()` but also returns whether each entry is a child row.
+    pub fn view_with_kinds(&self) -> Vec<(&SessionAnalysis, bool)> {
+        self.ensure_view_cache();
+        self.iter_with_kinds()
+    }
+
+    /// Toggle expanded state for a session.
+    ///
+    /// Note: does NOT invalidate the view cache. The cache stores only sorted
+    /// parent indices; expansion state is applied on top at read time, so the
+    /// cache remains valid after a toggle.
+    pub fn toggle_expand(&mut self, session_id: &str) {
+        if self.expanded_sessions.contains(session_id) {
+            self.expanded_sessions.remove(session_id);
+        } else {
+            self.expanded_sessions.insert(session_id.to_owned());
+        }
+        self.reconcile_selection();
+    }
+
+    // ---- private view helpers ----------------------------------------------
+
+    /// Ensure the view cache (sorted+filtered parent indices) is populated.
+    fn ensure_view_cache(&self) {
         if self.view_cache.borrow().is_none() {
             let mut indexed: Vec<(usize, &SessionAnalysis)> = self
                 .sessions
@@ -480,13 +511,31 @@ impl App {
             let indices: Vec<usize> = indexed.into_iter().map(|(i, _)| i).collect();
             *self.view_cache.borrow_mut() = Some(indices);
         }
-        self.view_cache
-            .borrow()
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|&i| &self.sessions[i])
-            .collect()
+    }
+
+    /// Iterate over all visible rows (parents + expanded children) with a
+    /// boolean flag indicating whether each row is a child.
+    ///
+    /// Caller must ensure the view cache is populated before calling this.
+    fn iter_with_kinds(&self) -> Vec<(&SessionAnalysis, bool)> {
+        let mut result = Vec::new();
+        for &i in self.view_cache.borrow().as_ref().unwrap().iter() {
+            let parent = &self.sessions[i];
+            result.push((parent, false));
+            if !parent.children.is_empty()
+                && self.expanded_sessions.contains(&parent.summary.session_id)
+            {
+                for child in &parent.children {
+                    result.push((child, true));
+                }
+            }
+        }
+        result
+    }
+
+    /// Returns true if the given session is currently expanded.
+    pub fn is_expanded(&self, session_id: &str) -> bool {
+        self.expanded_sessions.contains(session_id)
     }
 
     /// Convenience: the count of sessions currently visible.
@@ -846,6 +895,45 @@ mod tests {
             None,
             None,
         )
+    }
+
+    fn sample_with_children(parent_id: &str, child_ids: &[&str]) -> SessionAnalysis {
+        let mut parent = sample(parent_id, ProviderKind::Claude, "claude-opus-4-6", 1.0, 100);
+        parent.children = child_ids
+            .iter()
+            .map(|id| sample(id, ProviderKind::Claude, "claude-opus-4-6", 0.5, 50))
+            .collect();
+        parent
+    }
+
+    #[test]
+    fn toggle_expand_shows_children() {
+        let mut app = App::new();
+        app.set_sessions(vec![sample_with_children("parent", &["c1", "c2"])]);
+        assert_eq!(app.view_len(), 1);
+        app.toggle_expand("parent");
+        assert_eq!(app.view_len(), 3);
+    }
+
+    #[test]
+    fn toggle_expand_twice_collapses() {
+        let mut app = App::new();
+        app.set_sessions(vec![sample_with_children("parent", &["c1", "c2"])]);
+        app.toggle_expand("parent");
+        assert_eq!(app.view_len(), 3);
+        app.toggle_expand("parent");
+        assert_eq!(app.view_len(), 1);
+    }
+
+    #[test]
+    fn expand_survives_refresh() {
+        let mut app = App::new();
+        let sessions = vec![sample_with_children("parent", &["c1"])];
+        app.set_sessions(sessions.clone());
+        app.toggle_expand("parent");
+        assert_eq!(app.view_len(), 2);
+        app.set_sessions(sessions);
+        assert_eq!(app.view_len(), 2);
     }
 
     #[test]

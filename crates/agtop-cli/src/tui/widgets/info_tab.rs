@@ -26,28 +26,37 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .block(block)
         }
         Some((_, a)) => {
+            let s = &a.summary;
             let now = Utc::now();
-            let mut lines: Vec<Line<'static>> = ColumnId::all()
-                .iter()
-                .map(|&col| column_line(col, a, now))
-                .collect();
+
+            // Check if the selected session is a child of any parent.
+            let parent_id: Option<String> = app.sessions().iter().find_map(|parent| {
+                if parent
+                    .children
+                    .iter()
+                    .any(|c| c.summary.session_id == s.session_id)
+                {
+                    Some(parent.summary.session_id.clone())
+                } else {
+                    None
+                }
+            });
+
+            let mut lines: Vec<Line<'static>> = Vec::new();
+
+            // If this session is a subagent, show the parent backlink first.
+            if let Some(ref pid) = parent_id {
+                lines.push(kv_line("parent", pid.clone()));
+            }
+
+            // Standard columns via the shared helper.
+            lines.extend(ColumnId::all().iter().map(|&col| column_line(col, a, now)));
 
             lines.push(kv_line(
                 "effective_model",
                 a.effective_model.clone().unwrap_or_else(|| "-".into()),
             ));
-            lines.push(kv_line(
-                "data_path",
-                a.summary.data_path.display().to_string(),
-            ));
-            lines.push(kv_line(
-                "subagents",
-                if a.subagent_file_count == 0 {
-                    "-".to_string()
-                } else {
-                    format!("{} file(s)", a.subagent_file_count)
-                },
-            ));
+            lines.push(kv_line("data_path", s.data_path.display().to_string()));
             lines.push(kv_line(
                 "billing",
                 if a.cost.included {
@@ -57,13 +66,58 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 },
             ));
 
-            if let Some(detail) = &a.summary.state_detail {
+            if let Some(detail) = &s.state_detail {
                 lines.push(kv_line("state_detail", detail.clone()));
             }
-            if let Some(detail) = &a.summary.model_effort_detail {
+            if let Some(detail) = &s.model_effort_detail {
                 lines.push(kv_line("effort_detail", detail.clone()));
             }
 
+            // Subagents section: shown only when the selected session has children.
+            if !a.children.is_empty() {
+                let total_tokens: u64 = a
+                    .children
+                    .iter()
+                    .map(|c| {
+                        c.tokens.input
+                            + c.tokens.output
+                            + c.tokens.cache_read
+                            + c.tokens.cache_write_5m
+                            + c.tokens.cache_write_1h
+                            + c.tokens.cached_input
+                    })
+                    .sum();
+                let total_cost: f64 = a.children.iter().map(|c| c.cost.total).sum();
+                lines.push(Line::from(vec![
+                    Span::styled(format!("{:>16}", "subagents"), th::INFO_KEY),
+                    Span::raw(format!(
+                        "  {} session(s) | {} tokens | ${:.4}",
+                        a.children.len(),
+                        compact_tokens(total_tokens),
+                        total_cost,
+                    )),
+                ]));
+                for child in &a.children {
+                    let cs = &child.summary;
+                    let child_tokens = child.tokens.input
+                        + child.tokens.output
+                        + child.tokens.cache_read
+                        + child.tokens.cache_write_5m
+                        + child.tokens.cache_write_1h
+                        + child.tokens.cached_input;
+                    let short_id = crate::fmt::short_id(&cs.session_id);
+                    lines.push(Line::from(vec![
+                        Span::raw(format!("{:>18}", "")),
+                        Span::styled(format!("{:<12}", short_id), th::INFO_KEY),
+                        Span::raw(format!(
+                            "  {} tok  ${:.4}  {}",
+                            compact_tokens(child_tokens),
+                            child.cost.total,
+                            cs.state.as_deref().unwrap_or("-"),
+                        )),
+                    ]));
+                }
+            }
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
                 .block(block)

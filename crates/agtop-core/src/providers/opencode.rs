@@ -130,6 +130,32 @@ impl Provider for OpenCodeProvider {
     fn plan_usage_with_sessions(&self, sessions: &[SessionSummary]) -> Result<Vec<PlanUsage>> {
         Ok(collect_plan_usage(&self.storage_root, sessions))
     }
+
+    fn children(&self, parent: &SessionSummary) -> Result<Vec<SessionSummary>> {
+        let db_path =
+            if parent.data_path.file_name().and_then(|n| n.to_str()) == Some("opencode.db") {
+                parent.data_path.clone()
+            } else {
+                self.storage_root.join("opencode.db")
+            };
+        if !db_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        let subscriptions = read_subscriptions(&self.storage_root);
+        match list_child_sessions_sqlite(&db_path, &parent.session_id, &subscriptions) {
+            Ok(rows) => Ok(rows),
+            Err(e) => {
+                tracing::debug!(
+                    path = %db_path.display(),
+                    session = %parent.session_id,
+                    error = %e,
+                    "opencode children query failed"
+                );
+                Ok(Vec::new())
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +988,27 @@ fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRate
 }
 
 // ---------------------------------------------------------------------------
+// Model-level effort detection
+// ---------------------------------------------------------------------------
+
+/// Returns `Some(("thinking", "model-name"))` when `model` is a known
+/// reasoning/thinking model, and `None` for standard models.
+fn model_effort_from_name(model: &str) -> Option<(String, String)> {
+    let is_thinking = model.contains("-codex")
+        || model.starts_with("codex-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.contains("thinking")
+        || model.starts_with("gpt-5");
+    if is_thinking {
+        Some(("thinking".to_string(), "model-name".to_string()))
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SQLite backend (v1.4+)
 // ---------------------------------------------------------------------------
 
@@ -1020,6 +1067,65 @@ fn list_sessions_sqlite(
                 model_effort,
                 model_effort_detail,
                 session_title: title,
+                data_path: db_path.to_path_buf(),
+            }
+        })
+        .collect();
+
+    Ok(rows)
+}
+
+fn list_child_sessions_sqlite(
+    db_path: &Path,
+    parent_session_id: &str,
+    subscriptions: &HashMap<String, String>,
+) -> Result<Vec<SessionSummary>> {
+    let conn = open_db(db_path)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, directory, time_created, time_updated FROM session \
+         WHERE parent_id = ?1 \
+           AND (time_archived IS NULL OR time_archived = 0) \
+         ORDER BY time_updated DESC",
+    )?;
+
+    let rows: Vec<SessionSummary> = stmt
+        .query_map(rusqlite::params![parent_session_id], |row| {
+            let id: String = row.get(0)?;
+            let cwd: Option<String> = row.get(1)?;
+            let created_ms: Option<i64> = row.get(2)?;
+            let updated_ms: Option<i64> = row.get(3)?;
+            Ok((id, cwd, created_ms, updated_ms))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(id, cwd, created_ms, updated_ms)| {
+            let started_at = created_ms.and_then(ms_to_utc);
+            let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
+            let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
+            let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
+            let subscription =
+                resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
+            let (model_effort, model_effort_detail) =
+                if let Some(variant) = first_variant_sqlite(&conn, &id) {
+                    (Some(variant), Some("message.variant".to_string()))
+                } else {
+                    model
+                        .as_deref()
+                        .and_then(model_effort_from_name)
+                        .map_or((None, None), |(e, d)| (Some(e), Some(d)))
+                };
+            SessionSummary {
+                provider: ProviderKind::OpenCode,
+                subscription,
+                session_id: id.clone(),
+                started_at,
+                last_active,
+                model,
+                cwd,
+                state,
+                state_detail,
+                model_effort,
+                model_effort_detail,
+                session_title: None,
                 data_path: db_path.to_path_buf(),
             }
         })
@@ -1229,6 +1335,7 @@ impl TurnAccumulator {
             context_used_pct: self.context_used_pct,
             context_used_tokens: self.context_used_tokens,
             context_window: self.context_window,
+            children: Vec::new(),
             agent_turns: if self.agent_turns > 0 {
                 Some(self.agent_turns)
             } else {
@@ -1594,7 +1701,7 @@ mod tests {
     fn init_db(root: &Path) {
         let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
         conn.execute(
-            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER)",
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT)",
             [],
         )
         .expect("create session table");

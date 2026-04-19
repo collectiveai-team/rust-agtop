@@ -633,6 +633,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         context_used_pct,
         context_used_tokens,
         context_window,
+        children: Vec::new(),
         agent_turns: if agent_turns > 0 {
             Some(agent_turns)
         } else {

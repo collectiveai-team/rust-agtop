@@ -348,6 +348,9 @@ fn cached_analyze_all(
                             project_cache.get(&key).and_then(|v| v.clone());
                     }
                 }
+                // Note: children are cached with the parent; if only a child's
+                // last_active changes while the parent's is stable, the stale
+                // child data is served until the parent itself is re-analyzed.
                 out.push(cached_analysis);
                 continue;
             }
@@ -360,11 +363,51 @@ fn cached_analyze_all(
         };
         match provider.analyze(summary, plan) {
             Ok(mut analysis) => {
-                // Inject project name.
                 if let Some(cwd) = &summary.cwd {
                     let key = std::path::PathBuf::from(cwd);
                     analysis.project_name = project_cache.get(&key).and_then(|v| v.clone());
                 }
+
+                match provider.children(summary) {
+                    Ok(child_summaries) => {
+                        for child_summary in &child_summaries {
+                            let child_provider = providers
+                                .iter()
+                                .find(|p| p.kind() == child_summary.provider);
+                            let child_provider = match child_provider {
+                                Some(cp) => cp,
+                                None => {
+                                    tracing::debug!(
+                                        child = child_summary.session_id.as_str(),
+                                        "no provider for child session"
+                                    );
+                                    continue;
+                                }
+                            };
+                            match child_provider.analyze(child_summary, plan) {
+                                Ok(child_analysis) => {
+                                    analysis.children.push(child_analysis);
+                                }
+                                Err(e) => {
+                                    tracing::debug!(
+                                        child = child_summary.session_id.as_str(),
+                                        error = %e,
+                                        "child analyze failed, skipping"
+                                    );
+                                }
+                            }
+                        }
+                        analysis.subagent_file_count = child_summaries.len();
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            parent = summary.session_id.as_str(),
+                            error = %e,
+                            "children() failed, treating as empty"
+                        );
+                    }
+                }
+
                 cache.insert(
                     summary.session_id.clone(),
                     (summary.last_active, analysis.clone()),
@@ -523,5 +566,105 @@ mod tests {
         let h_empty1 = hash_summaries_for_cache(&[]);
         let h_empty2 = hash_summaries_for_cache(&[]);
         assert_eq!(h_empty1, h_empty2, "same input must hash equal");
+    }
+
+    #[test]
+    fn cached_analyze_all_populates_children_on_cache_miss() {
+        use agtop_core::session::{CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
+        use agtop_core::ProviderKind;
+        use std::path::PathBuf;
+
+        let parent_summary = SessionSummary::new(
+            ProviderKind::Claude,
+            None,
+            "parent-1".into(),
+            None,
+            None,
+            Some("claude-3".into()),
+            Some("/tmp/proj".into()),
+            PathBuf::from("/tmp/proj/parent.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let child_summary = SessionSummary::new(
+            ProviderKind::Claude,
+            None,
+            "child-1".into(),
+            None,
+            None,
+            Some("claude-3".into()),
+            Some("/tmp/proj".into()),
+            PathBuf::from("/tmp/proj/child.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+
+        #[derive(Debug)]
+        struct MockProvider {
+            child: SessionSummary,
+        }
+        impl Provider for MockProvider {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Claude
+            }
+            fn list_sessions(&self) -> agtop_core::Result<Vec<SessionSummary>> {
+                Ok(vec![])
+            }
+            fn analyze(
+                &self,
+                summary: &SessionSummary,
+                _plan: Plan,
+            ) -> agtop_core::Result<SessionAnalysis> {
+                Ok(SessionAnalysis::new(
+                    summary.clone(),
+                    TokenTotals::default(),
+                    CostBreakdown::default(),
+                    summary.model.clone(),
+                    0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ))
+            }
+            fn children(&self, parent: &SessionSummary) -> agtop_core::Result<Vec<SessionSummary>> {
+                if parent.session_id == "parent-1" {
+                    Ok(vec![self.child.clone()])
+                } else {
+                    Ok(vec![])
+                }
+            }
+        }
+
+        let provider: Arc<dyn Provider> = Arc::new(MockProvider {
+            child: child_summary,
+        });
+        let summaries = vec![parent_summary];
+        let cache = SessionCache::new();
+        let project_cache = ProjectNameCache::new();
+
+        let (analyses, _cache_out, _project_cache_out) =
+            cached_analyze_all(&[provider], &summaries, Plan::Retail, cache, project_cache);
+
+        assert_eq!(analyses.len(), 1, "should have one parent analysis");
+        let parent = &analyses[0];
+        assert_eq!(
+            parent.children.len(),
+            1,
+            "parent should have one child analysis"
+        );
+        assert_eq!(
+            parent.children[0].summary.session_id, "child-1",
+            "child session_id should match"
+        );
+        assert_eq!(
+            parent.subagent_file_count, 1,
+            "subagent_file_count should equal number of children"
+        );
     }
 }

@@ -127,3 +127,8 @@ pub const FOOTER_FILTER: Style = Style::new().fg(Color::Yellow).add_modifier(Mod
 
 /// Footer help text in normal mode.
 pub const FOOTER_NORMAL: Style = Style::new().fg(Color::Gray);
+
+// ── Subagent hierarchy ────────────────────────────────────────────────────
+
+/// Dimmed style for child (subagent) rows in an expanded group.
+pub const SUBAGENT_CHILD: Style = Style::new().fg(Color::DarkGray);
