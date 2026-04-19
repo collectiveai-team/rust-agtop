@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use agtop_core::providers::claude::ClaudeClient;
+use agtop_core::clients::claude::ClaudeClient;
 use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 fn fixture_main_path() -> PathBuf {

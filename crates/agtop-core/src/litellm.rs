@@ -547,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn prefix_candidates_ignore_unmapped_providers() {
+    fn prefix_candidates_ignore_unmapped_clients() {
         assert!(prefix_candidates(ClientKind::Copilot, "gpt-4.1").is_empty());
         assert!(prefix_candidates(ClientKind::GeminiCli, "gemini-2.5-pro").is_empty());
         assert!(prefix_candidates(ClientKind::Cursor, "claude-sonnet-4-5").is_empty());

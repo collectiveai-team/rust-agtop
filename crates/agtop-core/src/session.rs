@@ -187,7 +187,7 @@ pub struct SessionAnalysis {
     pub effective_model: Option<String>,
     /// Number of Claude subagent sidechain transcripts folded into
     /// `tokens` / `cost` (0 when the session has none, or for non-Claude
-    /// providers). Defaults to 0 on deserialization so older JSON
+    /// clients). Defaults to 0 on deserialization so older JSON
     /// consumers remain compatible.
     #[serde(default)]
     pub subagent_file_count: usize,
@@ -313,7 +313,7 @@ impl PlanUsage {
 /// One rate-limit window (e.g. Anthropic's 5-hour rolling cap).
 ///
 /// `utilization` is a fraction in 0.0..=1.0 where available; `reset_at` is
-/// the UTC time the window resets, also when available. Providers may
+/// the UTC time the window resets, also when available. Clients may
 /// populate only a subset of these fields; renderers must treat every
 /// field as optional.
 #[non_exhaustive]
@@ -357,7 +357,7 @@ pub struct PlanUsage {
     #[serde(default)]
     pub windows: Vec<PlanWindow>,
     /// Most recent moment the user was observed to hit a rate limit.
-    /// Used for providers that don't expose gauges but do record
+    /// Used for clients that don't expose gauges but do record
     /// limit-hit events (Claude Code's synthetic error messages).
     pub last_limit_hit: Option<DateTime<Utc>>,
     /// Free-form note rendered below the gauges, e.g. "waiting for
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn client_kind_all_lists_every_variant() {
         let all = ClientKind::all();
-        assert_eq!(all.len(), 7, "expected all 7 providers: {all:?}");
+        assert_eq!(all.len(), 7, "expected all 7 clients: {all:?}");
         // Spot-check a couple of variants to guard against silent drift.
         assert!(all.contains(&ClientKind::Claude));
         assert!(all.contains(&ClientKind::Antigravity));

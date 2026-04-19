@@ -541,7 +541,7 @@ mod tests {
         let mut handle =
             spawn(clients, enabled, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
 
-        // Poll for up to 2s. With zero providers + empty enabled set, we
+        // Poll for up to 2s. With zero clients + empty enabled set, we
         // should still get an initial Snapshot message (an empty one).
         let start = std::time::Instant::now();
         let mut saw_empty_snapshot = false;

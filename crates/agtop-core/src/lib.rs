@@ -12,11 +12,11 @@
 //! every registered client and return aggregated results.
 
 pub mod client;
+pub mod clients;
 pub mod error;
 pub mod litellm;
 pub mod pricing;
 pub mod project;
-pub mod providers;
 pub mod session;
 
 // Flat re-exports for the most commonly used public API items.
@@ -33,13 +33,13 @@ use std::sync::Arc;
 /// Return the default set of clients.
 pub fn default_clients() -> Vec<Arc<dyn Client>> {
     vec![
-        Arc::new(providers::claude::ClaudeClient::default()),
-        Arc::new(providers::codex::CodexClient::default()),
-        Arc::new(providers::opencode::OpenCodeClient::default()),
-        Arc::new(providers::copilot::CopilotClient::default()),
-        Arc::new(providers::gemini_cli::GeminiCliClient::default()),
-        Arc::new(providers::cursor::CursorClient::default()),
-        Arc::new(providers::antigravity::AntigravityClient::default()),
+        Arc::new(clients::claude::ClaudeClient::default()),
+        Arc::new(clients::codex::CodexClient::default()),
+        Arc::new(clients::opencode::OpenCodeClient::default()),
+        Arc::new(clients::copilot::CopilotClient::default()),
+        Arc::new(clients::gemini_cli::GeminiCliClient::default()),
+        Arc::new(clients::cursor::CursorClient::default()),
+        Arc::new(clients::antigravity::AntigravityClient::default()),
     ]
 }
 
@@ -220,10 +220,10 @@ mod tests {
         assert_eq!(analyses[0].summary.session_id, "test-session-1");
     }
 
-    /// Two mock providers each sleep 200ms in list_sessions. Sequential
+    /// Two mock clients each sleep 200ms in list_sessions. Sequential
     /// discover_all → ≥400ms wall time. Parallel via rayon → <300ms.
     #[test]
-    fn discover_all_runs_providers_in_parallel() {
+    fn discover_all_runs_clients_in_parallel() {
         use std::time::{Duration, Instant};
 
         #[derive(Debug)]

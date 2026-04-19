@@ -12,7 +12,7 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agtop_core::providers::codex::CodexClient;
+use agtop_core::clients::codex::CodexClient;
 use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------

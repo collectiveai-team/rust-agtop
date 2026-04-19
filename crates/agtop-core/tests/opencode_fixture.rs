@@ -11,7 +11,7 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agtop_core::providers::opencode::OpenCodeClient;
+use agtop_core::clients::opencode::OpenCodeClient;
 use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------

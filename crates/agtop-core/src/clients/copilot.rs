@@ -15,9 +15,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
 use crate::client::Client;
+use crate::clients::util::{mtime, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::providers::util::{mtime, DiscoverCache};
 use crate::session::{
     ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };

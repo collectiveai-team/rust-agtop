@@ -528,7 +528,7 @@ struct JsonSession {
     tokens: agtop_core::TokenTotals,
     cost: agtop_core::CostBreakdown,
     /// Number of Claude subagent sidechains that were folded into
-    /// `tokens` / `cost`. Zero for non-Claude providers and for Claude
+    /// `tokens` / `cost`. Zero for non-Claude clients and for Claude
     /// sessions without subagents.
     subagent_file_count: usize,
     tool_call_count: Option<u64>,

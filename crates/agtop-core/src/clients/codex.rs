@@ -19,9 +19,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use walkdir::WalkDir;
 
 use crate::client::Client;
+use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
     ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };

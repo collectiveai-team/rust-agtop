@@ -21,9 +21,9 @@ use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
+use crate::clients::util::{dir_exists, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::providers::util::{dir_exists, DiscoverCache};
 use crate::session::{
     ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
@@ -189,7 +189,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
     let auth_entries = read_auth_entries(storage_root);
     let db_path = storage_root.join("opencode.db");
 
-    let mut oauth_providers: Vec<String> = auth_kinds
+    let mut oauth_client_ids: Vec<String> = auth_kinds
         .iter()
         .filter_map(|(provider_id, kind)| {
             if *kind == AuthKind::Oauth {
@@ -199,9 +199,9 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
             }
         })
         .collect();
-    oauth_providers.sort();
+    oauth_client_ids.sort();
 
-    if oauth_providers.is_empty() {
+    if oauth_client_ids.is_empty() {
         return Vec::new();
     }
 
@@ -254,7 +254,7 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
     }
 
     let mut out = Vec::new();
-    for provider_id in oauth_providers {
+    for provider_id in oauth_client_ids {
         let live_usage = auth_entries
             .get(&provider_id)
             .and_then(|entry| {
@@ -2430,7 +2430,7 @@ mod tests {
     }
 
     #[test]
-    fn read_subscriptions_maps_multiple_providers() {
+    fn read_subscriptions_maps_multiple_clients() {
         let tmp = TestDir::new("agtop-opencode-subscriptions");
         let auth = serde_json::json!({
             "anthropic": {"type": "oauth", "access": "x"},

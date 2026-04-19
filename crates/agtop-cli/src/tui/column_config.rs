@@ -196,7 +196,7 @@ pub struct ColumnConfig {
     /// Active sort direction. Defaults to the sort column's natural direction.
     #[serde(default = "default_sort_dir")]
     pub sort_dir: SortDir,
-    /// Which providers are shown. Defaults to all enabled.
+    /// Which clients are shown. Defaults to all enabled.
     #[serde(default = "default_clients_cfg")]
     pub clients: Vec<ClientEntry>,
 }

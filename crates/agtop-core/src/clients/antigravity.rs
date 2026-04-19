@@ -11,9 +11,9 @@
 use std::path::PathBuf;
 
 use crate::client::Client;
+use crate::clients::util::mtime;
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::providers::util::mtime;
 use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 /// SQLite key that holds session trajectory summaries (protobuf blob).

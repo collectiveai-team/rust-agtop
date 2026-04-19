@@ -12,7 +12,7 @@ use agtop_core::session::PlanUsage;
 // Merged subscription data
 // ---------------------------------------------------------------------------
 
-/// One subscription entry after deduplication across providers/agents.
+/// One subscription entry after deduplication across clients/agents.
 struct MergedPlan<'a> {
     /// Human-readable subscription name ("Max 5x", "ChatGPT Plus", …).
     subscription_name: String,

@@ -20,7 +20,7 @@ use crate::session::{ClientKind, CostBreakdown, TokenTotals};
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
-    /// Standard API pricing for all providers.
+    /// Standard API pricing for all clients.
     Retail,
     /// Claude Max / Pro: Claude sessions treated as included; Codex/OpenCode retail.
     Max,
