@@ -169,6 +169,9 @@ pub fn spawn(
                 break;
             }
 
+            // Record when this iteration starts so we can measure work duration.
+            let iter_started = std::time::Instant::now();
+
             // Take a local snapshot of the enabled set so the work below
             // doesn't hold the lock across .await points.
             let enabled_snap = {
@@ -218,11 +221,16 @@ pub fn spawn(
                 break;
             }
 
+            let work_elapsed = iter_started.elapsed();
+            // Cap worker CPU at ~50%: sleep at least `work_elapsed * 2`,
+            // but never less than the configured interval.
+            let wait = interval.max(work_elapsed.saturating_mul(2));
+
             // Wait for either the tick deadline or a manual trigger.
             // Also bail immediately if the shutdown flag was set while
             // we were sleeping.
             tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
+                _ = tokio::time::sleep(wait) => {}
                 changed = manual_rx.changed() => {
                     if changed.is_err() {
                         break;
@@ -340,6 +348,60 @@ mod tests {
         assert!(
             got_snapshot,
             "refresh worker produced no Snapshot within 5s (last msg: {last_msg_kind})"
+        );
+    }
+
+    /// The worker must sleep at least `work_duration * 2` between cycles
+    /// so it never exceeds ~50% CPU. We simulate slow work by registering
+    /// a mock provider whose list_sessions sleeps for 300 ms.
+    #[test]
+    fn adaptive_sleep_scales_with_work_duration() {
+        use agtop_core::{session::SessionSummary, ProviderKind};
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::{Arc, RwLock};
+
+        #[derive(Debug)]
+        struct SlowProvider {
+            calls: Arc<AtomicUsize>,
+        }
+        impl Provider for SlowProvider {
+            fn kind(&self) -> ProviderKind {
+                ProviderKind::Claude
+            }
+            fn list_sessions(&self) -> agtop_core::Result<Vec<SessionSummary>> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(300));
+                Ok(vec![])
+            }
+            fn analyze(
+                &self,
+                _s: &SessionSummary,
+                _p: Plan,
+            ) -> agtop_core::Result<agtop_core::session::SessionAnalysis> {
+                unreachable!("no sessions")
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(SlowProvider {
+            calls: Arc::clone(&calls),
+        })];
+        let enabled = Arc::new(RwLock::new(
+            std::iter::once(ProviderKind::Claude).collect::<HashSet<_>>(),
+        ));
+
+        // Very short interval (10ms) — work time (300ms) should dominate.
+        let _handle =
+            spawn(providers, enabled, Plan::Retail, Duration::from_millis(10)).expect("spawn");
+
+        // Run for ~1s. Without adaptive sleep: ≥3 calls (300ms each, back-to-back).
+        // With adaptive sleep (wait = max(10ms, 600ms) = 600ms): ~1 call.
+        std::thread::sleep(Duration::from_millis(1_000));
+        let n = calls.load(Ordering::SeqCst);
+        assert!(
+            n <= 2,
+            "worker called list_sessions {n} times in 1s — adaptive sleep is not capping work"
         );
     }
 
