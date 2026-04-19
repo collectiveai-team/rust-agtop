@@ -30,6 +30,22 @@ impl ProviderKind {
             Self::Antigravity => "antigravity",
         }
     }
+
+    /// Every `ProviderKind` variant, in a stable display order.
+    /// Keep this in sync with the enum definition — a missing variant
+    /// here silently excludes that provider from default-enabled sets.
+    #[must_use]
+    pub const fn all() -> &'static [ProviderKind] {
+        &[
+            Self::Claude,
+            Self::Codex,
+            Self::OpenCode,
+            Self::Copilot,
+            Self::GeminiCli,
+            Self::Cursor,
+            Self::Antigravity,
+        ]
+    }
 }
 
 impl std::fmt::Display for ProviderKind {
@@ -322,4 +338,18 @@ pub struct PlanUsage {
     /// Free-form note rendered below the gauges, e.g. "waiting for
     /// backend data" when the schema slot exists but is null.
     pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_kind_all_lists_every_variant() {
+        let all = ProviderKind::all();
+        assert_eq!(all.len(), 7, "expected all 7 providers: {all:?}");
+        // Spot-check a couple of variants to guard against silent drift.
+        assert!(all.contains(&ProviderKind::Claude));
+        assert!(all.contains(&ProviderKind::Antigravity));
+    }
 }
