@@ -180,7 +180,7 @@ fn default_sort_dir() -> SortDir {
 }
 
 /// Persisted column configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ColumnConfig {
     /// Columns in display order. Only entries in this list are shown.
     pub columns: Vec<ColumnEntry>,
@@ -251,6 +251,14 @@ impl Default for ColumnConfig {
 }
 
 impl ColumnConfig {
+    fn normalize(mut self) -> Self {
+        if self.sort_col == SortColumn::Cost {
+            self.sort_col = SortColumn::LastActive;
+            self.sort_dir = SortColumn::LastActive.default_direction();
+        }
+        self
+    }
+
     /// Returns ordered list of visible column IDs.
     pub fn visible(&self) -> Vec<ColumnId> {
         self.columns
@@ -350,6 +358,33 @@ impl ColumnConfig {
     }
 }
 
+impl<'de> Deserialize<'de> for ColumnConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawColumnConfig {
+            columns: Vec<ColumnEntry>,
+            #[serde(default = "default_sort_col")]
+            sort_col: SortColumn,
+            #[serde(default = "default_sort_dir")]
+            sort_dir: SortDir,
+            #[serde(default = "default_providers_cfg")]
+            providers: Vec<ProviderEntry>,
+        }
+
+        let raw = RawColumnConfig::deserialize(deserializer)?;
+        Ok(Self {
+            columns: raw.columns,
+            sort_col: raw.sort_col,
+            sort_dir: raw.sort_dir,
+            providers: raw.providers,
+        }
+        .normalize())
+    }
+}
+
 #[cfg(test)]
 mod cfg_provider_tests {
     use super::*;
@@ -392,6 +427,34 @@ mod cfg_provider_tests {
         let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
         assert_eq!(cfg.providers.len(), ProviderKind::all().len());
         assert!(cfg.providers.iter().all(|e| e.enabled));
+    }
+
+    #[test]
+    fn deserialize_legacy_cost_default_migrates_to_last_active() {
+        let json = r#"{
+            "columns": [],
+            "sort_col": "cost",
+            "sort_dir": "desc",
+            "providers": []
+        }"#;
+
+        let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(cfg.sort_col, SortColumn::LastActive);
+        assert_eq!(cfg.sort_dir, SortColumn::LastActive.default_direction());
+    }
+
+    #[test]
+    fn deserialize_non_legacy_sort_keeps_user_choice() {
+        let json = r#"{
+            "columns": [],
+            "sort_col": "tokens",
+            "sort_dir": "asc",
+            "providers": []
+        }"#;
+
+        let cfg: ColumnConfig = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(cfg.sort_col, SortColumn::Tokens);
+        assert_eq!(cfg.sort_dir, SortDir::Asc);
     }
 
     #[test]
