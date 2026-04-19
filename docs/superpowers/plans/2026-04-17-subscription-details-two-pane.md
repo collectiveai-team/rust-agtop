@@ -258,7 +258,7 @@ use agtop_core::session::PlanUsage;
 // Merged subscription data
 // ---------------------------------------------------------------------------
 
-/// One subscription entry after deduplication across providers/agents.
+/// One subscription entry after deduplication across clients/agents.
 struct MergedPlan<'a> {
     /// Human-readable subscription name ("Max 5x", "ChatGPT Plus", …).
     subscription_name: String,
@@ -614,11 +614,11 @@ At the bottom of `dashboard_plan.rs`, add:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{PlanUsage, ProviderKind};
+    use agtop_core::session::{ClientKind, PlanUsage};
 
     fn make_pu(label: &str, plan_name: Option<&str>) -> PlanUsage {
         PlanUsage {
-            provider: ProviderKind::Claude,
+            client: ClientKind::Claude,
             label: label.to_string(),
             plan_name: plan_name.map(|s| s.to_string()),
             windows: Vec::new(),
@@ -777,7 +777,7 @@ In `crates/agtop-cli/src/tui/mod.rs`, inside `#[cfg(test)] mod tests` (after the
 ```rust
     #[test]
     fn renders_dashboard_with_plan_usage() {
-        use agtop_core::session::{PlanUsage, PlanWindow, ProviderKind};
+        use agtop_core::session::{ClientKind, PlanUsage, PlanWindow};
         use chrono::TimeZone;
 
         let backend = TestBackend::new(140, 30);
@@ -787,7 +787,7 @@ In `crates/agtop-cli/src/tui/mod.rs`, inside `#[cfg(test)] mod tests` (after the
 
         let reset_at = Utc.with_ymd_and_hms(2026, 4, 18, 13, 0, 0).unwrap();
         let pu = PlanUsage {
-            provider: ProviderKind::Claude,
+            client: ClientKind::Claude,
             label: "Max 5x via Claude Code".to_string(),
             plan_name: Some("Max 5x".to_string()),
             windows: vec![

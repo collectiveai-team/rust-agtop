@@ -7,13 +7,13 @@ token usage, and estimates cost using built-in pricing tables.
 
 ## Supported agents
 
-| Provider     | Data source                                                  | Status       |
+| Client       | Data source                                                  | Status       |
 |--------------|--------------------------------------------------------------|--------------|
 | Claude Code  | `~/.claude/projects/<slug>/<uuid>.jsonl`                     | Stable       |
 | Codex        | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`               | Stable       |
 | OpenCode     | `~/.local/share/opencode/storage/{session,message}/…`        | Best-effort  |
 
-Adding a new provider is a single `impl Provider` in `agtop-core::providers`.
+Adding a new client is a single `impl Client` in `agtop-core::clients`.
 
 ## Status
 
@@ -53,13 +53,13 @@ agtop --dashboard
 agtop --list
 
 # Only Claude Code sessions under the "Max" plan (Claude sessions marked included)
-agtop --list --plan max --agentic-provider claude
+agtop --list --plan max --agentic-client claude
 
 # Dump everything as JSON (good for piping to jq)
 agtop --json
 
-# Multiple agentic provider filters
-agtop --list --agentic-provider claude --agentic-provider codex
+# Multiple agentic client filters
+agtop --list --agentic-client claude --agentic-client codex
 
 # Non-interactive refresh loop (for headless monitoring). Not valid with --json.
 agtop --list --watch --delay 5
@@ -82,7 +82,7 @@ agtop --list --watch --delay 5
 
 ### Plans
 
-- `retail` — standard API pricing for all providers (default).
+- `retail` — standard API pricing for all clients (default).
 - `max` — treats Claude sessions as included (Claude Max / Pro), retail elsewhere.
 - `included` — every session marked as included (enterprise / bundled).
 
@@ -91,20 +91,20 @@ agtop --list --watch --delay 5
 ```
 rust-agtop/
 ├── crates/
-│   ├── agtop-core/         # Provider trait + parsing + pricing (library)
-│   │   └── src/providers/  # claude.rs, codex.rs, opencode.rs, util.rs
+│   ├── agtop-core/         # Client trait + parsing + pricing (library)
+│   │   └── src/clients/    # claude.rs, codex.rs, opencode.rs, util.rs
 │   └── agtop-cli/          # `agtop` binary (clap + table/json output)
 └── Cargo.toml              # workspace root
 ```
 
 Core types:
 
-- `Provider` trait: `list_sessions()` + `analyze(summary, plan)`.
+- `Client` trait: `list_sessions()` + `analyze(summary, plan)`.
 - `SessionSummary`: metadata discovered without re-reading the full transcript.
 - `SessionAnalysis`: summary + `TokenTotals` + `CostBreakdown`.
 - `PlanUsage`: best-effort plan/limit snapshots for dashboard panes.
 
-The provider layer is `Send + Sync`, so the upcoming TUI can drive it from
+The client layer is `Send + Sync`, so the upcoming TUI can drive it from
 a background refresh thread.
 
 ## Testing
@@ -140,7 +140,7 @@ agtop --list --no-pricing-refresh   # stay fully offline (built-in tables only)
 - Cost figures are **estimates** based on public API prices. Many subscription
   plans (Claude Max/Pro, ChatGPT Plus/Pro, etc.) charge flat rates or bundle
   tokens differently. Treat `$` as a resource-consumption proxy, not a bill.
-- OpenCode's on-disk format is undocumented and may change. The provider is
+- OpenCode's on-disk format is undocumented and may change. The client is
   conservative and degrades gracefully when fields are missing.
 - Claude Code subagent sidechain transcripts (`<uuid>/subagents/*.jsonl`)
   **are** folded into the parent session's totals. The table marks such

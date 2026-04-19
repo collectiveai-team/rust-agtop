@@ -19,11 +19,10 @@ panes:
     cost summary:
         ✔ global @done(26-04-17 23:25)
         ✔ per subscription @done(26-04-17 23:25)
-        ✔ per provider @done(26-04-17 23:25)
+        ✔ per client @done(26-04-17 23:25)
 
-Providers:
+Clients:
     ✔ copilot (vscode) @done(26-04-18)
     ✔ gemini-cli @done(26-04-18)
     ✔ cursor @done(26-04-18)
     ✔ antigravity @done(26-04-18)
-
