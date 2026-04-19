@@ -119,8 +119,24 @@ pub fn render(
     );
 
     let now = Utc::now();
-    let view = app.view();
-    let rows: Vec<Row> = view.iter().map(|a| row_for(a, now, &visible)).collect();
+    let view = app.view_with_kinds();
+    let rows: Vec<Row> = view
+        .iter()
+        .map(|(a, is_child)| {
+            let kind = if *is_child {
+                RowKind::Child
+            } else if !a.children.is_empty() {
+                if app.is_expanded(&a.summary.session_id) {
+                    RowKind::ExpandedParent
+                } else {
+                    RowKind::CollapsedParent
+                }
+            } else {
+                RowKind::Normal
+            };
+            row_for(a, now, &visible, kind)
+        })
+        .collect();
 
     let table = Table::new(rows, widths)
         .header(header)
@@ -185,10 +201,20 @@ fn row_for<'a>(
     a: &'a agtop_core::session::SessionAnalysis,
     now: DateTime<Utc>,
     visible: &[ColumnId],
+    kind: RowKind,
 ) -> Row<'a> {
     let s = &a.summary;
-    let t = &a.tokens;
-    let c = &a.cost;
+
+    // For collapsed parents show merged (parent + all children) totals.
+    let (t_owned, c_owned);
+    let (t, c) = match kind {
+        RowKind::CollapsedParent => {
+            t_owned = merged_tokens(a);
+            c_owned = merged_cost(a);
+            (&t_owned, &c_owned)
+        }
+        _ => (&a.tokens, &a.cost),
+    };
 
     let started = s
         .started_at
@@ -213,11 +239,19 @@ fn row_for<'a>(
         format!("{:.4}", c.total)
     };
     let short = {
-        let mut id = fmt::short_id(&s.session_id);
-        if a.subagent_file_count > 0 {
-            id.push_str(&format!("+{}", a.subagent_file_count));
+        let id = fmt::short_id(&s.session_id);
+        match kind {
+            RowKind::CollapsedParent => format!("▶ {}+{}", id, a.subagent_file_count),
+            RowKind::ExpandedParent => format!("▼ {}", id),
+            RowKind::Child => format!("  {}", id),
+            RowKind::Normal => {
+                if a.subagent_file_count > 0 {
+                    format!("{}+{}", id, a.subagent_file_count)
+                } else {
+                    id
+                }
+            }
         }
-        id
     };
     let cache_total = t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input;
 
@@ -284,5 +318,55 @@ fn row_for<'a>(
         })
         .collect();
 
-    Row::new(cells)
+    let row = Row::new(cells);
+    match kind {
+        RowKind::Child => row.style(th::SUBAGENT_CHILD),
+        _ => row,
+    }
+}
+
+// ── Row kind ──────────────────────────────────────────────────────────────
+
+/// Controls prefix/indent and which token/cost totals are displayed.
+enum RowKind {
+    /// Standalone session with no children.
+    Normal,
+    /// Collapsed parent: show `▶ id+N` and merged totals.
+    CollapsedParent,
+    /// Expanded parent: show `▼ id` and own (direct) totals.
+    ExpandedParent,
+    /// Child of an expanded parent: show `  id` (2-space indent), own totals, dimmed.
+    Child,
+}
+
+// ── Merged-total helpers ───────────────────────────────────────────────────
+
+/// Sum a parent's direct tokens + all children tokens for collapsed display.
+fn merged_tokens(a: &agtop_core::session::SessionAnalysis) -> agtop_core::session::TokenTotals {
+    let mut t = a.tokens.clone();
+    for child in &a.children {
+        t.input += child.tokens.input;
+        t.cached_input += child.tokens.cached_input;
+        t.output += child.tokens.output;
+        t.reasoning_output += child.tokens.reasoning_output;
+        t.cache_write_5m += child.tokens.cache_write_5m;
+        t.cache_write_1h += child.tokens.cache_write_1h;
+        t.cache_read += child.tokens.cache_read;
+    }
+    t
+}
+
+/// Sum a parent's direct cost + all children cost for collapsed display.
+fn merged_cost(a: &agtop_core::session::SessionAnalysis) -> agtop_core::session::CostBreakdown {
+    let mut c = a.cost.clone();
+    for child in &a.children {
+        c.input += child.cost.input;
+        c.cached_input += child.cost.cached_input;
+        c.output += child.cost.output;
+        c.cache_write_5m += child.cost.cache_write_5m;
+        c.cache_write_1h += child.cost.cache_write_1h;
+        c.cache_read += child.cost.cache_read;
+        c.total += child.cost.total;
+    }
+    c
 }
