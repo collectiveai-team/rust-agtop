@@ -88,6 +88,7 @@ struct UiLayout {
 /// previous state regardless of success/failure.
 pub fn run(
     providers: Vec<Arc<dyn Provider>>,
+    enabled_initial: std::collections::HashSet<agtop_core::ProviderKind>,
     plan: Plan,
     refresh_interval: Duration,
     start_dashboard: bool,
@@ -98,6 +99,8 @@ pub fn run(
     // so stack traces don't land inside the alternate screen where the
     // user can't read them.
     install_panic_hook();
+
+    let _enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
 
     let mut handle = refresh::spawn(providers, plan, refresh_interval)
         .context("spawn background refresh worker")?;

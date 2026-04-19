@@ -88,27 +88,44 @@ fn main() -> Result<()> {
 
     setup_pricing(cli.refresh_pricing, cli.no_pricing_refresh);
 
-    let mut providers = default_providers();
-    if !cli.providers.is_empty() {
-        let wanted: Vec<ProviderKind> = cli
-            .providers
-            .iter()
-            .filter_map(|s| parse_provider_kind(s))
-            .collect();
-        if wanted.is_empty() {
-            anyhow::bail!(
-                "no recognized --provider/--backend/--agentic-provider values (got: {:?}). expected: claude, codex, opencode",
-                cli.providers
-            );
-        }
-        providers.retain(|p| wanted.contains(&p.kind()));
-    }
+    // Always build the full provider set. `--provider` only affects the
+    // in-memory enabled set for this run; disabling from the TUI is what
+    // persists.
+    let providers = default_providers();
+
+    // Build initial enabled set:
+    //   1. --provider CLI flag (one-shot, does NOT write to disk)
+    //   2. Otherwise the persisted ColumnConfig (~/.config/agtop/columns.json)
+    //   3. Otherwise every provider
+    let enabled_initial: std::collections::HashSet<agtop_core::ProviderKind> =
+        if !cli.providers.is_empty() {
+            let wanted: std::collections::HashSet<agtop_core::ProviderKind> = cli
+                .providers
+                .iter()
+                .filter_map(|s| parse_provider_kind(s))
+                .collect();
+            if wanted.is_empty() {
+                anyhow::bail!(
+                    "no recognized --provider values (got: {:?}). expected one of: {}",
+                    cli.providers,
+                    agtop_core::ProviderKind::all()
+                        .iter()
+                        .map(|p| p.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            wanted
+        } else {
+            tui::column_config::ColumnConfig::load().enabled_providers()
+        };
 
     if cli.json {
         if cli.watch {
             anyhow::bail!("--watch is not supported with --json (JSON is a one-shot dump)");
         }
-        let analyses = analyze_all(&providers, plan);
+        let live = filtered_providers(&providers, &enabled_initial);
+        let analyses = analyze_all(&live, plan);
         let out = JsonOutput {
             plan: cli.plan.clone(),
             sessions: analyses.iter().map(JsonSession::from).collect(),
@@ -130,10 +147,12 @@ fn main() -> Result<()> {
                  run `agtop --delay <secs>` for the TUI."
             );
         }
-        run_watch(&providers, plan, cli.delay.max(1))?;
+        let live = filtered_providers(&providers, &enabled_initial);
+        run_watch(&live, plan, cli.delay.max(1))?;
     } else if cli.list {
-        let analyses = analyze_all(&providers, plan);
-        let summaries = discover_all(&providers);
+        let live = filtered_providers(&providers, &enabled_initial);
+        let analyses = analyze_all(&live, plan);
+        let summaries = discover_all(&live);
         render_table(&summaries, &analyses);
     } else {
         // Default: launch the TUI. Any rendering error is bubbled up
@@ -141,6 +160,7 @@ fn main() -> Result<()> {
         // teardown on both success and failure paths).
         tui::run(
             providers,
+            enabled_initial,
             plan,
             std::time::Duration::from_secs(cli.delay.max(1)),
             cli.dashboard,
@@ -318,7 +338,48 @@ fn parse_provider_kind(s: &str) -> Option<ProviderKind> {
         "claude" | "claude-code" | "claudecode" => Some(ProviderKind::Claude),
         "codex" => Some(ProviderKind::Codex),
         "opencode" | "open-code" => Some(ProviderKind::OpenCode),
+        "copilot" | "github-copilot" => Some(ProviderKind::Copilot),
+        "gemini" | "gemini-cli" => Some(ProviderKind::GeminiCli),
+        "cursor" => Some(ProviderKind::Cursor),
+        "antigravity" => Some(ProviderKind::Antigravity),
         _ => None,
+    }
+}
+
+fn filtered_providers(
+    all: &[std::sync::Arc<dyn agtop_core::Provider>],
+    enabled: &std::collections::HashSet<agtop_core::ProviderKind>,
+) -> Vec<std::sync::Arc<dyn agtop_core::Provider>> {
+    all.iter()
+        .filter(|p| enabled.contains(&p.kind()))
+        .cloned()
+        .collect()
+}
+
+#[cfg(test)]
+mod provider_parse_tests {
+    use super::*;
+    use agtop_core::ProviderKind;
+
+    #[test]
+    fn parse_provider_kind_covers_all_variants() {
+        assert_eq!(parse_provider_kind("claude"), Some(ProviderKind::Claude));
+        assert_eq!(parse_provider_kind("codex"), Some(ProviderKind::Codex));
+        assert_eq!(
+            parse_provider_kind("opencode"),
+            Some(ProviderKind::OpenCode)
+        );
+        assert_eq!(parse_provider_kind("copilot"), Some(ProviderKind::Copilot));
+        assert_eq!(
+            parse_provider_kind("gemini-cli"),
+            Some(ProviderKind::GeminiCli)
+        );
+        assert_eq!(parse_provider_kind("cursor"), Some(ProviderKind::Cursor));
+        assert_eq!(
+            parse_provider_kind("antigravity"),
+            Some(ProviderKind::Antigravity)
+        );
+        assert_eq!(parse_provider_kind("bogus"), None);
     }
 }
 
