@@ -195,6 +195,19 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
     match event.kind {
         // ── Scroll wheel ──────────────────────────────────────────────────
         MouseEventKind::ScrollDown => {
+            if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
+                let in_config = layout
+                    .config_provider_rows
+                    .first()
+                    .map(|(r, _)| event.row >= r.y.saturating_sub(2))
+                    .unwrap_or(false);
+                if in_config {
+                    for _ in 0..2 {
+                        app.config_move_down();
+                    }
+                    return;
+                }
+            }
             if rect_contains(layout.cost_panel_area, event.column, event.row) {
                 // cost panel takes priority; table area may overlap in classic mode
                 app.scroll_cost_down(2, layout.cost_row_count, layout.cost_visible_rows);
@@ -203,6 +216,19 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
             }
         }
         MouseEventKind::ScrollUp => {
+            if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
+                let in_config = layout
+                    .config_provider_rows
+                    .first()
+                    .map(|(r, _)| event.row >= r.y.saturating_sub(2))
+                    .unwrap_or(false);
+                if in_config {
+                    for _ in 0..2 {
+                        app.config_move_up();
+                    }
+                    return;
+                }
+            }
             if rect_contains(layout.cost_panel_area, event.column, event.row) {
                 app.scroll_cost_up(2);
             } else if rect_contains(layout.table_area, event.column, event.row) {
@@ -213,6 +239,34 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
         // ── Left-click ────────────────────────────────────────────────────
         MouseEventKind::Down(MouseButton::Left) => {
             let (col, row) = (event.column, event.row);
+
+            // Config tab body — only in classic mode, where the Config tab exists.
+            if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
+                for &(rect, virt_idx) in &layout.config_provider_rows {
+                    if rect_contains(rect, event.column, event.row) {
+                        app.set_config_cursor(virt_idx);
+                        app.toggle_cursor_item();
+                        return;
+                    }
+                }
+                for &(rect, virt_idx) in &layout.config_column_rows {
+                    if rect_contains(rect, event.column, event.row) {
+                        app.set_config_cursor(virt_idx);
+                        app.toggle_cursor_item();
+                        return;
+                    }
+                }
+                // Consume any click that landed inside the Config tab's
+                // area so it doesn't fall through to the session table.
+                let in_config = layout
+                    .config_provider_rows
+                    .first()
+                    .map(|(r, _)| event.row >= r.y.saturating_sub(2)) // include title + header
+                    .unwrap_or(false);
+                if in_config {
+                    return;
+                }
+            }
 
             // Click on the Cost Summary period toggle row ("total" / "month").
             // Use the precise row Rect so clicks on the tab bar below don't
@@ -1030,6 +1084,75 @@ mod tests {
         assert!(
             !layout.config_column_rows.is_empty(),
             "config_column_rows not populated"
+        );
+    }
+
+    #[test]
+    fn clicking_provider_row_toggles_it() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = fixture_app();
+        app.set_tab(Tab::Config);
+
+        let mut state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut layout))
+            .expect("draw");
+
+        assert!(
+            !layout.config_provider_rows.is_empty(),
+            "no provider rows captured"
+        );
+        let (rect, virt_idx) = layout.config_provider_rows[0];
+        let kind = app.column_config().providers[virt_idx].kind;
+        let before = app.enabled_providers_set().contains(&kind);
+
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x + 1,
+            row: rect.y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        apply_mouse(&mut app, event, &layout);
+
+        let after = app.enabled_providers_set().contains(&kind);
+        assert_ne!(before, after, "click did not toggle provider");
+    }
+
+    #[test]
+    fn clicking_config_body_does_not_leak_to_session_table() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = fixture_app();
+        app.set_tab(Tab::Config);
+        let starting_sel = app.selected_idx();
+        let mut state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut layout))
+            .expect("draw");
+
+        // Click on the exact bottom border of the Config panel, which is
+        // inside the session-table area in the render layout but covered
+        // by Config in Z-order. Our handler must consume the event.
+        let click_row = layout.config_provider_rows.last().unwrap().0.y + 1;
+        let event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: click_row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+        apply_mouse(&mut app, event, &layout);
+
+        assert_eq!(
+            app.selected_idx(),
+            starting_sel,
+            "click leaked through to session-table selection"
         );
     }
 
