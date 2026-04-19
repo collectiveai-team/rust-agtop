@@ -460,6 +460,34 @@ impl App {
     /// `view_cache` and recomputed only when the cache is explicitly
     /// invalidated by a mutation method.
     pub fn view(&self) -> Vec<&SessionAnalysis> {
+        self.ensure_view_cache();
+        self.iter_with_kinds().into_iter().map(|(a, _)| a).collect()
+    }
+
+    /// Like `view()` but also returns whether each entry is a child row.
+    pub fn view_with_kinds(&self) -> Vec<(&SessionAnalysis, bool)> {
+        self.ensure_view_cache();
+        self.iter_with_kinds()
+    }
+
+    /// Toggle expanded state for a session.
+    ///
+    /// Note: does NOT invalidate the view cache. The cache stores only sorted
+    /// parent indices; expansion state is applied on top at read time, so the
+    /// cache remains valid after a toggle.
+    pub fn toggle_expand(&mut self, session_id: &str) {
+        if self.expanded_sessions.contains(session_id) {
+            self.expanded_sessions.remove(session_id);
+        } else {
+            self.expanded_sessions.insert(session_id.to_owned());
+        }
+        self.reconcile_selection();
+    }
+
+    // ---- private view helpers ----------------------------------------------
+
+    /// Ensure the view cache (sorted+filtered parent indices) is populated.
+    fn ensure_view_cache(&self) {
         if self.view_cache.borrow().is_none() {
             let mut indexed: Vec<(usize, &SessionAnalysis)> = self
                 .sessions
@@ -477,27 +505,13 @@ impl App {
             let indices: Vec<usize> = indexed.into_iter().map(|(i, _)| i).collect();
             *self.view_cache.borrow_mut() = Some(indices);
         }
-        let mut result = Vec::new();
-        for &i in self.view_cache.borrow().as_ref().unwrap().iter() {
-            let parent = &self.sessions[i];
-            result.push(parent);
-            if !parent.children.is_empty()
-                && self.expanded_sessions.contains(&parent.summary.session_id)
-            {
-                for child in &parent.children {
-                    result.push(child);
-                }
-            }
-        }
-        result
     }
 
-    /// Like `view()` but also returns whether each entry is a child row.
-    pub fn view_with_kinds(&self) -> Vec<(&SessionAnalysis, bool)> {
-        if self.view_cache.borrow().is_none() {
-            // Trigger cache population via view()
-            let _ = self.view();
-        }
+    /// Iterate over all visible rows (parents + expanded children) with a
+    /// boolean flag indicating whether each row is a child.
+    ///
+    /// Caller must ensure the view cache is populated before calling this.
+    fn iter_with_kinds(&self) -> Vec<(&SessionAnalysis, bool)> {
         let mut result = Vec::new();
         for &i in self.view_cache.borrow().as_ref().unwrap().iter() {
             let parent = &self.sessions[i];
@@ -511,17 +525,6 @@ impl App {
             }
         }
         result
-    }
-
-    /// Toggle expanded state for a session. Invalidates the view cache.
-    pub fn toggle_expand(&mut self, session_id: &str) {
-        if self.expanded_sessions.contains(session_id) {
-            self.expanded_sessions.remove(session_id);
-        } else {
-            self.expanded_sessions.insert(session_id.to_owned());
-        }
-        self.invalidate_view_cache();
-        self.reconcile_selection();
     }
 
     /// Returns true if the given session is currently expanded.
