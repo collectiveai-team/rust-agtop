@@ -962,33 +962,6 @@ fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRate
 }
 
 // ---------------------------------------------------------------------------
-// Model-level effort detection
-// ---------------------------------------------------------------------------
-
-/// Returns `Some("thinking")` when `model` is a known reasoning/thinking model,
-/// and `None` for standard (non-reasoning) models.
-///
-/// Detection rules (all case-sensitive, prefix-based):
-/// - OpenAI codex variants: `gpt-*-codex`, `codex-*`
-/// - OpenAI o-series reasoning: `o1`, `o3`, `o4` prefix
-/// - Gemini thinking variants: `gemini-2.5-flash-thinking`
-/// - gpt-5.x non-codex variants that carry reasoning (all gpt-5* emit reasoning)
-fn model_effort_from_name(model: &str) -> Option<(String, String)> {
-    let is_thinking = model.contains("-codex")
-        || model.starts_with("codex-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.contains("thinking")
-        || model.starts_with("gpt-5");
-    if is_thinking {
-        Some(("thinking".to_string(), "model-name".to_string()))
-    } else {
-        None
-    }
-}
-
-// ---------------------------------------------------------------------------
 // SQLite backend (v1.4+)
 // ---------------------------------------------------------------------------
 
@@ -1026,16 +999,12 @@ fn list_sessions_sqlite(
             let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
             let subscription =
                 resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
-            // Prefer the explicit variant stored on user messages (e.g. "xhigh",
-            // "max"); fall back to inferring from the model name.
+            // OpenCode only persists effort labels on explicit user-message variants.
             let (model_effort, model_effort_detail) =
                 if let Some(variant) = first_variant_sqlite(&conn, &id) {
                     (Some(variant), Some("message.variant".to_string()))
                 } else {
-                    model
-                        .as_deref()
-                        .and_then(model_effort_from_name)
-                        .map_or((None, None), |(e, d)| (Some(e), Some(d)))
+                    (None, None)
                 };
             SessionSummary {
                 provider: ProviderKind::OpenCode,
@@ -1401,15 +1370,11 @@ fn summarize_opencode_session_json(
     let (state, state_detail) = latest_message_state_json(&msg_dir);
     let subscription =
         resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
-    // Prefer the explicit variant stored on user messages (e.g. "xhigh",
-    // "max"); fall back to inferring from the model name.
+    // OpenCode only persists effort labels on explicit user-message variants.
     let (model_effort, model_effort_detail) = if let Some(variant) = first_variant_json(&msg_dir) {
         (Some(variant), Some("message.variant".to_string()))
     } else {
-        model
-            .as_deref()
-            .and_then(model_effort_from_name)
-            .map_or((None, None), |(e, d)| (Some(e), Some(d)))
+        (None, None)
     };
 
     Ok(SessionSummary {
@@ -1491,13 +1456,33 @@ fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String
 
 /// Scans user messages in `msg_dir` and returns the first non-empty `variant`
 /// value found (e.g. `"xhigh"`, `"max"`), or `None`.
+fn json_message_sequence_key(path: &Path) -> (u64, String) {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let sequence = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.rsplit_once('_'))
+        .and_then(|(_, suffix)| suffix.parse::<u64>().ok())
+        .unwrap_or(u64::MAX);
+    (sequence, name)
+}
+
 fn first_variant_json(msg_dir: &Path) -> Option<String> {
     if !dir_exists(msg_dir) {
         return None;
     }
-    let entries = fs::read_dir(msg_dir).ok()?;
-    for f in entries.flatten() {
-        let p = f.path();
+    let mut paths: Vec<PathBuf> = fs::read_dir(msg_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| !path.extension().map(|e| e != "json").unwrap_or(true))
+        .collect();
+    paths.sort_by_key(|path| json_message_sequence_key(path));
+    for p in paths {
         if p.extension().map(|e| e != "json").unwrap_or(true) {
             continue;
         }
@@ -1606,10 +1591,30 @@ mod tests {
     fn init_db(root: &Path) {
         let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
         conn.execute(
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER)",
+            [],
+        )
+        .expect("create session table");
+        conn.execute(
             "CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT)",
             [],
         )
         .expect("create message table");
+    }
+
+    fn insert_session(
+        root: &Path,
+        session_id: &str,
+        directory: &str,
+        created_ms: i64,
+        updated_ms: i64,
+    ) {
+        let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
+        conn.execute(
+            "INSERT INTO session(id, directory, time_created, time_updated, time_archived) VALUES(?1, ?2, ?3, ?4, NULL)",
+            rusqlite::params![session_id, directory, created_ms, updated_ms],
+        )
+        .expect("insert session row");
     }
 
     fn insert_message(root: &Path, data: serde_json::Value, time_created_ms: i64) {
@@ -1617,13 +1622,244 @@ mod tests {
         conn.execute(
             "INSERT INTO message(id, session_id, time_created, data) VALUES(?1, ?2, ?3, ?4)",
             rusqlite::params![
-                "msg_1",
+                format!("msg_{time_created_ms}"),
                 "ses_1",
                 time_created_ms,
                 serde_json::to_string(&data).expect("msg json")
             ],
         )
         .expect("insert message row");
+    }
+
+    fn write_json_session(root: &Path, session_id: &str) -> PathBuf {
+        let session_dir = root.join("storage").join("session").join("proj_1");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        let session_file = session_dir.join(format!("{session_id}.json"));
+        let session = serde_json::json!({
+            "id": session_id,
+            "directory": "/tmp/project",
+            "time": {
+                "created": 1_700_000_000_000i64,
+                "updated": 1_700_000_010_000i64
+            }
+        });
+        fs::write(
+            &session_file,
+            serde_json::to_vec(&session).expect("session json"),
+        )
+        .expect("write session json");
+        session_file
+    }
+
+    fn write_json_message(root: &Path, session_id: &str, name: &str, data: serde_json::Value) {
+        let message_dir = root.join("storage").join("message").join(session_id);
+        fs::create_dir_all(&message_dir).expect("create message dir");
+        fs::write(
+            message_dir.join(name),
+            serde_json::to_vec(&data).expect("message json"),
+        )
+        .expect("write message json");
+    }
+
+    #[test]
+    fn sqlite_summary_uses_explicit_variant_for_model_effort() {
+        let tmp = TestDir::new("agtop-opencode-sqlite-explicit-variant");
+        init_db(&tmp.path);
+        insert_session(
+            &tmp.path,
+            "ses_1",
+            "/tmp/project",
+            1_700_000_000_000,
+            1_700_000_010_000,
+        );
+        insert_message(
+            &tmp.path,
+            serde_json::json!({
+                "role": "user",
+                "variant": "max"
+            }),
+            1,
+        );
+        insert_message(
+            &tmp.path,
+            serde_json::json!({
+                "role": "assistant",
+                "modelID": "gpt-5.4",
+                "providerID": "openai"
+            }),
+            2,
+        );
+
+        let sessions = list_sessions_sqlite(&tmp.path.join("opencode.db"), &HashMap::new())
+            .expect("list sqlite sessions");
+        let summary = sessions
+            .iter()
+            .find(|s| s.session_id == "ses_1")
+            .expect("session");
+
+        assert_eq!(summary.model_effort.as_deref(), Some("max"));
+        assert_eq!(
+            summary.model_effort_detail.as_deref(),
+            Some("message.variant")
+        );
+    }
+
+    #[test]
+    fn sqlite_summary_leaves_effort_empty_without_variant() {
+        let tmp = TestDir::new("agtop-opencode-sqlite-no-variant");
+        init_db(&tmp.path);
+        insert_session(
+            &tmp.path,
+            "ses_1",
+            "/tmp/project",
+            1_700_000_000_000,
+            1_700_000_010_000,
+        );
+        insert_message(
+            &tmp.path,
+            serde_json::json!({
+                "role": "user"
+            }),
+            1,
+        );
+        insert_message(
+            &tmp.path,
+            serde_json::json!({
+                "role": "assistant",
+                "modelID": "gpt-5.4",
+                "providerID": "openai"
+            }),
+            2,
+        );
+
+        let sessions = list_sessions_sqlite(&tmp.path.join("opencode.db"), &HashMap::new())
+            .expect("list sqlite sessions");
+        let summary = sessions
+            .iter()
+            .find(|s| s.session_id == "ses_1")
+            .expect("session");
+
+        assert_eq!(summary.model_effort, None);
+        assert_eq!(summary.model_effort_detail, None);
+    }
+
+    #[test]
+    fn json_summary_uses_explicit_variant_for_model_effort() {
+        let tmp = TestDir::new("agtop-opencode-json-explicit-variant");
+        let session_file = write_json_session(&tmp.path, "ses_1");
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_1.json",
+            serde_json::json!({
+                "role": "user",
+                "variant": "high"
+            }),
+        );
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_2.json",
+            serde_json::json!({
+                "role": "assistant",
+                "modelID": "gpt-5.4",
+                "providerID": "openai"
+            }),
+        );
+
+        let summary = summarize_opencode_session_json(&session_file, &tmp.path, &HashMap::new())
+            .expect("summarize json session");
+
+        assert_eq!(summary.model_effort.as_deref(), Some("high"));
+        assert_eq!(
+            summary.model_effort_detail.as_deref(),
+            Some("message.variant")
+        );
+    }
+
+    #[test]
+    fn json_summary_leaves_effort_empty_without_variant() {
+        let tmp = TestDir::new("agtop-opencode-json-no-variant");
+        let session_file = write_json_session(&tmp.path, "ses_1");
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_1.json",
+            serde_json::json!({
+                "role": "user"
+            }),
+        );
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_2.json",
+            serde_json::json!({
+                "role": "assistant",
+                "modelID": "gpt-5.4",
+                "providerID": "openai"
+            }),
+        );
+
+        let summary = summarize_opencode_session_json(&session_file, &tmp.path, &HashMap::new())
+            .expect("summarize json session");
+
+        assert_eq!(summary.model_effort, None);
+        assert_eq!(summary.model_effort_detail, None);
+    }
+
+    #[test]
+    fn json_summary_uses_earliest_user_variant_by_message_sequence() {
+        let tmp = TestDir::new("agtop-opencode-json-variant-order");
+        let session_file = write_json_session(&tmp.path, "ses_1");
+
+        // The legacy JSON layout uses `msg_*.json` files. The provider should
+        // choose the earliest user-message variant by message sequence, not by
+        // raw directory iteration order or lexicographic filename order.
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_10.json",
+            serde_json::json!({
+                "role": "user",
+                "variant": "high"
+            }),
+        );
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_2.json",
+            serde_json::json!({
+                "role": "user",
+                "variant": "low"
+            }),
+        );
+        write_json_message(
+            &tmp.path,
+            "ses_1",
+            "msg_20.json",
+            serde_json::json!({
+                "role": "assistant",
+                "modelID": "gpt-5.4",
+                "providerID": "openai"
+            }),
+        );
+
+        let summary = summarize_opencode_session_json(&session_file, &tmp.path, &HashMap::new())
+            .expect("summarize json session");
+
+        assert_eq!(summary.model_effort.as_deref(), Some("low"));
+        assert_eq!(
+            summary.model_effort_detail.as_deref(),
+            Some("message.variant")
+        );
+    }
+
+    #[test]
+    fn json_message_sequence_order_sorts_numerically() {
+        assert!(
+            json_message_sequence_key(Path::new("msg_2.json"))
+                < json_message_sequence_key(Path::new("msg_10.json"))
+        );
     }
 
     #[test]
