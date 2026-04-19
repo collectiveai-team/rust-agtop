@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
-use agtop_core::session::{ProviderKind, SessionAnalysis};
+use agtop_core::session::{ClientKind, SessionAnalysis};
 
 use crate::tui::app::{App, CostPeriod, CostTab};
 use crate::tui::theme as th;
@@ -33,7 +33,7 @@ pub struct CostRenderOut<'a> {
 ///
 /// Layout (all inside one bordered block):
 ///   row 0 : period toggle  — "total $X  N sess  │  month $X  N sess"
-///   row 1 : group-by tabs  — "Provider | Subscription | Model | Project"
+///   row 1 : group-by tabs  — "Client | Subscription | Model | Project"
 ///   rows 2..h-2 : scrollable data rows
 ///   row h-1 : pinned totals row
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App, out: CostRenderOut<'_>) {
@@ -255,7 +255,7 @@ fn build_rows(app: &App, period: CostPeriod, cur_year: i32, cur_month: u32) -> V
             continue;
         }
         let key = match app.cost_tab() {
-            CostTab::Provider => provider_label(s.summary.provider),
+            CostTab::Client => client_label(s.summary.client),
             CostTab::Subscription => s
                 .summary
                 .subscription
@@ -281,11 +281,11 @@ fn build_rows(app: &App, period: CostPeriod, cur_year: i32, cur_month: u32) -> V
     rows
 }
 
-fn provider_label(kind: ProviderKind) -> String {
+fn client_label(kind: ClientKind) -> String {
     match kind {
-        ProviderKind::Claude => "claude".to_string(),
-        ProviderKind::Codex => "codex".to_string(),
-        ProviderKind::OpenCode => "opencode".to_string(),
+        ClientKind::Claude => "claude".to_string(),
+        ClientKind::Codex => "codex".to_string(),
+        ClientKind::OpenCode => "opencode".to_string(),
         _ => "unknown".to_string(),
     }
 }

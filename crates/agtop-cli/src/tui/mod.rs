@@ -38,7 +38,7 @@ use theme as th;
 
 use crate::fmt;
 use agtop_core::pricing::Plan;
-use agtop_core::Provider;
+use agtop_core::Client;
 
 use app::{App, InputMode, Tab, UiMode};
 use events::{apply_key, Action};
@@ -81,9 +81,9 @@ struct UiLayout {
     cost_row_count: usize,
     /// Number of visible data rows in the current breakdown (for scroll clamping).
     cost_visible_rows: usize,
-    /// One entry per Providers-section row: (full-row rect, virtual cursor idx).
+    /// One entry per Clients-section row: (full-row rect, virtual cursor idx).
     /// Populated by widgets::config_tab::render.
-    config_provider_rows: Vec<(Rect, usize)>,
+    config_client_rows: Vec<(Rect, usize)>,
     /// One entry per Columns-section row: (full-row rect, virtual cursor idx).
     config_column_rows: Vec<(Rect, usize)>,
 }
@@ -92,8 +92,8 @@ struct UiLayout {
 /// raises an IO error. On exit, the terminal is returned to its
 /// previous state regardless of success/failure.
 pub fn run(
-    providers: Vec<Arc<dyn Provider>>,
-    enabled_initial: std::collections::HashSet<agtop_core::ProviderKind>,
+    clients: Vec<Arc<dyn Client>>,
+    enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
     plan: Plan,
     refresh_interval: Duration,
     start_dashboard: bool,
@@ -107,7 +107,7 @@ pub fn run(
 
     let enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
     let mut handle = refresh::spawn(
-        providers,
+        clients,
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
@@ -197,7 +197,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
         MouseEventKind::ScrollDown => {
             if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
                 let in_config = layout
-                    .config_provider_rows
+                    .config_client_rows
                     .first()
                     .map(|(r, _)| event.row >= r.y.saturating_sub(2))
                     .unwrap_or(false);
@@ -218,7 +218,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
         MouseEventKind::ScrollUp => {
             if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
                 let in_config = layout
-                    .config_provider_rows
+                    .config_client_rows
                     .first()
                     .map(|(r, _)| event.row >= r.y.saturating_sub(2))
                     .unwrap_or(false);
@@ -242,7 +242,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
 
             // Config tab body — only in classic mode, where the Config tab exists.
             if matches!(app.tab(), Tab::Config) && matches!(app.ui_mode(), UiMode::Classic) {
-                for &(rect, virt_idx) in &layout.config_provider_rows {
+                for &(rect, virt_idx) in &layout.config_client_rows {
                     if rect_contains(rect, event.column, event.row) {
                         app.set_config_cursor(virt_idx);
                         app.toggle_cursor_item();
@@ -259,7 +259,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
                 // Consume any click that landed inside the Config tab's
                 // area so it doesn't fall through to the session table.
                 let in_config = layout
-                    .config_provider_rows
+                    .config_client_rows
                     .first()
                     .map(|(r, _)| event.row >= r.y.saturating_sub(2)) // include title + header
                     .unwrap_or(false);
@@ -436,7 +436,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 "[{}/{}] {}:{}",
                 i + 1,
                 app.view_len(),
-                a.summary.provider.as_str(),
+                a.summary.client.as_str(),
                 fmt::short_id(&a.summary.session_id)
             )
         })
@@ -523,7 +523,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
             rows[1],
             app,
             widgets::config_tab::ConfigRenderOut {
-                provider_rows: &mut layout.config_provider_rows,
+                client_rows: &mut layout.config_client_rows,
                 column_rows: &mut layout.config_column_rows,
             },
         ),
@@ -606,7 +606,7 @@ mod tests {
     use super::*;
     use crate::tui::column_config::ColumnId;
     use agtop_core::session::{
-        CostBreakdown, ProviderKind, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
     };
     use chrono::{TimeZone, Utc};
     use ratatui::backend::TestBackend;
@@ -621,7 +621,7 @@ mod tests {
         let ts_last = Utc.with_ymd_and_hms(2026, 1, 1, 10, 30, 0).unwrap();
 
         let s1_summary = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             Some("Max 5x".into()),
             "deadbeef-aaaa-bbbb-cccc-1234".into(),
             Some(ts_started),
@@ -657,7 +657,7 @@ mod tests {
         );
 
         let s2_summary = SessionSummary::new(
-            ProviderKind::Codex,
+            ClientKind::Codex,
             Some("ChatGPT Plus".into()),
             "ses_gpt5".into(),
             Some(ts_started),
@@ -786,7 +786,7 @@ mod tests {
         let now = Utc::now();
 
         let summary = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             None,
             "working-sess".into(),
             Some(now - chrono::Duration::minutes(2)),
@@ -880,7 +880,7 @@ mod tests {
             PlanWindow::new("7d".into(), Some(0.18), Some(reset_at), None, false),
         ];
         let plan_usage = vec![PlanUsage::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             "Max 5x via Claude Code".into(),
             Some("Max 5x".into()),
             windows,
@@ -1076,7 +1076,7 @@ mod tests {
 
             // Map of rendered label text → expected SortColumn
             let cases: &[(&[u8], SortColumn)] = &[
-                (b"PROVIDER", SortColumn::Provider),
+                (b"CLIENT", SortColumn::Client),
                 (b"STARTED", SortColumn::Started),
                 (b"AGE", SortColumn::LastActive),
                 (b"MODEL", SortColumn::Model),
@@ -1154,19 +1154,19 @@ mod tests {
         };
 
         assert!(
-            contents.contains("Providers"),
-            "Providers section title missing:\n{contents}"
+            contents.contains("Clients"),
+            "Clients section title missing:\n{contents}"
         );
         assert!(
             contents.contains("Columns"),
             "Columns section title missing:\n{contents}"
         );
-        // At least one provider name should render.
-        assert!(contents.contains("claude"), "claude provider row missing");
+        // At least one client name should render.
+        assert!(contents.contains("claude"), "claude client row missing");
         // Layout hit-test arrays should be populated.
         assert!(
-            !layout.config_provider_rows.is_empty(),
-            "config_provider_rows not populated"
+            !layout.config_client_rows.is_empty(),
+            "config_client_rows not populated"
         );
         assert!(
             !layout.config_column_rows.is_empty(),
@@ -1175,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_provider_row_toggles_it() {
+    fn clicking_client_row_toggles_it() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         let backend = TestBackend::new(140, 30);
@@ -1190,12 +1190,12 @@ mod tests {
             .expect("draw");
 
         assert!(
-            !layout.config_provider_rows.is_empty(),
-            "no provider rows captured"
+            !layout.config_client_rows.is_empty(),
+            "no client rows captured"
         );
-        let (rect, virt_idx) = layout.config_provider_rows[0];
-        let kind = app.column_config().providers[virt_idx].kind;
-        let before = app.enabled_providers_set().contains(&kind);
+        let (rect, virt_idx) = layout.config_client_rows[0];
+        let kind = app.column_config().clients[virt_idx].kind;
+        let before = app.enabled_clients_set().contains(&kind);
 
         let event = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1205,8 +1205,8 @@ mod tests {
         };
         apply_mouse(&mut app, event, &layout);
 
-        let after = app.enabled_providers_set().contains(&kind);
-        assert_ne!(before, after, "click did not toggle provider");
+        let after = app.enabled_clients_set().contains(&kind);
+        assert_ne!(before, after, "click did not toggle client");
     }
 
     #[test]
@@ -1227,7 +1227,7 @@ mod tests {
         // Click on the exact bottom border of the Config panel, which is
         // inside the session-table area in the render layout but covered
         // by Config in Z-order. Our handler must consume the event.
-        let click_row = layout.config_provider_rows.last().unwrap().0.y + 1;
+        let click_row = layout.config_client_rows.last().unwrap().0.y + 1;
         let event = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 5,

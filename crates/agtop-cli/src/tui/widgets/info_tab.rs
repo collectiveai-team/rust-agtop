@@ -134,7 +134,7 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
     let cache_total = t.cache_read + t.cache_write_5m + t.cache_write_1h + t.cached_input;
 
     match col {
-        ColumnId::Provider => kv_line("agentic_provider", s.provider.as_str().to_string()),
+        ColumnId::Client => kv_line("agentic_client", s.client.as_str().to_string()),
         ColumnId::Subscription => kv_line(
             "subscription",
             s.subscription.clone().unwrap_or_else(|| "-".into()),

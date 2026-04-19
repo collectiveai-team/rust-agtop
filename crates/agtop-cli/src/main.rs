@@ -13,8 +13,7 @@ use serde::Serialize;
 
 use crate::tui::widgets::state_display::display_state;
 use agtop_core::{
-    analyze_all, default_providers, discover_all, pricing::Plan, session::SessionAnalysis,
-    ProviderKind,
+    analyze_all, default_clients, discover_all, pricing::Plan, session::SessionAnalysis, ClientKind,
 };
 
 #[derive(Parser, Debug)]
@@ -37,17 +36,17 @@ struct Cli {
     #[arg(short = 'p', long, default_value = "retail")]
     plan: String,
 
-    /// Only include sessions from this agentic provider (claude, codex,
+    /// Only include sessions from this agentic client (claude, codex,
     /// opencode, copilot, gemini-cli, cursor, antigravity). May be given
     /// multiple times. Affects the current run only — persisted
     /// enable/disable lives in the TUI's Config tab.
     #[arg(
-        long = "provider",
+        long = "client",
         alias = "backend",
-        alias = "agentic-provider",
+        alias = "agentic-client",
         value_name = "KIND"
     )]
-    providers: Vec<String>,
+    clients: Vec<String>,
 
     /// Re-render the `--list` table every `--delay` seconds until Ctrl-C.
     /// Ignored in `--json` mode.
@@ -92,43 +91,43 @@ fn main() -> Result<()> {
 
     setup_pricing(cli.refresh_pricing, cli.no_pricing_refresh);
 
-    // Always build the full provider set. `--provider` only affects the
+    // Always build the full client set. `--client` only affects the
     // in-memory enabled set for this run; disabling from the TUI is what
     // persists.
-    let providers = default_providers();
+    let clients = default_clients();
 
     // Build initial enabled set:
-    //   1. --provider CLI flag (one-shot, does NOT write to disk)
+    //   1. --client CLI flag (one-shot, does NOT write to disk)
     //   2. Otherwise the persisted ColumnConfig (~/.config/agtop/columns.json)
-    //   3. Otherwise every provider
-    let enabled_initial: std::collections::HashSet<agtop_core::ProviderKind> =
-        if !cli.providers.is_empty() {
-            let wanted: std::collections::HashSet<agtop_core::ProviderKind> = cli
-                .providers
+    //   3. Otherwise every client
+    let enabled_initial: std::collections::HashSet<agtop_core::ClientKind> =
+        if !cli.clients.is_empty() {
+            let wanted: std::collections::HashSet<agtop_core::ClientKind> = cli
+                .clients
                 .iter()
-                .filter_map(|s| parse_provider_kind(s))
+                .filter_map(|s| parse_client_kind(s))
                 .collect();
             if wanted.is_empty() {
                 anyhow::bail!(
-                    "no recognized --provider values (got: {:?}). expected one of: {}",
-                    cli.providers,
-                    agtop_core::ProviderKind::all()
+                    "no recognized --client values (got: {:?}). expected one of: {}",
+                    cli.clients,
+                    agtop_core::ClientKind::all()
                         .iter()
-                        .map(|p| p.as_str())
+                        .map(|client| client.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
             }
             wanted
         } else {
-            tui::column_config::ColumnConfig::load().enabled_providers()
+            tui::column_config::ColumnConfig::load().enabled_clients()
         };
 
     if cli.json {
         if cli.watch {
             anyhow::bail!("--watch is not supported with --json (JSON is a one-shot dump)");
         }
-        let live = filtered_providers(&providers, &enabled_initial);
+        let live = filtered_clients(&clients, &enabled_initial);
         let analyses = analyze_all(&live, plan);
         let out = JsonOutput {
             plan: cli.plan.clone(),
@@ -151,10 +150,10 @@ fn main() -> Result<()> {
                  run `agtop --delay <secs>` for the TUI."
             );
         }
-        let live = filtered_providers(&providers, &enabled_initial);
+        let live = filtered_clients(&clients, &enabled_initial);
         run_watch(&live, plan, cli.delay.max(1))?;
     } else if cli.list {
-        let live = filtered_providers(&providers, &enabled_initial);
+        let live = filtered_clients(&clients, &enabled_initial);
         let analyses = analyze_all(&live, plan);
         let summaries = discover_all(&live);
         render_table(&summaries, &analyses);
@@ -163,7 +162,7 @@ fn main() -> Result<()> {
         // after the terminal has been restored (tui::run guarantees
         // teardown on both success and failure paths).
         tui::run(
-            providers,
+            clients,
             enabled_initial,
             plan,
             std::time::Duration::from_secs(cli.delay.max(1)),
@@ -177,7 +176,7 @@ fn main() -> Result<()> {
 /// Non-TUI refresh loop: clears the screen, re-renders the table, sleeps.
 /// Runs until Ctrl-C (SIGINT). Intended for CI-ish use (`--list --watch`).
 fn run_watch(
-    providers: &[std::sync::Arc<dyn agtop_core::Provider>],
+    clients: &[std::sync::Arc<dyn agtop_core::Client>],
     plan: Plan,
     delay_secs: u64,
 ) -> Result<()> {
@@ -212,8 +211,8 @@ fn run_watch(
             )
             .context("clear screen")?;
 
-            let analyses = analyze_all(providers, plan);
-            let summaries = discover_all(providers);
+            let analyses = analyze_all(clients, plan);
+            let summaries = discover_all(clients);
             render_table(&summaries, &analyses);
             writeln!(
                 stdout,
@@ -337,53 +336,47 @@ fn init_logging(verbose: bool, tui_mode: bool) {
         .try_init();
 }
 
-fn parse_provider_kind(s: &str) -> Option<ProviderKind> {
+fn parse_client_kind(s: &str) -> Option<ClientKind> {
     match s.to_ascii_lowercase().as_str() {
-        "claude" | "claude-code" | "claudecode" => Some(ProviderKind::Claude),
-        "codex" => Some(ProviderKind::Codex),
-        "opencode" | "open-code" => Some(ProviderKind::OpenCode),
-        "copilot" | "github-copilot" => Some(ProviderKind::Copilot),
-        "gemini" | "gemini-cli" => Some(ProviderKind::GeminiCli),
-        "cursor" => Some(ProviderKind::Cursor),
-        "antigravity" => Some(ProviderKind::Antigravity),
+        "claude" | "claude-code" | "claudecode" => Some(ClientKind::Claude),
+        "codex" => Some(ClientKind::Codex),
+        "opencode" | "open-code" => Some(ClientKind::OpenCode),
+        "copilot" | "github-copilot" => Some(ClientKind::Copilot),
+        "gemini" | "gemini-cli" => Some(ClientKind::GeminiCli),
+        "cursor" => Some(ClientKind::Cursor),
+        "antigravity" => Some(ClientKind::Antigravity),
         _ => None,
     }
 }
 
-fn filtered_providers(
-    all: &[std::sync::Arc<dyn agtop_core::Provider>],
-    enabled: &std::collections::HashSet<agtop_core::ProviderKind>,
-) -> Vec<std::sync::Arc<dyn agtop_core::Provider>> {
+fn filtered_clients(
+    all: &[std::sync::Arc<dyn agtop_core::Client>],
+    enabled: &std::collections::HashSet<agtop_core::ClientKind>,
+) -> Vec<std::sync::Arc<dyn agtop_core::Client>> {
     all.iter()
-        .filter(|p| enabled.contains(&p.kind()))
+        .filter(|client| enabled.contains(&client.kind()))
         .cloned()
         .collect()
 }
 
 #[cfg(test)]
-mod provider_parse_tests {
+mod client_parse_tests {
     use super::*;
-    use agtop_core::ProviderKind;
+    use agtop_core::ClientKind;
 
     #[test]
-    fn parse_provider_kind_covers_all_variants() {
-        assert_eq!(parse_provider_kind("claude"), Some(ProviderKind::Claude));
-        assert_eq!(parse_provider_kind("codex"), Some(ProviderKind::Codex));
+    fn parse_client_kind_covers_all_variants() {
+        assert_eq!(parse_client_kind("claude"), Some(ClientKind::Claude));
+        assert_eq!(parse_client_kind("codex"), Some(ClientKind::Codex));
+        assert_eq!(parse_client_kind("opencode"), Some(ClientKind::OpenCode));
+        assert_eq!(parse_client_kind("copilot"), Some(ClientKind::Copilot));
+        assert_eq!(parse_client_kind("gemini-cli"), Some(ClientKind::GeminiCli));
+        assert_eq!(parse_client_kind("cursor"), Some(ClientKind::Cursor));
         assert_eq!(
-            parse_provider_kind("opencode"),
-            Some(ProviderKind::OpenCode)
+            parse_client_kind("antigravity"),
+            Some(ClientKind::Antigravity)
         );
-        assert_eq!(parse_provider_kind("copilot"), Some(ProviderKind::Copilot));
-        assert_eq!(
-            parse_provider_kind("gemini-cli"),
-            Some(ProviderKind::GeminiCli)
-        );
-        assert_eq!(parse_provider_kind("cursor"), Some(ProviderKind::Cursor));
-        assert_eq!(
-            parse_provider_kind("antigravity"),
-            Some(ProviderKind::Antigravity)
-        );
-        assert_eq!(parse_provider_kind("bogus"), None);
+        assert_eq!(parse_client_kind("bogus"), None);
     }
 }
 
@@ -398,7 +391,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
     let now = Utc::now();
     println!(
         "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
-        "PROVIDER",
+        "CLIENT",
         "SUBSCRIPTION",
         "SESSION",
         "STARTED",
@@ -462,7 +455,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             .unwrap_or_else(|| "-".into());
         println!(
             "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
-            s.provider.as_str(),
+            s.client.as_str(),
             fmt::fit(&subscription, 16),
             fmt::fit(&short_session, 10),
             fmt::fit(&started, 16),
@@ -519,7 +512,7 @@ struct JsonOutput {
 
 #[derive(Debug, Serialize)]
 struct JsonSession {
-    provider: &'static str,
+    client: &'static str,
     subscription: Option<String>,
     session_id: String,
     model: Option<String>,
@@ -556,7 +549,7 @@ impl JsonSession {
     fn from_analysis(a: &SessionAnalysis, now: DateTime<Utc>) -> Self {
         let (display_state_label, _) = display_state(a, now);
         Self {
-            provider: a.summary.provider.as_str(),
+            client: a.summary.client.as_str(),
             subscription: a.summary.subscription.clone(),
             session_id: a.summary.session_id.clone(),
             model: a.summary.model.clone(),
@@ -585,14 +578,14 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{CostBreakdown, ProviderKind, SessionSummary, TokenTotals};
+    use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
     use std::path::PathBuf;
 
     #[test]
     fn json_session_keeps_raw_state_and_adds_display_state() {
         let now = Utc::now();
         let summary = SessionSummary::new(
-            ProviderKind::OpenCode,
+            ClientKind::OpenCode,
             None,
             "sess".into(),
             Some(now - chrono::Duration::minutes(1)),

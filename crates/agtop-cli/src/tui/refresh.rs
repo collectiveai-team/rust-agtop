@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use agtop_core::pricing::Plan;
 use agtop_core::session::SessionAnalysis;
-use agtop_core::{discover_all, plan_usage_all_from_summaries, Provider, ProviderKind};
+use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
@@ -122,17 +122,17 @@ pub(crate) fn hash_summaries_for_cache(summaries: &[agtop_core::session::Session
 
 /// Spawn a refresh worker. Returns a handle the UI can poll.
 ///
-/// - `providers`: shared with the worker via `Arc`. `Provider` is
+/// - `clients`: shared with the worker via `Arc`. `Client` is
 ///   already `Send + Sync`.
-/// - `enabled`: shared set of enabled provider kinds; the worker
+/// - `enabled`: shared set of enabled client kinds; the worker
 ///   consults this on every cycle so toggles take effect immediately.
 /// - `plan`: billing plan, passed through to `analyze_all`.
 /// - `interval`: how long the worker sleeps between automatic refreshes.
 ///   Manual refreshes via [`RefreshHandle::trigger_manual`] bypass the
 ///   sleep. Zero is clamped to 1s to avoid a busy-loop.
 pub fn spawn(
-    providers: Vec<Arc<dyn Provider>>,
-    enabled: Arc<RwLock<HashSet<ProviderKind>>>,
+    clients: Vec<Arc<dyn Client>>,
+    enabled: Arc<RwLock<HashSet<ClientKind>>>,
     plan: Plan,
     interval: Duration,
 ) -> std::io::Result<RefreshHandle> {
@@ -163,7 +163,7 @@ pub fn spawn(
     let (tx, rx) = watch::channel(initial);
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
 
-    let providers_arc = providers.clone();
+    let clients_arc = clients.clone();
     // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
     // worker knows not to start another `analyze_all` iteration after
     // its current one finishes.
@@ -199,9 +199,9 @@ pub fn spawn(
                     Err(poisoned) => poisoned.into_inner().clone(),
                 }
             };
-            let live: Vec<Arc<dyn Provider>> = providers_arc
+            let live: Vec<Arc<dyn Client>> = clients_arc
                 .iter()
-                .filter(|p| enabled_snap.contains(&p.kind()))
+                .filter(|client| enabled_snap.contains(&client.kind()))
                 .cloned()
                 .collect();
 
@@ -312,7 +312,7 @@ type ProjectNameCache = HashMap<std::path::PathBuf, Option<String>>;
 /// the caller for the next cycle). Prunes cache entries for sessions no
 /// longer present in `summaries`.
 fn cached_analyze_all(
-    providers: &[Arc<dyn Provider>],
+    clients: &[Arc<dyn Client>],
     summaries: &[agtop_core::session::SessionSummary],
     plan: agtop_core::pricing::Plan,
     mut cache: SessionCache,
@@ -357,34 +357,37 @@ fn cached_analyze_all(
         }
 
         // Cache miss or stale: re-analyze.
-        let provider = match providers.iter().find(|p| p.kind() == summary.provider) {
-            Some(p) => p,
+        let client = match clients
+            .iter()
+            .find(|candidate| candidate.kind() == summary.client)
+        {
+            Some(client) => client,
             None => continue,
         };
-        match provider.analyze(summary, plan) {
+        match client.analyze(summary, plan) {
             Ok(mut analysis) => {
                 if let Some(cwd) = &summary.cwd {
                     let key = std::path::PathBuf::from(cwd);
                     analysis.project_name = project_cache.get(&key).and_then(|v| v.clone());
                 }
 
-                match provider.children(summary) {
+                match client.children(summary) {
                     Ok(child_summaries) => {
                         for child_summary in &child_summaries {
-                            let child_provider = providers
+                            let child_client = clients
                                 .iter()
-                                .find(|p| p.kind() == child_summary.provider);
-                            let child_provider = match child_provider {
-                                Some(cp) => cp,
+                                .find(|candidate| candidate.kind() == child_summary.client);
+                            let child_client = match child_client {
+                                Some(client) => client,
                                 None => {
                                     tracing::debug!(
                                         child = child_summary.session_id.as_str(),
-                                        "no provider for child session"
+                                        "no client for child session"
                                     );
                                     continue;
                                 }
                             };
-                            match child_provider.analyze(child_summary, plan) {
+                            match child_client.analyze(child_summary, plan) {
                                 Ok(child_analysis) => {
                                     analysis.children.push(child_analysis);
                                 }
@@ -430,23 +433,23 @@ mod tests {
     use super::*;
 
     /// Smoke test: the worker should publish *something* within a short
-    /// window. We use an empty provider list to keep the test hermetic
-    /// — a real `default_providers()` run can take multiple seconds
+    /// window. We use an empty client list to keep the test hermetic
+    /// — a real `default_clients()` run can take multiple seconds
     /// against a ~/.claude tree with hundreds of sessions (which isn't
     /// what we're testing here).
     #[test]
     fn worker_publishes_initial_snapshot() {
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
-        let providers: Vec<Arc<dyn Provider>> = Vec::new();
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled = Arc::new(RwLock::new(
-            agtop_core::ProviderKind::all()
+            agtop_core::ClientKind::all()
                 .iter()
                 .copied()
                 .collect::<HashSet<_>>(),
         ));
-        let mut handle = spawn(providers, enabled, Plan::Retail, Duration::from_millis(50))
-            .expect("spawn worker");
+        let mut handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
 
         // Poll up to ~5s for a non-loading message.
         let start = std::time::Instant::now();
@@ -472,21 +475,21 @@ mod tests {
 
     /// The worker must sleep at least `work_duration * 2` between cycles
     /// so it never exceeds ~50% CPU. We simulate slow work by registering
-    /// a mock provider whose list_sessions sleeps for 300 ms.
+    /// a mock client whose list_sessions sleeps for 300 ms.
     #[test]
     fn adaptive_sleep_scales_with_work_duration() {
-        use agtop_core::{session::SessionSummary, ProviderKind};
+        use agtop_core::{session::SessionSummary, ClientKind};
         use std::collections::HashSet;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::{Arc, RwLock};
 
         #[derive(Debug)]
-        struct SlowProvider {
+        struct SlowClient {
             calls: Arc<AtomicUsize>,
         }
-        impl Provider for SlowProvider {
-            fn kind(&self) -> ProviderKind {
-                ProviderKind::Claude
+        impl Client for SlowClient {
+            fn kind(&self) -> ClientKind {
+                ClientKind::Claude
             }
             fn list_sessions(&self) -> agtop_core::Result<Vec<SessionSummary>> {
                 self.calls.fetch_add(1, Ordering::SeqCst);
@@ -503,16 +506,16 @@ mod tests {
         }
 
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers: Vec<Arc<dyn Provider>> = vec![Arc::new(SlowProvider {
+        let clients: Vec<Arc<dyn Client>> = vec![Arc::new(SlowClient {
             calls: Arc::clone(&calls),
         })];
         let enabled = Arc::new(RwLock::new(
-            std::iter::once(ProviderKind::Claude).collect::<HashSet<_>>(),
+            std::iter::once(ClientKind::Claude).collect::<HashSet<_>>(),
         ));
 
         // Very short interval (10ms) — work time (300ms) should dominate.
         let _handle =
-            spawn(providers, enabled, Plan::Retail, Duration::from_millis(10)).expect("spawn");
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(10)).expect("spawn");
 
         // Run for ~1s. Without adaptive sleep: ≥3 calls (300ms each, back-to-back).
         // With adaptive sleep (wait = max(10ms, 600ms) = 600ms): ~1 call.
@@ -528,15 +531,15 @@ mod tests {
     /// just at startup. Empty set → snapshot has zero sessions.
     #[test]
     fn worker_respects_empty_enabled_set() {
-        use agtop_core::ProviderKind;
+        use agtop_core::ClientKind;
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
-        let providers: Vec<Arc<dyn Provider>> = Vec::new();
-        let enabled: Arc<RwLock<HashSet<ProviderKind>>> = Arc::new(RwLock::new(HashSet::new()));
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
+        let enabled: Arc<RwLock<HashSet<ClientKind>>> = Arc::new(RwLock::new(HashSet::new()));
 
-        let mut handle = spawn(providers, enabled, Plan::Retail, Duration::from_millis(50))
-            .expect("spawn worker");
+        let mut handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
 
         // Poll for up to 2s. With zero providers + empty enabled set, we
         // should still get an initial Snapshot message (an empty one).
@@ -571,11 +574,11 @@ mod tests {
     #[test]
     fn cached_analyze_all_populates_children_on_cache_miss() {
         use agtop_core::session::{CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
-        use agtop_core::ProviderKind;
+        use agtop_core::ClientKind;
         use std::path::PathBuf;
 
         let parent_summary = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             None,
             "parent-1".into(),
             None,
@@ -589,7 +592,7 @@ mod tests {
             None,
         );
         let child_summary = SessionSummary::new(
-            ProviderKind::Claude,
+            ClientKind::Claude,
             None,
             "child-1".into(),
             None,
@@ -604,12 +607,12 @@ mod tests {
         );
 
         #[derive(Debug)]
-        struct MockProvider {
+        struct MockClient {
             child: SessionSummary,
         }
-        impl Provider for MockProvider {
-            fn kind(&self) -> ProviderKind {
-                ProviderKind::Claude
+        impl Client for MockClient {
+            fn kind(&self) -> ClientKind {
+                ClientKind::Claude
             }
             fn list_sessions(&self) -> agtop_core::Result<Vec<SessionSummary>> {
                 Ok(vec![])
@@ -641,7 +644,7 @@ mod tests {
             }
         }
 
-        let provider: Arc<dyn Provider> = Arc::new(MockProvider {
+        let client: Arc<dyn Client> = Arc::new(MockClient {
             child: child_summary,
         });
         let summaries = vec![parent_summary];
@@ -649,7 +652,7 @@ mod tests {
         let project_cache = ProjectNameCache::new();
 
         let (analyses, _cache_out, _project_cache_out) =
-            cached_analyze_all(&[provider], &summaries, Plan::Retail, cache, project_cache);
+            cached_analyze_all(&[client], &summaries, Plan::Retail, cache, project_cache);
 
         assert_eq!(analyses.len(), 1, "should have one parent analysis");
         let parent = &analyses[0];
