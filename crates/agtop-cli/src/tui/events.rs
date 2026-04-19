@@ -289,37 +289,48 @@ mod tests {
     /// led users to press plain `j` (cursor move) instead.
     #[test]
     fn shift_j_reorders_column_down_in_config_tab() {
+        use crate::tui::app::ConfigSection;
         let mut app = App::new();
         app.set_tab(Tab::Config);
-        // Cursor starts at 0; move to a middle position so the column
-        // can legitimately swap both down and up.
-        apply_key(&mut app, press(KeyCode::Char('j')));
-        apply_key(&mut app, press(KeyCode::Char('j')));
+        // Place cursor in the Columns section at local index 1 so that it can
+        // legitimately move both down and up. Providers occupy the first N rows.
+        let n_providers = app.column_config().providers.len();
+        app.set_config_cursor(n_providers + 1);
         let cursor_before = app.config_cursor();
+        let local_before = app.config_local_idx(cursor_before);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Char('J')));
 
         let after = full_order(&app);
         assert_ne!(before, after, "Shift+J did not mutate column order");
-        // The cursor should follow the moved column (app.config_move_column_down
-        // increments the cursor).
+        // The cursor should follow the moved column (config_move_column_down
+        // increments the virtual cursor).
         assert_eq!(
             app.config_cursor(),
             cursor_before + 1,
             "cursor should follow the moved column"
         );
-        // The column that was at cursor_before should now be at cursor_before+1.
-        assert_eq!(after[cursor_before + 1].0, before[cursor_before].0);
+        // The column that was at local_before should now be at local_before+1.
+        assert_eq!(after[local_before + 1].0, before[local_before].0);
+        // Sanity: cursor is still in the Columns section.
+        assert_eq!(
+            app.config_section_at(app.config_cursor()),
+            ConfigSection::Columns
+        );
     }
 
     #[test]
     fn shift_k_reorders_column_up_in_config_tab() {
+        use crate::tui::app::ConfigSection;
         let mut app = App::new();
         app.set_tab(Tab::Config);
-        apply_key(&mut app, press(KeyCode::Char('j')));
-        apply_key(&mut app, press(KeyCode::Char('j')));
+        // Place cursor in the Columns section at local index 1 so that it can
+        // move up within the Columns section.
+        let n_providers = app.column_config().providers.len();
+        app.set_config_cursor(n_providers + 1);
         let cursor_before = app.config_cursor();
+        let local_before = app.config_local_idx(cursor_before);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Char('K')));
@@ -327,14 +338,20 @@ mod tests {
         let after = full_order(&app);
         assert_ne!(before, after, "Shift+K did not mutate column order");
         assert_eq!(app.config_cursor(), cursor_before - 1);
-        assert_eq!(after[cursor_before - 1].0, before[cursor_before].0);
+        assert_eq!(after[local_before - 1].0, before[local_before].0);
+        assert_eq!(
+            app.config_section_at(app.config_cursor()),
+            ConfigSection::Columns
+        );
     }
 
     #[test]
     fn shift_arrow_down_reorders_column_down_in_config_tab() {
         let mut app = App::new();
         app.set_tab(Tab::Config);
-        apply_key(&mut app, press(KeyCode::Char('j')));
+        // Place cursor at the start of the Columns section so Shift+Down works.
+        let n_providers = app.column_config().providers.len();
+        app.set_config_cursor(n_providers);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Down));
@@ -347,8 +364,9 @@ mod tests {
     fn shift_arrow_up_reorders_column_up_in_config_tab() {
         let mut app = App::new();
         app.set_tab(Tab::Config);
-        apply_key(&mut app, press(KeyCode::Char('j')));
-        apply_key(&mut app, press(KeyCode::Char('j')));
+        // Place cursor in the Columns section at local index 1 so Shift+Up can move up.
+        let n_providers = app.column_config().providers.len();
+        app.set_config_cursor(n_providers + 1);
         let before = full_order(&app);
 
         apply_key(&mut app, shift(KeyCode::Up));

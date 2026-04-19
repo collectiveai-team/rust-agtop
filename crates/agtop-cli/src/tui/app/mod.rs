@@ -35,6 +35,13 @@ use super::column_config::ColumnConfig;
 // UI mode / Tab / InputMode
 // ---------------------------------------------------------------------------
 
+/// Which section the Config tab cursor is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSection {
+    Providers,
+    Columns,
+}
+
 /// Top-level rendering mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiMode {
@@ -329,6 +336,33 @@ impl App {
         self.config_cursor
     }
 
+    pub fn set_config_cursor(&mut self, idx: usize) {
+        let max = self.config_total_rows().saturating_sub(1);
+        self.config_cursor = idx.min(max);
+    }
+
+    /// Total virtual rows in the Config tab: providers + columns.
+    pub fn config_total_rows(&self) -> usize {
+        self.column_config.providers.len() + self.column_config.columns.len()
+    }
+
+    /// Which section the current cursor is in.
+    pub fn config_section_at(&self, idx: usize) -> ConfigSection {
+        if idx < self.column_config.providers.len() {
+            ConfigSection::Providers
+        } else {
+            ConfigSection::Columns
+        }
+    }
+
+    /// Section-local index. Callers combine this with `config_section_at`.
+    pub fn config_local_idx(&self, idx: usize) -> usize {
+        match self.config_section_at(idx) {
+            ConfigSection::Providers => idx,
+            ConfigSection::Columns => idx - self.column_config.providers.len(),
+        }
+    }
+
     pub fn config_move_up(&mut self) {
         if self.config_cursor > 0 {
             self.config_cursor -= 1;
@@ -336,32 +370,64 @@ impl App {
     }
 
     pub fn config_move_down(&mut self) {
-        let max = self.column_config.columns.len().saturating_sub(1);
+        let max = self.config_total_rows().saturating_sub(1);
         if self.config_cursor < max {
             self.config_cursor += 1;
         }
     }
 
-    pub fn config_toggle(&mut self) {
-        self.column_config.toggle(self.config_cursor);
-        self.column_config.save();
+    /// Toggle whatever item the cursor is on. Shared by keyboard (Space/Enter)
+    /// and mouse (click on row).
+    pub fn toggle_cursor_item(&mut self) {
+        match self.config_section_at(self.config_cursor) {
+            ConfigSection::Providers => {
+                let local = self.config_local_idx(self.config_cursor);
+                self.column_config.toggle_provider(local);
+            }
+            ConfigSection::Columns => {
+                let local = self.config_local_idx(self.config_cursor);
+                self.column_config.toggle(local);
+                self.column_config.save();
+            }
+        }
     }
 
+    /// Reorder only applies to the Columns section; no-op when the cursor
+    /// sits on a provider row. Keeps keyboard shortcuts harmless.
     pub fn config_move_column_up(&mut self) {
-        if self.config_cursor > 0 {
-            self.column_config.move_up(self.config_cursor);
+        if self.config_section_at(self.config_cursor) != ConfigSection::Columns {
+            return;
+        }
+        let local = self.config_local_idx(self.config_cursor);
+        if local > 0 {
+            self.column_config.move_up(local);
             self.config_cursor -= 1;
             self.column_config.save();
         }
     }
 
     pub fn config_move_column_down(&mut self) {
-        let max = self.column_config.columns.len().saturating_sub(1);
-        if self.config_cursor < max {
-            self.column_config.move_down(self.config_cursor);
+        if self.config_section_at(self.config_cursor) != ConfigSection::Columns {
+            return;
+        }
+        let local = self.config_local_idx(self.config_cursor);
+        let col_max = self.column_config.columns.len().saturating_sub(1);
+        if local < col_max {
+            self.column_config.move_down(local);
             self.config_cursor += 1;
             self.column_config.save();
         }
+    }
+
+    /// Read-only snapshot of the currently-enabled providers (for tests
+    /// and for seeding the shared Arc<RwLock<...>> at startup).
+    pub fn enabled_providers_set(&self) -> std::collections::HashSet<agtop_core::ProviderKind> {
+        self.column_config.enabled_providers()
+    }
+
+    /// Backward-compat alias used by events.rs until it's updated.
+    pub fn config_toggle(&mut self) {
+        self.toggle_cursor_item();
     }
 
     /// Build the sorted + filtered view of sessions that the table widget
@@ -1031,5 +1097,51 @@ mod tests {
         assert_eq!(app.plan_selected(), 2);
         app.plan_select_prev();
         assert_eq!(app.plan_selected(), 1);
+    }
+
+    #[test]
+    fn config_cursor_walks_providers_then_columns() {
+        let app = App::new();
+        let n_providers = app.column_config().providers.len();
+        let n_columns = app.column_config().columns.len();
+        assert_eq!(app.config_total_rows(), n_providers + n_columns);
+        assert_eq!(app.config_section_at(0), ConfigSection::Providers);
+        assert_eq!(
+            app.config_section_at(n_providers - 1),
+            ConfigSection::Providers
+        );
+        assert_eq!(app.config_section_at(n_providers), ConfigSection::Columns);
+    }
+
+    #[test]
+    fn toggle_cursor_item_on_provider_flips_enabled() {
+        let mut app = App::new();
+        let kind = app.column_config().providers[0].kind;
+        let before = app.enabled_providers_set().contains(&kind);
+        app.set_config_cursor(0);
+        app.toggle_cursor_item();
+        let after = app.enabled_providers_set().contains(&kind);
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn toggle_cursor_item_on_column_flips_visibility() {
+        let mut app = App::new();
+        let n_providers = app.column_config().providers.len();
+        // Place cursor at first column entry (after all provider rows).
+        app.set_config_cursor(n_providers);
+        let was = app.column_config().columns[0].visible;
+        app.toggle_cursor_item();
+        assert_eq!(app.column_config().columns[0].visible, !was);
+    }
+
+    #[test]
+    fn config_move_down_clamps_to_total_rows() {
+        let mut app = App::new();
+        let max = app.config_total_rows() - 1;
+        for _ in 0..100 {
+            app.config_move_down();
+        }
+        assert_eq!(app.config_cursor(), max);
     }
 }
