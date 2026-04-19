@@ -1,7 +1,7 @@
-//! agtop-core — provider-agnostic session discovery and cost analysis for
+//! agtop-core — client-agnostic session discovery and cost analysis for
 //! AI coding agent transcripts.
 //!
-//! The crate exposes a [`Client`] trait (see [`provider`]) plus concrete
+//! The crate exposes a [`Client`] trait (see [`client`]) plus concrete
 //! implementations for:
 //! - Claude Code  (`~/.claude/projects/*/*.jsonl`)
 //! - Codex        (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`)
@@ -9,21 +9,21 @@
 //!   `…/message/ses_*/msg_*.json`)
 //!
 //! Higher-level helpers ([`discover_all`], [`analyze_all`]) fan out across
-//! every registered provider and return aggregated results.
+//! every registered client and return aggregated results.
 
+pub mod client;
 pub mod error;
 pub mod litellm;
 pub mod pricing;
 pub mod project;
-pub mod provider;
 pub mod providers;
 pub mod session;
 
 // Flat re-exports for the most commonly used public API items.
 // Consumers may also access sub-modules directly (e.g. `agtop_core::pricing::lookup`).
+pub use client::Client;
 pub use error::{Error, Result};
 pub use pricing::{Plan, PlanMode, Rates};
-pub use provider::Client;
 pub use session::{
     ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
@@ -33,19 +33,19 @@ use std::sync::Arc;
 /// Return the default set of clients.
 pub fn default_clients() -> Vec<Arc<dyn Client>> {
     vec![
-        Arc::new(providers::claude::ClaudeProvider::default()),
-        Arc::new(providers::codex::CodexProvider::default()),
-        Arc::new(providers::opencode::OpenCodeProvider::default()),
-        Arc::new(providers::copilot::CopilotProvider::default()),
-        Arc::new(providers::gemini_cli::GeminiCliProvider::default()),
-        Arc::new(providers::cursor::CursorProvider::default()),
-        Arc::new(providers::antigravity::AntigravityProvider::default()),
+        Arc::new(providers::claude::ClaudeClient::default()),
+        Arc::new(providers::codex::CodexClient::default()),
+        Arc::new(providers::opencode::OpenCodeClient::default()),
+        Arc::new(providers::copilot::CopilotClient::default()),
+        Arc::new(providers::gemini_cli::GeminiCliClient::default()),
+        Arc::new(providers::cursor::CursorClient::default()),
+        Arc::new(providers::antigravity::AntigravityClient::default()),
     ]
 }
 
 /// Discover session summaries across all given clients.
 ///
-/// Errors from individual providers are logged and skipped; the caller still
+/// Errors from individual clients are logged and skipped; the caller still
 /// receives partial results. This mirrors the original agtop's behavior of
 /// degrading gracefully when one data source is unavailable.
 ///
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn analyze_all_from_summaries_is_consistent_with_analyze_all() {
-        // Empty provider list → both functions return empty vec
+        // Empty client list → both functions return empty vec
         let clients: Vec<Arc<dyn Client>> = vec![];
         let summaries = discover_all(&clients);
         let via_from_summaries = analyze_all_from_summaries(&clients, &summaries, Plan::Retail);
@@ -160,9 +160,9 @@ mod tests {
     #[test]
     fn analyze_all_from_summaries_uses_precomputed_summaries() {
         #[derive(Debug)]
-        struct MockProvider;
+        struct MockClient;
 
-        impl Client for MockProvider {
+        impl Client for MockClient {
             fn kind(&self) -> ClientKind {
                 ClientKind::Claude
             }
@@ -203,11 +203,11 @@ mod tests {
             }
         }
 
-        let clients: Vec<Arc<dyn Client>> = vec![Arc::new(MockProvider)];
+        let clients: Vec<Arc<dyn Client>> = vec![Arc::new(MockClient)];
 
-        // discover_all should return the one summary from MockProvider
+        // discover_all should return the one summary from MockClient
         let summaries = discover_all(&clients);
-        assert_eq!(summaries.len(), 1, "expected one summary from MockProvider");
+        assert_eq!(summaries.len(), 1, "expected one summary from MockClient");
         assert_eq!(summaries[0].session_id, "test-session-1");
 
         // analyze_all_from_summaries should use those summaries and return one analysis

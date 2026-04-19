@@ -11,8 +11,8 @@ use std::sync::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agtop_core::providers::opencode::OpenCodeProvider;
-use agtop_core::{Plan, Client, ClientKind, SessionSummary};
+use agtop_core::providers::opencode::OpenCodeClient;
+use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------
 // Temp-dir helper
@@ -194,12 +194,12 @@ fn opencode_sqlite_token_counts_are_summed() {
         insert_assistant_msg(&tmp.0, &format!("msg_{i}"), SESSION_ID, turn);
     }
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root: tmp.0.clone(),
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -223,12 +223,12 @@ fn opencode_sqlite_tool_call_count() {
         insert_assistant_msg(&tmp.0, &format!("msg_{i}"), SESSION_ID, turn);
     }
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root: tmp.0.clone(),
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -247,12 +247,12 @@ fn opencode_sqlite_duration_from_summary() {
         insert_assistant_msg(&tmp.0, &format!("msg_{i}"), SESSION_ID, turn);
     }
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root: tmp.0.clone(),
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -272,12 +272,12 @@ fn opencode_sqlite_retail_cost_is_positive() {
         insert_assistant_msg(&tmp.0, &format!("msg_{i}"), SESSION_ID, turn);
     }
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root: tmp.0.clone(),
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("opencode.db"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -343,13 +343,13 @@ fn opencode_sqlite_children_follow_parent_id() {
         }),
     );
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root: tmp.0.clone(),
         discover_cache: Mutex::default(),
     };
     let parent = make_summary(tmp.0.join("opencode.db"));
 
-    let children = provider.children(&parent).expect("children should succeed");
+    let children = client.children(&parent).expect("children should succeed");
 
     assert_eq!(children.len(), 2, "two child sessions should be returned");
     assert_eq!(children[0].session_id, "ses_child_b");
@@ -388,12 +388,12 @@ fn opencode_json_token_counts_are_summed() {
     let tmp = TmpDir::new("json-tokens");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root,
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("session.json")); // data_path unused for JSON path
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -414,12 +414,12 @@ fn opencode_json_tool_call_count() {
     let tmp = TmpDir::new("json-tool-calls");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root,
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("session.json"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -437,12 +437,12 @@ fn opencode_json_user_messages_are_ignored() {
     let tmp = TmpDir::new("json-role-filter");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root,
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("session.json"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -455,12 +455,12 @@ fn opencode_json_retail_cost_is_positive() {
     let tmp = TmpDir::new("json-cost");
     let storage_root = setup_json_fixture(&tmp.0);
 
-    let provider = OpenCodeProvider {
+    let client = OpenCodeClient {
         storage_root,
         discover_cache: Mutex::default(),
     };
     let summary = make_summary(tmp.0.join("session.json"));
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 

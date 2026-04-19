@@ -1,4 +1,4 @@
-//! OpenCode provider — `~/.local/share/opencode/`.
+//! OpenCode client — `~/.local/share/opencode/`.
 //!
 //! **Storage format history:**
 //! - v1.1.x and earlier: JSON files under `storage/session/<projectId>/ses_*.json`
@@ -6,7 +6,7 @@
 //! - v1.4.x+: SQLite database at `opencode.db` with `session` and `message` tables.
 //!   Message data is stored as JSON in the `data` column.
 //!
-//! This provider tries SQLite first (preferred), then falls back to the legacy
+//! This client tries SQLite first (preferred), then falls back to the legacy
 //! JSON layout so that old session history is still visible.
 
 use std::collections::HashMap;
@@ -20,9 +20,9 @@ use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
+use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Client;
 use crate::providers::util::{dir_exists, DiscoverCache};
 use crate::session::{
     ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
@@ -33,12 +33,12 @@ const MAX_LIVE_USAGE_RESPONSE_BYTES: usize = 256 * 1024;
 const LIVE_USAGE_REFRESH_COOLDOWN: Duration = Duration::from_secs(300);
 
 #[derive(Debug)]
-pub struct OpenCodeProvider {
+pub struct OpenCodeClient {
     pub storage_root: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for OpenCodeProvider {
+impl Default for OpenCodeClient {
     fn default() -> Self {
         // XDG data dir; fallback to ~/.local/share.
         let base = dirs::data_dir().unwrap_or_else(|| {
@@ -54,7 +54,7 @@ impl Default for OpenCodeProvider {
     }
 }
 
-impl Client for OpenCodeProvider {
+impl Client for OpenCodeClient {
     fn kind(&self) -> ClientKind {
         ClientKind::OpenCode
     }
@@ -840,32 +840,32 @@ fn title_case_words(raw: &str) -> String {
 
 fn resolve_subscription(
     subscriptions: &HashMap<String, String>,
-    provider_id: Option<&str>,
+    service_id: Option<&str>,
     model: Option<&str>,
 ) -> Option<String> {
-    if let Some(provider) = provider_id {
-        if let Some(name) = subscriptions.get(provider) {
+    if let Some(service) = service_id {
+        if let Some(name) = subscriptions.get(service) {
             return Some(name.clone());
         }
     }
 
-    let inferred_provider = model.and_then(infer_provider_from_model);
-    inferred_provider.and_then(|provider| subscriptions.get(provider).cloned())
+    let inferred_service = model.and_then(infer_service_from_model);
+    inferred_service.and_then(|service| subscriptions.get(service).cloned())
 }
 
-fn infer_provider_from_model(model: &str) -> Option<&'static str> {
+fn infer_service_from_model(model: &str) -> Option<&'static str> {
     let lower = model.to_ascii_lowercase();
-    for provider in [
+    for service in [
         "anthropic",
         "openai",
         "github-copilot",
         "amazon-bedrock",
         "opencode",
     ] {
-        let slash = format!("{provider}/");
-        let dot = format!("{provider}.");
+        let slash = format!("{service}/");
+        let dot = format!("{service}.");
         if lower.starts_with(&slash) || lower.starts_with(&dot) {
-            return Some(provider);
+            return Some(service);
         }
     }
     None
@@ -1922,7 +1922,7 @@ mod tests {
         let tmp = TestDir::new("agtop-opencode-json-variant-order");
         let session_file = write_json_session(&tmp.path, "ses_1");
 
-        // The legacy JSON layout uses `msg_*.json` files. The provider should
+        // The legacy JSON layout uses `msg_*.json` files. The client should
         // choose the earliest user-message variant by message sequence, not by
         // raw directory iteration order or lexicographic filename order.
         write_json_message(
@@ -1995,11 +1995,11 @@ mod tests {
         });
         insert_message(&tmp.path, data, 1_774_290_000_000);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
         assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
@@ -2022,22 +2022,22 @@ mod tests {
         write_auth_json(&tmp.path, "api");
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
     }
 
     #[test]
     fn plan_usage_missing_db_returns_empty_without_auth() {
         let tmp = TestDir::new("agtop-opencode-plan-missing-db");
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert!(out.is_empty());
     }
 
@@ -2047,11 +2047,11 @@ mod tests {
         write_auth_json(&tmp.path, "oauth");
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
         assert_eq!(pu.note.as_deref(), Some("no recent rate-limit snapshot"));
@@ -2059,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_usage_emits_cards_for_multiple_oauth_providers() {
+    fn plan_usage_emits_cards_for_multiple_oauth_clients() {
         let tmp = TestDir::new("agtop-opencode-plan-multi-oauth");
         let auth = serde_json::json!({
             "anthropic": {"type": "oauth", "access": "x"},
@@ -2069,11 +2069,11 @@ mod tests {
         write_auth_json_value(&tmp.path, auth);
         init_db(&tmp.path);
 
-        let provider = OpenCodeProvider {
+        let client = OpenCodeClient {
             storage_root: tmp.path.clone(),
             discover_cache: Mutex::default(),
         };
-        let out = provider.plan_usage().expect("plan_usage");
+        let out = client.plan_usage().expect("plan_usage");
 
         assert_eq!(out.len(), 3);
         let anthropic = out

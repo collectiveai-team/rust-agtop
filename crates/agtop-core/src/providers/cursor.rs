@@ -1,4 +1,4 @@
-//! Cursor provider — agent transcript JSONL + SQLite state DB.
+//! Cursor client — agent transcript JSONL + SQLite state DB.
 //!
 //! Agent transcripts live at:
 //!   `~/.cursor/projects/<workspace>/agent-transcripts/<uuid>/<uuid>.jsonl`
@@ -18,20 +18,20 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
+use crate::client::Client;
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Client;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 #[derive(Debug)]
-pub struct CursorProvider {
+pub struct CursorClient {
     pub projects_root: PathBuf,
     pub state_db: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for CursorProvider {
+impl Default for CursorClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
 
@@ -52,7 +52,7 @@ impl Default for CursorProvider {
     }
 }
 
-impl Client for CursorProvider {
+impl Client for CursorClient {
     fn kind(&self) -> ClientKind {
         ClientKind::Cursor
     }
@@ -334,7 +334,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = CursorProvider {
+        let p = CursorClient {
             projects_root: std::path::PathBuf::from("/no/such/path"),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
             discover_cache: Mutex::default(),
@@ -360,7 +360,7 @@ mod tests {
         writeln!(f, "{}", line1).unwrap();
         writeln!(f, "{}", line2).unwrap();
 
-        let p = CursorProvider {
+        let p = CursorClient {
             projects_root: td.path.clone(),
             state_db: std::path::PathBuf::from("/no/such/state.vscdb"),
             discover_cache: Mutex::default(),

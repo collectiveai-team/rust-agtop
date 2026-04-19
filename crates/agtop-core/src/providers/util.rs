@@ -56,7 +56,7 @@ pub fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
         .map(|d| d.with_timezone(&Utc))
 }
 
-/// Per-provider cache keyed on file identity. A file is considered
+/// Per-client cache keyed on file identity. A file is considered
 /// unchanged when both `mtime` and `size` match the previous call.
 #[derive(Debug, Default)]
 pub struct DiscoverCache {

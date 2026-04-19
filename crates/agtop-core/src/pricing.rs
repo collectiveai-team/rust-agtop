@@ -16,7 +16,7 @@ use crate::litellm::PricingIndex;
 use crate::session::{ClientKind, CostBreakdown, TokenTotals};
 
 /// Billing plan selector. `Plan` decides whether sessions are priced at
-/// retail or marked "included" for a given provider.
+/// retail or marked "included" for a given client.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Plan {
@@ -138,14 +138,14 @@ fn autoload_index() {
     }
 }
 
-/// Look up rates for `(provider, model)`. Tries in order:
+/// Look up rates for `(client, model)`. Tries in order:
 /// 1. The live LiteLLM index (covers the full upstream catalog).
 /// 2. The built-in tables below.
 ///
 /// Uses exact match first, then strips `-YYYYMMDD` date suffixes, then
-/// tries provider-prefix variants (`anthropic.foo`, `openai/foo`), and
+/// tries upstream-prefix variants (`anthropic.foo`, `openai/foo`), and
 /// finally falls back to the longest prefix match. OpenCode's
-/// `provider/model` style is handled by retrying with the suffix.
+/// upstream-qualified model IDs are handled by retrying with the suffix.
 pub fn lookup(client: ClientKind, model: &str) -> Option<Rates> {
     autoload_index();
 
@@ -207,7 +207,7 @@ pub fn builtin_lookup(client: ClientKind, model: &str) -> Option<Rates> {
     if best.is_some() {
         return best;
     }
-    // OpenCode / Cursor frequently report `provider/model`; retry with the suffix.
+    // OpenCode / Cursor frequently report upstream-qualified model IDs; retry with the suffix.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
             return builtin_lookup(client, suffix);
@@ -222,7 +222,7 @@ fn builtin_context_window(client: ClientKind, model: &str) -> Option<u64> {
         return builtin_context_window(client, key);
     }
 
-    // OpenCode often reports `provider/model`.
+    // OpenCode often reports upstream-qualified model IDs.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if suffix != model {
             if let Some(w) = builtin_context_window(client, suffix) {
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn lookup_opencode_via_suffix() {
-        // OpenCode often reports "provider/model"
+        // OpenCode often reports upstream-qualified model IDs.
         assert!(lookup(ClientKind::OpenCode, "anthropic/claude-haiku-4.5").is_some());
     }
 

@@ -6,7 +6,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Core library for agtop: provider abstraction, session discovery, token/cost analysis for AI coding agents (Claude Code, Codex, OpenCode)."
+description = "Core library for agtop: client abstraction, session discovery, token/cost analysis for AI coding agents (Claude Code, Codex, OpenCode)."
 
 [lints]
 workspace = true

@@ -1,4 +1,4 @@
-//! Gemini CLI provider — `~/.gemini/tmp/<slug>/chats/session-*.(json|jsonl)`.
+//! Gemini CLI client — `~/.gemini/tmp/<slug>/chats/session-*.(json|jsonl)`.
 //!
 //! Older Gemini CLI builds wrote JSONL session headers; current builds store
 //! the full session as a single JSON document.
@@ -13,19 +13,19 @@ use std::sync::Mutex;
 
 use chrono::{DateTime, Utc};
 
+use crate::client::Client;
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Client;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
 #[derive(Debug)]
-pub struct GeminiCliProvider {
+pub struct GeminiCliClient {
     pub gemini_dir: PathBuf,
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for GeminiCliProvider {
+impl Default for GeminiCliClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
@@ -35,7 +35,7 @@ impl Default for GeminiCliProvider {
     }
 }
 
-impl Client for GeminiCliProvider {
+impl Client for GeminiCliClient {
     fn kind(&self) -> ClientKind {
         ClientKind::GeminiCli
     }
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: std::path::PathBuf::from("/no/such/path"),
             discover_cache: Mutex::default(),
         };
@@ -454,7 +454,7 @@ mod tests {
             .write_all(line.as_bytes())
             .unwrap();
 
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: td.path.clone(),
             discover_cache: Mutex::default(),
         };
@@ -518,7 +518,7 @@ mod tests {
         )
         .unwrap();
 
-        let p = GeminiCliProvider {
+        let p = GeminiCliClient {
             gemini_dir: td.path.clone(),
             discover_cache: Mutex::default(),
         };

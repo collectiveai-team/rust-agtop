@@ -1,4 +1,4 @@
-//! Codex provider — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
+//! Codex client — `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`.
 //!
 //! Relevant record types inside each file:
 //! - `session_meta` (line 1): carries session id, timestamp, cwd.
@@ -18,9 +18,9 @@ use std::sync::Mutex;
 use chrono::{DateTime, TimeZone, Utc};
 use walkdir::WalkDir;
 
+use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
-use crate::provider::Client;
 use crate::providers::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::session::{
     ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
@@ -33,7 +33,7 @@ use crate::session::{
 const RATE_LIMIT_SCAN_MAX_FILES: usize = 5;
 
 #[derive(Debug)]
-pub struct CodexProvider {
+pub struct CodexClient {
     pub sessions_root: PathBuf,
     /// Path to `auth.json`. Separated from `sessions_root` so tests (and
     /// unusual Codex layouts) can point at an arbitrary file.
@@ -41,7 +41,7 @@ pub struct CodexProvider {
     pub discover_cache: Mutex<DiscoverCache>,
 }
 
-impl Default for CodexProvider {
+impl Default for CodexClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         let codex_dir = home.join(".codex");
@@ -53,7 +53,7 @@ impl Default for CodexProvider {
     }
 }
 
-impl Client for CodexProvider {
+impl Client for CodexClient {
     fn kind(&self) -> ClientKind {
         ClientKind::Codex
     }
@@ -612,7 +612,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         .ok_or_else(|| Error::NoUsage(summary.session_id.clone()))?;
     let rates =
         pricing::lookup(ClientKind::Codex, &model).ok_or_else(|| Error::UnknownPricing {
-            provider: "codex".into(),
+            client: "codex".into(),
             model: model.clone(),
         })?;
     let included = matches!(plan.mode_for(ClientKind::Codex), PlanMode::Included);
@@ -771,12 +771,12 @@ mod tests {
         let sessions_root = tmp.path().join("sessions");
         write_auth_json(&auth_path, &make_jwt("plus"));
 
-        let provider = CodexProvider {
+        let client = CodexClient {
             sessions_root,
             auth_path,
             discover_cache: Mutex::default(),
         };
-        let usages = provider.plan_usage().expect("plan_usage");
+        let usages = client.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
         let u = &usages[0];
         assert_eq!(u.plan_name.as_deref(), Some("ChatGPT Plus"));
@@ -793,12 +793,12 @@ mod tests {
         // sessions dir intentionally absent — scan_recent_rate_limits
         // should short-circuit on the missing directory.
 
-        let provider = CodexProvider {
+        let client = CodexClient {
             sessions_root,
             auth_path,
             discover_cache: Mutex::default(),
         };
-        let usages = provider.plan_usage().expect("plan_usage");
+        let usages = client.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
         let u = &usages[0];
         assert_eq!(u.plan_name.as_deref(), Some("ChatGPT Pro"));
@@ -846,12 +846,12 @@ mod tests {
         let rollout_path = sessions_root.join("rollout-2025-09-14T00-00-00-abcdef.jsonl");
         fs::write(&rollout_path, format!("{line}\n")).unwrap();
 
-        let provider = CodexProvider {
+        let client = CodexClient {
             sessions_root: tmp.path().join("sessions"),
             auth_path,
             discover_cache: Mutex::default(),
         };
-        let usages = provider.plan_usage().expect("plan_usage");
+        let usages = client.plan_usage().expect("plan_usage");
         assert_eq!(usages.len(), 1);
         let u = &usages[0];
         assert_eq!(u.plan_name.as_deref(), Some("ChatGPT Plus"));
@@ -881,12 +881,12 @@ mod tests {
     #[test]
     fn plan_usage_nothing_present_returns_empty() {
         let tmp = TmpDir::new("empty");
-        let provider = CodexProvider {
+        let client = CodexClient {
             sessions_root: tmp.path().join("sessions"),
             auth_path: tmp.path().join("auth.json"),
             discover_cache: Mutex::default(),
         };
-        let usages = provider.plan_usage().expect("plan_usage");
+        let usages = client.plan_usage().expect("plan_usage");
         assert!(usages.is_empty(), "expected empty, got {usages:?}");
     }
 }

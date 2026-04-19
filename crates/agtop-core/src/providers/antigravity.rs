@@ -1,4 +1,4 @@
-//! Antigravity provider — VSCode-fork IDE ("Jetski" agent).
+//! Antigravity client — VSCode-fork IDE ("Jetski" agent).
 //!
 //! Antigravity stores session state in a SQLite `.vscdb` file with
 //! protobuf-encoded blobs. Without the proto schema we cannot decode
@@ -10,9 +10,9 @@
 
 use std::path::PathBuf;
 
+use crate::client::Client;
 use crate::error::Result;
 use crate::pricing::Plan;
-use crate::provider::Client;
 use crate::providers::util::mtime;
 use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
 
@@ -22,11 +22,11 @@ const TRAJECTORY_KEY: &str = "antigravityUnifiedStateSync.trajectorySummaries";
 const USER_STATUS_KEY: &str = "antigravityUnifiedStateSync.userStatus";
 
 #[derive(Debug, Clone)]
-pub struct AntigravityProvider {
+pub struct AntigravityClient {
     pub state_db: PathBuf,
 }
 
-impl Default for AntigravityProvider {
+impl Default for AntigravityClient {
     fn default() -> Self {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         Self {
@@ -40,7 +40,7 @@ impl Default for AntigravityProvider {
     }
 }
 
-impl Client for AntigravityProvider {
+impl Client for AntigravityClient {
     fn kind(&self) -> ClientKind {
         ClientKind::Antigravity
     }
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn missing_dir_returns_empty() {
-        let p = AntigravityProvider {
+        let p = AntigravityClient {
             state_db: std::path::PathBuf::from("/tmp/does-not-exist-agtop-test/state.vscdb"),
         };
         assert!(p.list_sessions().unwrap().is_empty());

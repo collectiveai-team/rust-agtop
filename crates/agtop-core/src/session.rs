@@ -33,7 +33,7 @@ impl ClientKind {
 
     /// Every `ClientKind` variant, in a stable display order.
     /// Keep this in sync with the enum definition — a missing variant
-    /// here silently excludes that provider from default-enabled sets.
+    /// here silently excludes that client from default-enabled sets.
     #[must_use]
     pub const fn all() -> &'static [ClientKind] {
         &[
@@ -75,13 +75,13 @@ pub struct SessionSummary {
     /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
-    /// Explicit reasoning/model effort when the provider exposes it.
+    /// Explicit reasoning/model effort when the client exposes it.
     #[serde(default)]
     pub model_effort: Option<String>,
     /// Client-specific explanation of where the effort came from.
     #[serde(default)]
     pub model_effort_detail: Option<String>,
-    /// Human-readable session title when the provider stores one (e.g. the
+    /// Human-readable session title when the client stores one (e.g. the
     /// first user message summary in OpenCode).
     #[serde(default)]
     pub session_title: Option<String>,
@@ -91,7 +91,7 @@ pub struct SessionSummary {
 
 /// Aggregated token counts across all turns in a session.
 ///
-/// Fields map to the vocabulary each provider exposes; not every provider
+/// Fields map to the vocabulary each client exposes; not every client
 /// populates every field.
 #[non_exhaustive]
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -191,7 +191,7 @@ pub struct SessionAnalysis {
     /// consumers remain compatible.
     #[serde(default)]
     pub subagent_file_count: usize,
-    /// Number of tool invocations observed in the transcript (provider
+    /// Number of tool invocations observed in the transcript (client
     /// specific best-effort). `None` when unavailable.
     #[serde(default)]
     pub tool_call_count: Option<u64>,
@@ -200,7 +200,7 @@ pub struct SessionAnalysis {
     #[serde(default)]
     pub duration_secs: Option<u64>,
     /// Peak per-turn context usage as a percentage of the model context
-    /// window (0..=100+), when the provider exposes both values.
+    /// window (0..=100+), when the client exposes both values.
     #[serde(default)]
     pub context_used_pct: Option<f64>,
     /// Raw token count at the peak-utilization turn (numerator of
@@ -211,16 +211,16 @@ pub struct SessionAnalysis {
     /// `context_used_pct`. `None` when `context_used_pct` is `None`.
     #[serde(default)]
     pub context_window: Option<u64>,
-    /// Child subagent sessions, if this provider exposes a parent/child
+    /// Child subagent sessions, if this client exposes a parent/child
     /// relationship. Empty by default; populated by the refresh layer.
     #[serde(default)]
     pub children: Vec<SessionAnalysis>,
     /// Number of agent/assistant turns observed in the transcript.
-    /// `None` when the provider does not expose this information.
+    /// `None` when the client does not expose this information.
     #[serde(default)]
     pub agent_turns: Option<u64>,
     /// Number of user turns observed in the transcript.
-    /// `None` when the provider does not expose this information.
+    /// `None` when the client does not expose this information.
     #[serde(default)]
     pub user_turns: Option<u64>,
     /// Inferred project name (e.g. from `git remote get-url origin`).
@@ -321,12 +321,12 @@ impl PlanUsage {
 pub struct PlanWindow {
     /// Short label shown next to the gauge, e.g. "5h" or "7d".
     pub label: String,
-    /// Utilization as a fraction [0.0, 1.0]. `None` when the provider
+    /// Utilization as a fraction [0.0, 1.0]. `None` when the client
     /// does not expose a gauge (e.g. Claude Code).
     pub utilization: Option<f64>,
     /// When the window resets, in UTC. `None` when unknown.
     pub reset_at: Option<DateTime<Utc>>,
-    /// Free-form human text from the provider (e.g. Claude's "resets 3pm
+    /// Free-form human text from the client (e.g. Claude's "resets 3pm
     /// (America/Buenos_Aires)"). Used when we have no structured reset_at.
     pub reset_hint: Option<String>,
     /// True when this window is the representative/binding one for the plan
@@ -335,9 +335,9 @@ pub struct PlanWindow {
     pub binding: bool,
 }
 
-/// Plan + usage snapshot for a (provider, auth) pair.
+/// Plan + usage snapshot for a (client, auth) pair.
 ///
-/// A single provider can contribute multiple entries when the user has
+/// A single client can contribute multiple entries when the user has
 /// more than one auth (e.g. Claude Code on Anthropic Max AND OpenCode on
 /// the same Anthropic Max — each produces its own `PlanUsage` because the
 /// data sources are different).

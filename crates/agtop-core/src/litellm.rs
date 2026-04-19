@@ -157,7 +157,7 @@ impl PricingIndex {
             if let Some(ctx) = entry.max_input_tokens.filter(|w| *w > 0) {
                 ctx_by_key.insert(key.clone(), ctx);
             }
-            // … and also store variants that strip LiteLLM's provider
+            // … and also store variants that strip LiteLLM's upstream
             // prefixes so transcripts that report a bare model name still
             // hit. e.g. "anthropic.claude-opus-4-7" → also index under
             // "claude-opus-4-7"; "us.anthropic.claude-opus-4-7" → same.
@@ -246,10 +246,10 @@ impl PricingIndex {
 // ---------------------------------------------------------------------------
 
 /// Produce candidate keys for a model after adding/removing the common
-/// provider prefixes LiteLLM uses.
+/// upstream prefixes LiteLLM uses.
 fn prefix_candidates(client: ClientKind, model: &str) -> Vec<String> {
     let mut out = Vec::with_capacity(4);
-    // Strip "provider/model" → "model" (OpenCode reports these).
+    // Strip upstream-qualified model IDs like `anthropic/foo` → `foo`.
     if let Some((_, suffix)) = model.rsplit_once('/') {
         if !suffix.is_empty() {
             out.push(suffix.to_string());
@@ -280,8 +280,8 @@ fn strip_provider_prefixes(key: &str) -> Vec<String> {
             break;
         }
     }
-    const PROVIDERS: &[&str] = &["anthropic.", "openai.", "bedrock_converse."];
-    for p in PROVIDERS {
+    const PREFIXES: &[&str] = &["anthropic.", "openai.", "bedrock_converse."];
+    for p in PREFIXES {
         if let Some(rest) = work.strip_prefix(p) {
             out.push(rest.to_string());
         }

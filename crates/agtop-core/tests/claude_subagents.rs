@@ -9,8 +9,8 @@
 
 use std::path::PathBuf;
 
-use agtop_core::providers::claude::ClaudeProvider;
-use agtop_core::{Plan, Client, ClientKind, SessionSummary};
+use agtop_core::providers::claude::ClaudeClient;
+use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 fn fixture_main_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -37,10 +37,10 @@ fn summary_for_fixture() -> SessionSummary {
 #[test]
 fn parent_analysis_excludes_subagent_totals() {
     // Keep the built-in pricing path (some CI might not have a cache).
-    let provider = ClaudeProvider::default();
+    let client = ClaudeClient::default();
     let summary = summary_for_fixture();
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed");
 
@@ -59,7 +59,7 @@ fn parent_analysis_excludes_subagent_totals() {
         "parent analysis stays direct-only"
     );
 
-    let children = provider
+    let children = client
         .children(&summary)
         .expect("children should succeed for subagent fixtures");
     assert_eq!(children.len(), 2, "subagents should surface via children()");
@@ -82,11 +82,11 @@ fn subagents_zero_when_directory_missing() {
     // pointing at a transcript whose uuid has no subagent dir — we reuse
     // the same fixture but lie about the session_id so the resolver looks
     // for a directory that doesn't exist.
-    let provider = ClaudeProvider::default();
+    let client = ClaudeClient::default();
     let mut summary = summary_for_fixture();
     summary.session_id = "no-such-uuid-0000-0000-0000-000000000000".into();
 
-    let analysis = provider
+    let analysis = client
         .analyze(&summary, Plan::Retail)
         .expect("analyze should succeed even with no subagent dir");
     assert_eq!(analysis.subagent_file_count, 0);
