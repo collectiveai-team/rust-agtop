@@ -962,6 +962,33 @@ fn read_latest_anthropic_snapshot(db_path: &Path) -> Result<Option<AnthropicRate
 }
 
 // ---------------------------------------------------------------------------
+// Model-level effort detection
+// ---------------------------------------------------------------------------
+
+/// Returns `Some("thinking")` when `model` is a known reasoning/thinking model,
+/// and `None` for standard (non-reasoning) models.
+///
+/// Detection rules (all case-sensitive, prefix-based):
+/// - OpenAI codex variants: `gpt-*-codex`, `codex-*`
+/// - OpenAI o-series reasoning: `o1`, `o3`, `o4` prefix
+/// - Gemini thinking variants: `gemini-2.5-flash-thinking`
+/// - gpt-5.x non-codex variants that carry reasoning (all gpt-5* emit reasoning)
+fn model_effort_from_name(model: &str) -> Option<(String, String)> {
+    let is_thinking = model.contains("-codex")
+        || model.starts_with("codex-")
+        || model.starts_with("o1")
+        || model.starts_with("o3")
+        || model.starts_with("o4")
+        || model.contains("thinking")
+        || model.starts_with("gpt-5");
+    if is_thinking {
+        Some(("thinking".to_string(), "model-name".to_string()))
+    } else {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SQLite backend (v1.4+)
 // ---------------------------------------------------------------------------
 
@@ -999,6 +1026,17 @@ fn list_sessions_sqlite(
             let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
             let subscription =
                 resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
+            // Prefer the explicit variant stored on user messages (e.g. "xhigh",
+            // "max"); fall back to inferring from the model name.
+            let (model_effort, model_effort_detail) =
+                if let Some(variant) = first_variant_sqlite(&conn, &id) {
+                    (Some(variant), Some("message.variant".to_string()))
+                } else {
+                    model
+                        .as_deref()
+                        .and_then(model_effort_from_name)
+                        .map_or((None, None), |(e, d)| (Some(e), Some(d)))
+                };
             SessionSummary {
                 provider: ProviderKind::OpenCode,
                 subscription,
@@ -1009,8 +1047,8 @@ fn list_sessions_sqlite(
                 cwd,
                 state,
                 state_detail,
-                model_effort: None,
-                model_effort_detail: None,
+                model_effort,
+                model_effort_detail,
                 data_path: db_path.to_path_buf(),
             }
         })
@@ -1054,6 +1092,25 @@ fn first_message_identity_sqlite(
         },
     )
     .unwrap_or((None, None))
+}
+
+/// Returns the thinking-level variant (e.g. `"low"`, `"medium"`, `"high"`,
+/// `"xhigh"`, `"max"`) from the first user message in the session that
+/// carries a non-empty `variant` field, or `None` when no variant is set.
+fn first_variant_sqlite(conn: &rusqlite::Connection, session_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT json_extract(data, '$.variant') FROM message \
+         WHERE session_id = ?1 \
+           AND json_extract(data, '$.role') = 'user' \
+           AND json_extract(data, '$.variant') IS NOT NULL \
+         ORDER BY time_created ASC \
+         LIMIT 1",
+        rusqlite::params![session_id],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|s: &String| !s.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,6 +1372,16 @@ fn summarize_opencode_session_json(
     let (state, state_detail) = latest_message_state_json(&msg_dir);
     let subscription =
         resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
+    // Prefer the explicit variant stored on user messages (e.g. "xhigh",
+    // "max"); fall back to inferring from the model name.
+    let (model_effort, model_effort_detail) = if let Some(variant) = first_variant_json(&msg_dir) {
+        (Some(variant), Some("message.variant".to_string()))
+    } else {
+        model
+            .as_deref()
+            .and_then(model_effort_from_name)
+            .map_or((None, None), |(e, d)| (Some(e), Some(d)))
+    };
 
     Ok(SessionSummary {
         provider: ProviderKind::OpenCode,
@@ -1326,8 +1393,8 @@ fn summarize_opencode_session_json(
         cwd,
         state,
         state_detail,
-        model_effort: None,
-        model_effort_detail: None,
+        model_effort,
+        model_effort_detail,
         data_path: session_file.to_path_buf(),
     })
 }
@@ -1391,6 +1458,34 @@ fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String
         }
     }
     (None, None)
+}
+
+/// Scans user messages in `msg_dir` and returns the first non-empty `variant`
+/// value found (e.g. `"xhigh"`, `"max"`), or `None`.
+fn first_variant_json(msg_dir: &Path) -> Option<String> {
+    if !dir_exists(msg_dir) {
+        return None;
+    }
+    let entries = fs::read_dir(msg_dir).ok()?;
+    for f in entries.flatten() {
+        let p = f.path();
+        if p.extension().map(|e| e != "json").unwrap_or(true) {
+            continue;
+        }
+        if let Ok(v) = read_json(&p) {
+            if v.get("role").and_then(|x| x.as_str()) != Some("user") {
+                continue;
+            }
+            if let Some(variant) = v
+                .get("variant")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                return Some(variant.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn analyze_opencode_session_json(
