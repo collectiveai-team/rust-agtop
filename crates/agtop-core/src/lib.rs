@@ -15,6 +15,8 @@ pub mod client;
 pub mod clients;
 pub mod error;
 pub mod litellm;
+pub mod logo;
+pub mod models_dev;
 pub mod pricing;
 pub mod project;
 pub mod session;

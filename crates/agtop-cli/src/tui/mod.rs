@@ -91,6 +91,25 @@ struct UiLayout {
 /// Run the interactive TUI. Blocks until the user quits or the terminal
 /// raises an IO error. On exit, the terminal is returned to its
 /// previous state regardless of success/failure.
+fn decode_svg(data: &[u8]) -> Option<image::DynamicImage> {
+    let tree = resvg::usvg::Tree::from_data(data, &resvg::usvg::Options::default()).ok()?;
+    let size = tree.size();
+    let w = size.width() as u32;
+    let h = size.height() as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::default(),
+        &mut pixmap.as_mut(),
+    );
+    let rgba = pixmap.take();
+    let buf = image::RgbaImage::from_raw(w, h, rgba)?;
+    Some(image::DynamicImage::ImageRgba8(buf))
+}
+
 pub fn run(
     clients: Vec<Arc<dyn Client>>,
     enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
@@ -117,6 +136,29 @@ pub fn run(
     app.attach_enabled_arc(std::sync::Arc::clone(&enabled_arc));
     if start_dashboard {
         app.set_ui_mode(UiMode::Dashboard);
+    }
+
+    let raw_logos = agtop_core::logo::load_all_logos();
+    if !raw_logos.is_empty() {
+        let picker = ratatui_image::picker::Picker::from_query_stdio()
+            .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((1, 1)));
+        let mut logos = std::collections::HashMap::new();
+        for (client, svg_bytes) in raw_logos {
+            let img = match decode_svg(&svg_bytes) {
+                Some(img) => img,
+                None => continue,
+            };
+            let proto = match picker.new_protocol(
+                img,
+                ratatui::layout::Rect::new(0, 0, 1, 1),
+                ratatui_image::Resize::Fit(None),
+            ) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
+            logos.insert(client, proto);
+        }
+        app.set_logos(logos);
     }
 
     let result = event_loop(&mut terminal, &mut app, &mut handle);

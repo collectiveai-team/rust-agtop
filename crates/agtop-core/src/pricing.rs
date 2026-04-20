@@ -1,18 +1,18 @@
 //! Pricing tables + billing-plan logic.
 //!
-//! Rates are USD per million tokens. Two data sources are consulted in
+//! Rates are USD per million tokens. Three data sources are consulted in
 //! order:
 //!
-//! 1. A live [`crate::litellm::PricingIndex`] installed via
-//!    [`set_pricing_index`] (built from the cached LiteLLM JSON, which
-//!    covers far more models and tracks upstream price changes).
-//! 2. The hard-coded tables in this file as a last-resort fallback so
-//!    agtop works offline and keeps producing sensible cost figures when
-//!    LiteLLM drops a model we care about.
+//! 1. A live [`crate::models_dev::ModelsDevIndex`] installed via
+//!    [`set_models_dev_index`] (built from the cached models.dev JSON).
+//! 2. A live [`crate::litellm::PricingIndex`] installed via
+//!    [`set_pricing_index`] (built from the cached LiteLLM JSON).
+//! 3. The hard-coded tables in this file as a last-resort fallback.
 
 use std::sync::{OnceLock, RwLock};
 
 use crate::litellm::PricingIndex;
+use crate::models_dev::ModelsDevIndex;
 use crate::session::{ClientKind, CostBreakdown, TokenTotals};
 
 /// Billing plan selector. `Plan` decides whether sessions are priced at
@@ -103,13 +103,20 @@ impl Rates {
     }
 }
 
-/// Storage for a process-wide LiteLLM pricing index. Wrapped in an
-/// `RwLock` because we allow the CLI to swap it out post-startup (after
-/// an explicit `--refresh-pricing`). Initialized lazily on first lookup.
-static PRICING_INDEX: OnceLock<RwLock<Option<PricingIndex>>> = OnceLock::new();
+struct PricingSource {
+    models_dev: Option<ModelsDevIndex>,
+    litellm: Option<PricingIndex>,
+}
 
-fn pricing_slot() -> &'static RwLock<Option<PricingIndex>> {
-    PRICING_INDEX.get_or_init(|| RwLock::new(None))
+static PRICING_SOURCE: OnceLock<RwLock<PricingSource>> = OnceLock::new();
+
+fn pricing_slot() -> &'static RwLock<PricingSource> {
+    PRICING_SOURCE.get_or_init(|| {
+        RwLock::new(PricingSource {
+            models_dev: None,
+            litellm: None,
+        })
+    })
 }
 
 /// Install a pricing index — typically built from the on-disk cache or a
@@ -117,7 +124,14 @@ fn pricing_slot() -> &'static RwLock<Option<PricingIndex>> {
 /// the built-in tables.
 pub fn set_pricing_index(index: PricingIndex) {
     if let Ok(mut slot) = pricing_slot().write() {
-        *slot = Some(index);
+        slot.litellm = Some(index);
+    }
+}
+
+/// Install a models.dev pricing index. Consulted before the LiteLLM index.
+pub fn set_models_dev_index(index: ModelsDevIndex) {
+    if let Ok(mut slot) = pricing_slot().write() {
+        slot.models_dev = Some(index);
     }
 }
 
@@ -125,56 +139,70 @@ pub fn set_pricing_index(index: PricingIndex) {
 /// but a parseable cache file exists on disk, load it. Never fetches,
 /// never blocks. Idempotent.
 fn autoload_index() {
-    if pricing_slot()
+    let needs_load = pricing_slot()
         .read()
         .ok()
-        .map(|s| s.is_some())
-        .unwrap_or(true)
-    {
+        .map(|s| s.models_dev.is_none() && s.litellm.is_none())
+        .unwrap_or(true);
+    if !needs_load {
         return;
     }
-    if let Some(idx) = crate::litellm::load_from_cache() {
-        set_pricing_index(idx);
+    if let Some(md) = crate::models_dev::load_from_cache() {
+        set_models_dev_index(md);
+    }
+    if let Some(lt) = crate::litellm::load_from_cache() {
+        set_pricing_index(lt);
     }
 }
 
 /// Look up rates for `(client, model)`. Tries in order:
-/// 1. The live LiteLLM index (covers the full upstream catalog).
-/// 2. The built-in tables below.
-///
-/// Uses exact match first, then strips `-YYYYMMDD` date suffixes, then
-/// tries upstream-prefix variants (`anthropic.foo`, `openai/foo`), and
-/// finally falls back to the longest prefix match. OpenCode's
-/// upstream-qualified model IDs are handled by retrying with the suffix.
+/// 1. The live models.dev index.
+/// 2. The live LiteLLM index.
+/// 3. The built-in tables below.
 pub fn lookup(client: ClientKind, model: &str) -> Option<Rates> {
     autoload_index();
 
-    // 1) LiteLLM cache.
     if let Ok(slot) = pricing_slot().read() {
-        if let Some(idx) = slot.as_ref() {
+        if let Some(idx) = &slot.models_dev {
             if let Some(r) = idx.lookup(client, model) {
                 return Some(r);
             }
         }
     }
 
-    // 2) Built-in fallback.
+    if let Ok(slot) = pricing_slot().read() {
+        if let Some(idx) = &slot.litellm {
+            if let Some(r) = idx.lookup(client, model) {
+                return Some(r);
+            }
+        }
+    }
+
     builtin_lookup(client, model)
 }
 
 /// Best-effort model context window lookup (tokens).
 ///
-/// Uses the LiteLLM cache when available, then falls back to a tiny
-/// built-in table for common models we observe in local transcripts.
+/// Tries models.dev cache, then LiteLLM cache, then built-in table.
 pub fn context_window(client: ClientKind, model: &str) -> Option<u64> {
     autoload_index();
+
     if let Ok(slot) = pricing_slot().read() {
-        if let Some(idx) = slot.as_ref() {
+        if let Some(idx) = &slot.models_dev {
             if let Some(w) = idx.lookup_context_window(client, model) {
                 return Some(w);
             }
         }
     }
+
+    if let Ok(slot) = pricing_slot().read() {
+        if let Some(idx) = &slot.litellm {
+            if let Some(w) = idx.lookup_context_window(client, model) {
+                return Some(w);
+            }
+        }
+    }
+
     builtin_context_window(client, model)
 }
 

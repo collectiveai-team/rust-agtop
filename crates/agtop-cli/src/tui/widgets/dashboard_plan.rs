@@ -6,7 +6,7 @@ use ratatui::{
 
 use crate::tui::app::App;
 use crate::tui::theme as th;
-use agtop_core::session::PlanUsage;
+use agtop_core::session::{ClientKind, PlanUsage};
 
 // ---------------------------------------------------------------------------
 // Merged subscription data
@@ -14,14 +14,11 @@ use agtop_core::session::PlanUsage;
 
 /// One subscription entry after deduplication across clients/agents.
 struct MergedPlan<'a> {
-    /// Human-readable subscription name ("Max 5x", "ChatGPT Plus", …).
     subscription_name: String,
-    /// Windows from all sources, deduplicated by label (most-recent reset_at wins).
     windows: Vec<&'a agtop_core::session::PlanWindow>,
-    /// Most recent limit-hit moment across all merged sources.
     last_limit_hit: Option<DateTime<Utc>>,
-    /// Notes from all sources, deduplicated.
     notes: Vec<String>,
+    clients: Vec<ClientKind>,
 }
 
 /// Strip known agent-tool suffixes/prefixes to derive a canonical subscription name.
@@ -71,11 +68,16 @@ fn merge_plans(usages: &[PlanUsage]) -> Vec<MergedPlan<'_>> {
                     windows: Vec::new(),
                     last_limit_hit: pu.last_limit_hit,
                     notes: Vec::new(),
+                    clients: vec![pu.client],
                 },
             );
         }
 
         let entry = map.get_mut(&key).unwrap();
+
+        if !entry.clients.contains(&pu.client) {
+            entry.clients.push(pu.client);
+        }
 
         // Update last_limit_hit to the most recent.
         if let Some(lh) = pu.last_limit_hit {
@@ -205,23 +207,27 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     // Clamp selected against merged list length (raw count may exceed merged count).
     let selected = app.plan_selected().min(merged.len().saturating_sub(1));
 
-    render_list(frame, panes[0], &merged, selected);
-    render_details(frame, panes[1], &merged, selected);
+    render_list(frame, panes[0], &merged, selected, app);
+    render_details(frame, panes[1], &merged, selected, app);
 }
 
 // ---------------------------------------------------------------------------
 // Left pane: subscription list
 // ---------------------------------------------------------------------------
 
-fn render_list(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], selected: usize) {
-    // Fixed 20-char bar in the list pane.
+fn render_list(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    merged: &[MergedPlan<'_>],
+    selected: usize,
+    app: &App,
+) {
     const BAR_WIDTH: usize = 20;
 
     let items: Vec<ListItem> = merged
         .iter()
         .enumerate()
         .map(|(i, mp)| {
-            // Pick the window with the nearest reset_at for the list bar.
             let util = mp
                 .windows
                 .iter()
@@ -241,6 +247,14 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], sel
             };
 
             let [filled_span, empty_span] = bar_spans(util, BAR_WIDTH);
+
+            let has_logo = mp
+                .clients
+                .first()
+                .map(|c| app.logo(*c).is_some())
+                .unwrap_or(false);
+            let name_prefix = if has_logo { "   " } else { "  " };
+
             let bar_line = Line::from(vec![
                 Span::raw("  "),
                 filled_span,
@@ -249,7 +263,10 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], sel
             ]);
 
             ListItem::new(vec![
-                Line::from(Span::styled(mp.subscription_name.clone(), name_style)),
+                Line::from(vec![
+                    Span::raw(name_prefix),
+                    Span::styled(mp.subscription_name.clone(), name_style),
+                ]),
                 bar_line,
             ])
         })
@@ -257,29 +274,64 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], sel
 
     let list = List::new(items);
     frame.render_widget(list, area);
+
+    for (i, mp) in merged.iter().enumerate() {
+        if let Some(client) = mp.clients.first() {
+            if let Some(proto) = app.logo(*client) {
+                let y = area.y + (i as u16) * 2;
+                if y + 1 > area.y + area.height {
+                    break;
+                }
+                let logo_rect = ratatui::layout::Rect {
+                    x: area.x + 1,
+                    y,
+                    width: 1,
+                    height: 1,
+                };
+                let img_widget = ratatui_image::Image::new(proto);
+                frame.render_widget(img_widget, logo_rect);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Right pane: details
 // ---------------------------------------------------------------------------
 
-fn render_details(frame: &mut Frame<'_>, area: Rect, merged: &[MergedPlan<'_>], selected: usize) {
+fn render_details(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    merged: &[MergedPlan<'_>],
+    selected: usize,
+    app: &App,
+) {
     let now = Utc::now();
     let mp = match merged.get(selected) {
         Some(m) => m,
         None => return,
     };
 
-    // Bar width: full inner width minus 4 (2 left indent + 2 right margin).
     let bar_width = (area.width as usize).saturating_sub(4).max(4);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Header.
-    lines.push(Line::from(Span::styled(
-        mp.subscription_name.clone(),
-        th::PLAN_LABEL,
-    )));
+    let mut header_spans: Vec<Span<'static>> = Vec::new();
+    if let Some(client) = mp.clients.first() {
+        if let Some(proto) = app.logo(*client) {
+            let logo_rect = ratatui::layout::Rect {
+                x: area.x + 1,
+                y: area.y,
+                width: 1,
+                height: 1,
+            };
+            let img_widget = ratatui_image::Image::new(proto);
+            frame.render_widget(img_widget, logo_rect);
+            header_spans.push(Span::raw(" "));
+        }
+    }
+    header_spans.push(Span::styled(mp.subscription_name.clone(), th::PLAN_LABEL));
+    lines.push(Line::from(header_spans));
     lines.push(Line::from(""));
 
     for w in &mp.windows {

@@ -31,6 +31,16 @@ use agtop_core::session::SessionAnalysis;
 
 use super::column_config::ColumnConfig;
 
+struct LogoMap(
+    std::collections::HashMap<agtop_core::ClientKind, ratatui_image::protocol::Protocol>,
+);
+
+impl std::fmt::Debug for LogoMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("LogoMap").field(&self.0.len()).finish()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // UI mode / Tab / InputMode
 // ---------------------------------------------------------------------------
@@ -227,6 +237,7 @@ pub struct App {
     enabled_arc: Option<
         std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ClientKind>>>,
     >,
+    logos: LogoMap,
 }
 
 impl Default for App {
@@ -264,6 +275,7 @@ impl App {
             view_cache: RefCell::new(None),
             expanded_sessions: std::collections::HashSet::new(),
             enabled_arc: None,
+            logos: LogoMap(std::collections::HashMap::new()),
         }
     }
 
@@ -451,6 +463,20 @@ impl App {
         arc: std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ClientKind>>>,
     ) {
         self.enabled_arc = Some(arc);
+    }
+
+    pub fn set_logos(
+        &mut self,
+        logos: std::collections::HashMap<agtop_core::ClientKind, ratatui_image::protocol::Protocol>,
+    ) {
+        self.logos = LogoMap(logos);
+    }
+
+    pub fn logo(
+        &self,
+        client: agtop_core::ClientKind,
+    ) -> Option<&ratatui_image::protocol::Protocol> {
+        self.logos.0.get(&client)
     }
 
     /// Backward-compat alias used by events.rs until it's updated.
