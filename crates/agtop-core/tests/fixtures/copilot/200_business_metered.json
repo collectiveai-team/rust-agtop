@@ -1,0 +1,27 @@
+{
+  "login": "acme-bot",
+  "access_type_sku": "business_metered",
+  "copilot_plan": "business",
+  "chat_enabled": true,
+  "quota_reset_date": "2026-05-01",
+  "quota_snapshots": {
+    "chat": {
+      "unlimited": false,
+      "entitlement": 500,
+      "remaining": 125,
+      "percent_remaining": 25.0,
+      "overage_count": 17,
+      "overage_permitted": true,
+      "has_quota": true
+    },
+    "premium_interactions": {
+      "unlimited": false,
+      "entitlement": 300,
+      "remaining": 0,
+      "percent_remaining": 0.0,
+      "overage_count": 42,
+      "overage_permitted": true,
+      "has_quota": true
+    }
+  }
+}

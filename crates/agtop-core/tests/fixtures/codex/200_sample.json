@@ -1,0 +1,7 @@
+{
+  "rate_limit": {
+    "primary_window":   { "used_percent": 34.0, "limit_window_seconds": 18000,  "reset_at": 1779175500 },
+    "secondary_window": { "used_percent": 12.5, "limit_window_seconds": 604800, "reset_at": 1779780000 }
+  },
+  "credits": { "balance": 12.34, "unlimited": false }
+}

@@ -10,9 +10,9 @@ use crate::quota::http::HttpClient;
 use crate::quota::types::{ProviderId, ProviderResult};
 
 pub mod claude;
-// pub mod codex;          // Phase 3
-// pub mod copilot;        // Phase 3
-// pub mod copilot_addon;  // Phase 3
+pub mod codex;
+pub mod copilot;
+pub mod copilot_addon;
 // pub mod zai;            // Phase 4
 // pub mod google;         // Phase 5
 
@@ -51,10 +51,10 @@ impl<P: Provider + ?Sized> ProviderMeta for P {
 pub fn register_all() -> Vec<Box<dyn Provider>> {
     vec![
         Box::new(claude::Claude),
-        // Box::new(codex::Codex),                // Phase 3
-        // Box::new(copilot::Copilot),            // Phase 3
-        // Box::new(copilot_addon::CopilotAddon), // Phase 3
-        // Box::new(zai::Zai),                    // Phase 4
-        // Box::new(google::Google),              // Phase 5
+        Box::new(codex::Codex),
+        Box::new(copilot::Copilot),
+        Box::new(copilot_addon::CopilotAddon),
+        // Box::new(zai::Zai),       // Phase 4
+        // Box::new(google::Google), // Phase 5
     ]
 }
