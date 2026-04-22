@@ -1,0 +1,16 @@
+{
+  "_comment": "Synthesized from openchamber providers/google/auth.js shape. Refresh token format is 'token|projectId|managedProjectId'.",
+  "accounts": [
+    {
+      "email": "first@example.com",
+      "refreshToken": "ANTIGRAVITY_REFRESH_A|proj-a|mproj-a",
+      "projectId": "proj-a",
+      "managedProjectId": "mproj-a"
+    },
+    {
+      "email": "second@example.com",
+      "refreshToken": "ANTIGRAVITY_REFRESH_B|proj-b|mproj-b"
+    }
+  ],
+  "activeIndex": 0
+}

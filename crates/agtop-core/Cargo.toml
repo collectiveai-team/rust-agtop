@@ -28,3 +28,4 @@ figment.workspace = true
 [dev-dependencies]
 tempfile = "3"
 figment = { version = "0.10", features = ["toml", "env", "test"] }
+serial_test = "3"

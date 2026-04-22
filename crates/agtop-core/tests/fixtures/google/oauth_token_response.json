@@ -1,0 +1,8 @@
+{
+  "_comment": "Reference only. openchamber uses this endpoint to refresh expired access tokens. rust-agtop does NOT refresh — this fixture exists to document the shape in case a future phase adds an own-login-suite feature.",
+  "access_token": "ya29.PLACEHOLDER",
+  "expires_in": 3599,
+  "scope": "https://www.googleapis.com/auth/cloud-platform",
+  "token_type": "Bearer",
+  "id_token": "eyJ..."
+}

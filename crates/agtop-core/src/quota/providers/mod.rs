@@ -13,8 +13,8 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod copilot_addon;
-pub mod zai;
-// pub mod google;         // Phase 5
+pub mod google;
+pub mod zai; // Phase 5
 
 /// Contract every registered provider implements.
 ///
@@ -55,6 +55,6 @@ pub fn register_all() -> Vec<Box<dyn Provider>> {
         Box::new(copilot::Copilot),
         Box::new(copilot_addon::CopilotAddon),
         Box::new(zai::Zai),
-        // Box::new(google::Google), // Phase 5
+        Box::new(google::Google),
     ]
 }

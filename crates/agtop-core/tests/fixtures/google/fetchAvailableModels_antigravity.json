@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized. resetTime is ~3h after a reference now of 2026-04-21T12:00:00Z so the window picker selects '5h'.",
+  "models": {
+    "gemini-2.5-pro": {
+      "quotaInfo": {
+        "remainingFraction": 0.25,
+        "resetTime": "2026-04-21T15:00:00Z"
+      }
+    },
+    "claude-3-5-sonnet-via-antigravity": {
+      "quotaInfo": {
+        "remainingFraction": 0.77,
+        "resetTime": "2026-04-21T15:00:00Z"
+      }
+    }
+  }
+}

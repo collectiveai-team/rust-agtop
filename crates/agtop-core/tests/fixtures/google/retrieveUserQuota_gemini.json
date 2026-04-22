@@ -1,0 +1,22 @@
+{
+  "_comment": "Synthesized from openchamber providers/google/transforms.js shape as of 2026-04-21. Update when :retrieveUserQuota response format changes.",
+  "buckets": [
+    {
+      "modelId": "gemini-2.5-pro",
+      "quotaId": "gemini-2.5-pro-requests-per-day",
+      "remainingFraction": 0.62,
+      "resetTime": "2026-04-22T00:00:00Z"
+    },
+    {
+      "modelId": "gemini-2.5-flash",
+      "quotaId": "gemini-2.5-flash-requests-per-day",
+      "remainingFraction": 0.95,
+      "resetTime": "2026-04-22T00:00:00Z"
+    },
+    {
+      "modelId": "gemini/gemini-2.0-flash",
+      "remainingFraction": 0.40,
+      "resetTime": "2026-04-22T00:00:00Z"
+    }
+  ]
+}

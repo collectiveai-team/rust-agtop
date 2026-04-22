@@ -140,3 +140,34 @@ fn zai_live_call_returns_recognizable_shape() {
         "expected either a window or a web-tools extras entry"
     );
 }
+
+#[test]
+#[ignore = "requires AGTOP_TEST_LIVE=1 and configured opencode auth for Google"]
+fn google_live_call_returns_recognizable_shape() {
+    use agtop_core::quota::providers::google::Google;
+    if !live_enabled() {
+        eprintln!("skipping: AGTOP_TEST_LIVE not set");
+        return;
+    }
+    let auth = OpencodeAuth::load().expect("opencode auth.json present");
+    if !Google.is_configured(&auth) {
+        eprintln!("skipping: Google not configured");
+        return;
+    }
+    let http = UreqClient::new();
+    let r = Google.fetch(&auth, &http);
+    eprintln!("google fetch result: ok={} error={:?}", r.ok, r.error);
+    // 401 is expected whenever the stored access token has expired (> ~1h
+    // since last Gemini CLI use). Don't assert ok unconditionally.
+    if r.ok {
+        let u = r.usage.expect("usage present");
+        assert!(
+            !u.models.is_empty(),
+            "expected at least one model entry under usage.models"
+        );
+    } else {
+        eprintln!(
+            "google live call returned ok=false — this is expected when the access token is stale"
+        );
+    }
+}

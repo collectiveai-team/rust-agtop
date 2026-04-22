@@ -1,0 +1,17 @@
+{
+  "_comment": "Synthesized from openchamber providers/google/transforms.js shape as of 2026-04-21.",
+  "models": {
+    "gemini-2.5-pro": {
+      "quotaInfo": {
+        "remainingFraction": 0.58,
+        "resetTime": "2026-04-22T00:00:00Z"
+      }
+    },
+    "gemini-2.5-flash": {
+      "quotaInfo": {
+        "remainingFraction": 0.91,
+        "resetTime": "2026-04-22T00:00:00Z"
+      }
+    }
+  }
+}
