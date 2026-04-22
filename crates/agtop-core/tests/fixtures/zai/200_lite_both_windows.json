@@ -1,0 +1,33 @@
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "data": {
+    "level": "lite",
+    "limits": [
+      {
+        "type": "TIME_LIMIT",
+        "unit": 5,
+        "number": 1,
+        "usage": 100,
+        "currentValue": 0,
+        "remaining": 100,
+        "percentage": 0,
+        "nextResetTime": 1779175507995,
+        "usageDetails": [
+          { "modelCode": "search-prime", "usage": 0 },
+          { "modelCode": "web-reader",   "usage": 0 },
+          { "modelCode": "zread",        "usage": 0 }
+        ]
+      },
+      { "type": "TOKENS_LIMIT", "unit": 3, "number": 5, "percentage": 0 },
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "percentage": 48,
+        "nextResetTime": 1779667200000
+      }
+    ]
+  },
+  "success": true
+}

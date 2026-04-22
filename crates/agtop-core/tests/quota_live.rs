@@ -115,3 +115,28 @@ fn copilot_addon_live_call_returns_premium_only() {
     assert!(!u.windows.contains_key("chat"));
     assert!(!u.windows.contains_key("completions"));
 }
+
+#[test]
+#[ignore = "requires AGTOP_TEST_LIVE=1 and configured opencode auth for z.ai"]
+fn zai_live_call_returns_recognizable_shape() {
+    use agtop_core::quota::providers::zai::Zai;
+    if !live_enabled() {
+        eprintln!("skipping: AGTOP_TEST_LIVE not set");
+        return;
+    }
+    let auth = OpencodeAuth::load().expect("opencode auth.json present");
+    if !Zai.is_configured(&auth) {
+        eprintln!("skipping: z.ai not configured in opencode auth.json");
+        return;
+    }
+    let http = UreqClient::new();
+    let r = Zai.fetch(&auth, &http);
+    eprintln!("zai fetch result: ok={} error={:?}", r.ok, r.error);
+    assert!(r.ok, "z.ai live fetch failed: {:?}", r.error);
+    let u = r.usage.expect("usage present");
+    // At least one of: a tokens window, or the web-tools extras block.
+    assert!(
+        !u.windows.is_empty() || u.extras.contains_key("web-tools"),
+        "expected either a window or a web-tools extras entry"
+    );
+}
