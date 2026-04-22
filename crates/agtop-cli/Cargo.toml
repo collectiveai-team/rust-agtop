@@ -16,7 +16,7 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
-agtop-core.workspace = true
+agtop-core = { workspace = true, features = ["cli"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

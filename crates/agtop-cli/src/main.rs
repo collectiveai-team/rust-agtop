@@ -4,11 +4,12 @@
 //! and `--json` remain one-shot non-interactive paths for scripting.
 
 mod fmt;
+mod quota_cmd;
 mod tui;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 
 use crate::tui::widgets::state_display::display_state;
@@ -77,10 +78,26 @@ struct Cli {
     /// Verbose logging to stderr (sets RUST_LOG=info if unset).
     #[arg(short, long)]
     verbose: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Query provider quota APIs directly.
+    Quota(quota_cmd::QuotaArgs),
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Dispatch subcommands first (they bypass the session analysis pipeline).
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Commands::Quota(args) => return quota_cmd::run(args),
+        }
+    }
 
     // TUI mode = bare `agtop` with no --list / --json / --watch.
     let tui_mode = !cli.json && !cli.list && !cli.watch;

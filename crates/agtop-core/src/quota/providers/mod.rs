@@ -58,3 +58,9 @@ pub fn register_all() -> Vec<Box<dyn Provider>> {
         Box::new(google::Google),
     ]
 }
+
+/// Find a registered provider by id. Returns `None` if unknown.
+/// Used by `fetch_one` to avoid a double dispatch through string labels.
+pub fn find(id: ProviderId) -> Option<Box<dyn Provider>> {
+    register_all().into_iter().find(|p| p.id() == id)
+}
