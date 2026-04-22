@@ -90,6 +90,7 @@ pub quota_slots:       Vec<ProviderSlot>,
 pub quota_state:       QuotaState,          // default: Idle
 pub selected_provider: usize,               // list selection in Dashboard pane
 pub model_scroll:      usize,               // scroll offset for Google per-model list; reset to 0 on provider change
+pub card_scroll:       usize,               // horizontal scroll offset for Classic Quota tab card row
 ```
 
 ### `App` methods
@@ -188,14 +189,14 @@ QuotaError    { message, .. } => app.set_quota_error(message),
 | Classic: switch away from `Tab::Quota` | `handle.quota_trigger_tx.send(QuotaCmd::Stop)` |
 | Dashboard: enter Dashboard mode (`d` key) | `handle.quota_trigger_tx.send(QuotaCmd::Start)` |
 | Dashboard: leave Dashboard mode | `handle.quota_trigger_tx.send(QuotaCmd::Stop)` |
-
-Note: the quota pane occupies a fixed position in Dashboard mode and is always
-visible when Dashboard is active. There is no sub-focus concept within Dashboard
-— entering Dashboard mode is equivalent to entering the quota pane.
 | Any: `r` key while quota pane active | existing `manual_tx.send(...)` |
 | TUI quit | `RefreshHandle::drop` sends `Stop` then sets shutdown |
 
 "Quota pane active" = `app.ui_mode == Dashboard` OR `app.tab == Tab::Quota`.
+
+Note: the quota pane occupies a fixed position in Dashboard mode and is always
+visible when Dashboard is active. There is no sub-focus concept within Dashboard
+— entering Dashboard mode is equivalent to entering the quota pane.
 
 ### Footer hint
 
@@ -222,20 +223,52 @@ Cycles with existing Tab / Shift-Tab bindings.
 
 ### Layout
 
-Single area. Header row + body.
+A **single wide panel** with one card per configured provider, laid out
+**horizontally** (side-by-side, not a vertical list). Each card shows the
+provider's **preferred window** as a short view (name + bar + %). Only one
+window per provider — full details are Dashboard-only.
 
 ```
-┌─ Quota ──────────────────────────────────────────────────────┐
-│ Provider          Window    Used    Bar              Resets  │
-│ Claude            5h         72%   [███████░░░]      2h 14m │
-│                   7d         45%   [████░░░░░░]      3d 12h │
-│ Copilot           premium  Unlimited                         │
-│ z.ai †            5h         88%   [████████░░]      1h 02m │
-│                   monthly    31%   [███░░░░░░░]      18d    │
-│ Codex             — loading…                                 │
-│ Google            — token expired (HTTP 401)                 │
-└──────────────────────────────────────────────────────────────┘
+┌─ Quota ───────────────────────────────────────────────────────────────────┐
+│ Claude         z.ai †        Copilot        Codex ○       Google ✗  ›    │
+│ 5h 72% ███▌░░  5h 88% ████▌░  premium  ∞    loading…      401           │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
+
+Each card occupies two lines:
+- Line 1: provider name + status glyph (if non-ok)
+- Line 2: preferred-window label + % + bar  (or `value_label` when `used_percent` is None)
+
+### Preferred window table
+
+Per-provider preferred-window label, used for the short view:
+
+| Provider | Preferred label | Fallback if absent |
+|----------|----------------|---------------------|
+| Claude | `5h` | first window in `IndexMap` |
+| Codex | `5h` | `weekly` → first window |
+| Copilot | `premium` | first window |
+| CopilotAddon | `premium` | first window |
+| z.ai | `5h` | `monthly` → first window |
+| Google | first model's `5h` or `daily` | first model's first window |
+
+If the preferred label is not present in the slot, fall back as listed.
+If no windows at all, show `—` in the short view.
+
+### Card dimensions
+
+- Fixed card width: **20 columns** (including 2-column gutter between cards).
+- Content width: 18 columns (provider name line truncated with `…` if needed; bar 6 cells fixed when shown).
+- Card count computed from available area width: `cards_visible = area.width / 20`.
+
+### Horizontal scrolling
+
+When `quota_slots.len() > cards_visible`:
+- `card_scroll: usize` (new field in `App`) tracks the leftmost visible card index.
+- `←` / `→` arrow keys (when Classic + Quota tab active) scroll the row by 1.
+- Indicators: `‹` in the top-right of the panel when `card_scroll > 0`; `›` when
+  `card_scroll + cards_visible < quota_slots.len()`.
+- Scroll clamps to `[0, quota_slots.len().saturating_sub(cards_visible)]`.
 
 ### Rendering rules
 
@@ -243,35 +276,26 @@ Single area. Header row + body.
 - `QuotaState::Idle` → centered line: `"Press r to load quota data"`
 - `QuotaState::Loading` → centered line: `"Fetching quota data…"`
 - `QuotaState::Error(msg)` → centered line: `"Error: {msg}"`
-- `QuotaState::Ready` → render slot table
+- `QuotaState::Ready` → render card row
 
-**Per-provider grouping:**
-- Provider name shown only on first window row; blank on subsequent rows.
-- Stale provider (`current.ok=false && last_good=Some`): `†` suffix on provider
-  name; window bars rendered in dim colors.
-- Error provider (`current.ok=false && last_good=None`): single row
-  `— <short ErrorKind description>` in dim red. Full detail in `QuotaError.detail`
-  is shown on mouse hover (same UiLayout hover mechanism as existing panels).
-- In-flight provider (slot not yet in `quota_slots`): single row `— loading…`
-
-**Per-window rows:**
-- `used_percent = Some(p)`:
-  - Progress bar (10 chars wide, filled/empty blocks)
-  - Percentage text
-  - Reset countdown (`resets in Xh Ym` or `Xd Yh`) computed from
-    `reset_at` and current time
-- `used_percent = None`:
-  - `value_label` text in place of bar+percentage (e.g. `Unlimited`,
-    `$12.34 remaining`)
-  - Reset countdown if `reset_at` present
-- Windows where both `used_percent` and `value_label` are `None`: row omitted.
+**Per-card rendering:**
+- Name line: `{provider_name}{glyph}` where glyph is one of:
+  - (nothing) — ok
+  - ` †` — stale (`current.ok=false && last_good=Some`), entire card rendered dim
+  - ` ✗` — error (`current.ok=false && last_good=None`), bar replaced by short error token (`401`, `net`, `parse`, etc.)
+  - ` ○` — loading (slot not yet populated), bar replaced by `loading…`
+- Value line:
+  - `used_percent = Some(p)`: `{label} {p}% {bar}` (bar 6 cells)
+  - `used_percent = None, value_label = Some(s)`: `{label} {s}` truncated to fit
+  - both None: `{label} —`
 
 **Color thresholds** (use existing theme constants, or define new ones in `theme.rs`):
 - `< 75%` → normal
 - `75–90%` → yellow (`theme::WARN`)
 - `> 90%` → red (`theme::CRIT`)
+- Stale cards: dim variant of the above regardless of threshold.
 
-**`NotConfigured` providers**: omitted entirely (same as spec's render table).
+**`NotConfigured` providers**: omitted entirely (no card).
 
 ---
 
@@ -288,16 +312,19 @@ are removed.
 **State gate:** `QuotaState::Idle` or `Loading` renders a centered message across
 the full area instead of the split.
 
-### Left panel — provider list
+### Left panel — provider list (compact short view)
+
+One line per provider. Each line shows: status glyph + provider name + the
+provider's **preferred window** (same table as Classic tab) with bar + %.
 
 ```
-┌─ Quota ──────────┐
-│ ● Claude     72% │
-│ ● Copilot    ∞   │
-│ ▲ z.ai       88% │
-│ ✗ Google    401  │
-│ ○ Codex      …   │
-└──────────────────┘
+┌─ Quota ────────────────────────────────┐
+│ ● Claude    5h       72%  ███████░░░   │
+│ ● Copilot   premium       Unlimited    │
+│ ▲ z.ai †    5h       88%  ████████░░   │
+│ ✗ Google    — 401                      │
+│ ○ Codex     — loading…                 │
+└────────────────────────────────────────┘
 ```
 
 **Glyphs:**
@@ -308,15 +335,20 @@ the full area instead of the split.
 | `✗` | Error, no last_good |
 | `○` | Loading / not yet fetched |
 
-**Summary value** (right-aligned):
-- Ok: worst (highest) `used_percent` across all windows, or `∞` if all unlimited,
-  or `—` if no windows
-- Stale: same as ok, rendered dim
-- Error (no last_good): short status code (e.g. `401`, `net`)
-- Loading: `…`
+**Line content** (preferred-window short view):
+- Ok: `{glyph} {provider}  {label} {p}%  {bar}` (bar 10 cells)
+- Ok, unlimited: `{glyph} {provider}  {label}  Unlimited` (no bar)
+- Ok, value_label without %: `{glyph} {provider}  {label}  {value_label}`
+- Stale: same as ok, dim colors, ` †` after provider name
+- Error: `{glyph} {provider}  — {short_error_token}` (e.g. `— 401`)
+- Loading: `{glyph} {provider}  — loading…`
+
+Preferred window table: same as the Classic tab (see above).
 
 Selected provider highlighted with existing theme selection style. `j`/`k` and
-arrow keys scroll the list.
+arrow keys scroll the list. Selection persists across refreshes; when a
+provider disappears from the slot list (e.g. deconfigured), selection clamps to
+`quota_slots.len().saturating_sub(1)`.
 
 ### Right panel — detail view
 
@@ -386,6 +418,7 @@ Source: `current.fetched_at` (epoch ms → local time HH:MM:SS).
 | `r` | Quota pane active | Manual refresh |
 | `j` / `↓` | Dashboard quota pane | Next provider |
 | `k` / `↑` | Dashboard quota pane | Previous provider |
+| `←` / `→` | Classic Quota tab | Scroll card row when overflowing |
 | `d` | Any | Toggle Dashboard/Classic (existing) |
 
 No new global key bindings.
@@ -396,19 +429,29 @@ No new global key bindings.
 
 ### Layer 1 — Render snapshot tests (extend `tui/mod.rs` `TestBackend` tests)
 
-**Classic Quota tab:**
+**Classic Quota tab (horizontal card row):**
 - `QuotaState::Idle` → "Press r" message
 - `QuotaState::Loading` → loading message
-- Mixed providers: one with windows (some `used_percent`, some `None`), one unlimited,
-  one stale (bar dim), one error (no last_good), one not-yet-fetched
+- Mixed providers (one card each): one with preferred window present, one
+  unlimited, one stale (` †`, dim), one error (` ✗`, short token), one loading
+  (` ○`, `loading…`)
+- Preferred-window fallback: provider whose preferred label is absent — verify
+  correct fallback window is shown
 - Color threshold boundary: 74%, 75%, 90%, 91%
+- Horizontal overflow: more providers than fit — verify `›` indicator and
+  `card_scroll` offset shifts visible cards
 
 **Dashboard quota pane:**
-- Same state set as Classic tab
-- Google provider: per-model windows, no top-level windows
+- State gates: `Idle`, `Loading`, `Ready`, `Error`
+- Left panel short view: mixed ok / stale / error / loading providers; verify
+  preferred window is the one shown; verify `†` / `✗` / `○` glyphs
+- Right panel detail: selected provider with multiple windows, with extras,
+  with absent Claude windows as `——` placeholders
+- Google provider: per-model windows in right panel, no top-level windows
 - Extras: `OverageBudget` enabled, `OverageBudget` disabled, `PerToolCounts`
-- Absent Claude windows rendered as `——` placeholders
 - Stale warning line present/absent
+- Error-only state (no last_good): full-area error text, no gauges
+- Selection change: right panel updates, `model_scroll` resets to 0
 
 All fixtures built inline from `ProviderResult` structs. No HTTP, no tokio.
 
@@ -420,6 +463,9 @@ All fixtures built inline from `ProviderResult` structs. No HTTP, no tokio.
 - `set_quota_error` before any Ready → `QuotaState::Error`
 - `set_quota_loading` → `QuotaState::Loading`
 - `selected_provider` clamps to `quota_slots.len().saturating_sub(1)`
+- `card_scroll` clamps to `[0, quota_slots.len().saturating_sub(cards_visible)]`
+- Preferred-window resolution: given a slot, returns correct window per
+  per-provider preferred-label table, with fallback when absent
 
 ### Layer 3 — Worker integration tests (extend or add to `refresh.rs` tests)
 
