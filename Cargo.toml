@@ -30,6 +30,8 @@ ureq = { version = "3", default-features = false, features = [
 ] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rayon = "1"
+indexmap = { version = "2", features = ["serde"] }
+figment = { version = "0.10", features = ["toml", "env"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
