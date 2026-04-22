@@ -219,6 +219,29 @@ pub fn parse_retry_after(headers: &[(String, String)]) -> Option<u64> {
     })
 }
 
+/// Convert an HTTP response's status into an optional `QuotaError`.
+/// Returns `None` for 2xx. Caller owns provider-id / provider-name attribution.
+pub fn classify_response(resp: &HttpResponse) -> Option<crate::quota::types::QuotaError> {
+    use crate::quota::types::{ErrorKind, QuotaError};
+    match resp.status {
+        200..=299 => None,
+        429 => Some(QuotaError {
+            kind: ErrorKind::Http {
+                status: 429,
+                retry_after: parse_retry_after(&resp.headers),
+            },
+            detail: truncate_body(&resp.body, 500),
+        }),
+        s => Some(QuotaError {
+            kind: ErrorKind::Http {
+                status: s,
+                retry_after: None,
+            },
+            detail: truncate_body(&resp.body, 500),
+        }),
+    }
+}
+
 /// Truncate a byte slice to at most `max` bytes, replacing non-UTF-8 bodies
 /// with a placeholder. Used for error detail strings shown in the TUI hover
 /// popup.
@@ -382,6 +405,50 @@ mod tests {
     fn truncate_non_utf8_uses_placeholder() {
         let s = truncate_body(&[0xffu8, 0xfe, 0xfd], 50);
         assert!(s.contains("non-UTF-8"));
+    }
+
+    #[test]
+    fn classify_response_maps_statuses() {
+        let ok = HttpResponse {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        };
+        assert!(classify_response(&ok).is_none());
+
+        let err401 = HttpResponse {
+            status: 401,
+            headers: vec![],
+            body: b"nope".to_vec(),
+        };
+        let q = classify_response(&err401).unwrap();
+        match q.kind {
+            crate::quota::types::ErrorKind::Http {
+                status,
+                retry_after,
+            } => {
+                assert_eq!(status, 401);
+                assert!(retry_after.is_none());
+            }
+            _ => panic!("wrong kind"),
+        }
+
+        let err429 = HttpResponse {
+            status: 429,
+            headers: vec![("Retry-After".to_string(), "30".to_string())],
+            body: b"slow down".to_vec(),
+        };
+        let q = classify_response(&err429).unwrap();
+        match q.kind {
+            crate::quota::types::ErrorKind::Http {
+                status,
+                retry_after,
+            } => {
+                assert_eq!(status, 429);
+                assert_eq!(retry_after, Some(30));
+            }
+            _ => panic!("wrong kind"),
+        }
     }
 
     #[test]
