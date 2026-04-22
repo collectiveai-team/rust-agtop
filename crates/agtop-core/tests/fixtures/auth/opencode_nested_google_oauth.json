@@ -1,0 +1,10 @@
+{
+  "google": {
+    "type": "oauth",
+    "oauth": {
+      "access": "NESTED_GOOGLE_ACCESS",
+      "refresh": "NESTED_GOOGLE_REFRESH|proj|mproj",
+      "expires": 1800000000000
+    }
+  }
+}

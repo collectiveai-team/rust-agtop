@@ -1,0 +1,7 @@
+{
+  "anthropic":      { "type": "oauth", "access": "ANTHROPIC_ACCESS_PLACEHOLDER", "refresh": "ANTHROPIC_REFRESH_PLACEHOLDER" },
+  "openai":         { "type": "oauth", "access": "OPENAI_ACCESS_PLACEHOLDER",    "refresh": "OPENAI_REFRESH_PLACEHOLDER", "accountId": "00000000-0000-0000-0000-000000000000" },
+  "github-copilot": { "type": "oauth", "access": "COPILOT_ACCESS_PLACEHOLDER",   "refresh": "COPILOT_REFRESH_PLACEHOLDER" },
+  "zai-coding-plan": { "type": "api",  "key":    "ZAI_KEY_PLACEHOLDER" },
+  "google":         { "type": "oauth", "access": "GOOGLE_ACCESS_PLACEHOLDER",    "refresh": "GOOGLE_REFRESH_PLACEHOLDER|test-project|managed-project" }
+}

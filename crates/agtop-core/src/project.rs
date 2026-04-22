@@ -71,7 +71,7 @@ fn parse_repo_name_from_url(url: &str) -> Option<String> {
     let url = url.trim_end_matches('/');
 
     // Last segment after '/' or ':'.
-    let segment = url.rsplit(|c| c == '/' || c == ':').next()?;
+    let segment = url.rsplit(['/', ':']).next()?;
 
     // Strip .git suffix.
     let name = segment.strip_suffix(".git").unwrap_or(segment);

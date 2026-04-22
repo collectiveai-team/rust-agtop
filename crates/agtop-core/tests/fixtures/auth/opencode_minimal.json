@@ -1,0 +1,3 @@
+{
+  "anthropic": { "type": "oauth", "access": "ONLY_ANTHROPIC_ACCESS" }
+}

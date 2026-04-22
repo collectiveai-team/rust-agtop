@@ -19,6 +19,7 @@ pub mod logo;
 pub mod models_dev;
 pub mod pricing;
 pub mod project;
+pub mod quota;
 pub mod session;
 
 // Flat re-exports for the most commonly used public API items.
