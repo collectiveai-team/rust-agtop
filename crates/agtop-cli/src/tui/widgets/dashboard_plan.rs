@@ -77,10 +77,13 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
         let glyph = status_glyph(slot.current.ok, slot.last_good.is_some(), loading);
         let name_suffix = if stale { " \u{2020}" } else { "" };
-        let prefix = format!(
-            "{glyph} {name}{name_suffix}  ",
-            name = provider_short_name(slot.current.provider_id)
-        );
+        let name = slot
+            .current
+            .meta
+            .get("plan")
+            .map(String::as_str)
+            .unwrap_or_else(|| provider_short_name(slot.current.provider_id));
+        let prefix = format!("{glyph} {name}{name_suffix}  ");
 
         let body: Vec<Span<'_>> = if errored {
             let token = slot
@@ -165,11 +168,17 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     let mut lines: Vec<Line<'_>> = Vec::new();
 
-    // Header: provider name + plan + login (from meta).
-    let mut header_parts = vec![provider_short_name(slot.current.provider_id).to_string()];
-    if let Some(plan) = slot.current.meta.get("plan") {
-        header_parts.push(plan.clone());
-    }
+    // Header: subscription name (meta["plan"]) + login if available.
+    // meta["plan"] is the full human-readable subscription label produced
+    // by subscription.rs (e.g. "Max 5x", "GitHub Copilot · Individual").
+    // Fall back to the short provider name when no plan is known yet.
+    let plan_label = slot
+        .current
+        .meta
+        .get("plan")
+        .cloned()
+        .unwrap_or_else(|| provider_short_name(slot.current.provider_id).to_string());
+    let mut header_parts = vec![plan_label];
     if let Some(login) = slot.current.meta.get("login") {
         header_parts.push(login.clone());
     }

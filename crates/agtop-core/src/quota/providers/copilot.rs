@@ -141,10 +141,14 @@ pub(crate) fn parse(
         windows.insert(label.to_string(), snapshot_to_window(snapshot, reset_at));
     }
 
+    let plan_label = if provider_id == crate::quota::types::ProviderId::CopilotAddon {
+        crate::quota::subscription::copilot_addon_plan(raw.copilot_plan.as_deref())
+    } else {
+        crate::quota::subscription::copilot_plan(raw.copilot_plan.as_deref())
+    };
+
     let mut meta: BTreeMap<String, String> = BTreeMap::new();
-    if let Some(v) = raw.copilot_plan.clone() {
-        meta.insert("plan".to_string(), v);
-    }
+    meta.insert("plan".to_string(), plan_label);
     if let Some(v) = raw.access_type_sku.clone() {
         meta.insert("sku".to_string(), v);
     }
@@ -280,7 +284,10 @@ mod tests {
     #[test]
     fn meta_contains_plan_sku_login() {
         let r = do_parse(INDIVIDUAL, WindowFilter::All);
-        assert_eq!(r.meta.get("plan").map(String::as_str), Some("individual"));
+        assert_eq!(
+            r.meta.get("plan").map(String::as_str),
+            Some("GitHub Copilot · Individual")
+        );
         assert_eq!(
             r.meta.get("sku").map(String::as_str),
             Some("monthly_subscriber_quota")

@@ -178,8 +178,15 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
     // Include source labels in meta so TUI can show which sources contributed.
     let mut meta: BTreeMap<String, String> = BTreeMap::new();
     let labels: Vec<String> = sources.iter().map(|s| s.source_label.clone()).collect();
-    if !labels.is_empty() {
-        meta.insert("sources".to_string(), labels.join(","));
+    let raw_sources = if labels.is_empty() {
+        None
+    } else {
+        Some(labels.join(","))
+    };
+    let plan_label = crate::quota::subscription::google_plan(raw_sources.as_deref());
+    meta.insert("plan".to_string(), plan_label);
+    if let Some(ref s) = raw_sources {
+        meta.insert("sources".to_string(), s.clone());
     }
 
     let usage = Usage {

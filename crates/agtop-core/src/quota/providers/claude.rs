@@ -82,7 +82,11 @@ fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient) -> ProviderResult {
         return ProviderResult::err(PROVIDER_ID, PROVIDER_NAME, err);
     }
 
-    parse(&resp.body)
+    let mut result = parse(&resp.body);
+    if let Some(plan) = crate::quota::subscription::claude_plan(auth) {
+        result.meta.insert("plan".to_string(), plan);
+    }
+    result
 }
 
 /// Parse a Claude `/api/oauth/usage` response body into a `ProviderResult`.
@@ -144,6 +148,7 @@ pub(crate) fn parse(body: &[u8]) -> ProviderResult {
         models: IndexMap::new(),
         extras,
     };
+    // meta["plan"] is populated by fetch_impl via subscription::claude_plan.
     ProviderResult::ok(PROVIDER_ID, PROVIDER_NAME, usage, BTreeMap::new())
 }
 

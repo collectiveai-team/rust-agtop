@@ -76,7 +76,10 @@ fn fetch_success_returns_usage_and_meta() {
     let u = r.usage.unwrap();
     assert!(u.windows.contains_key("chat"));
     assert!(u.windows.contains_key("premium"));
-    assert_eq!(r.meta.get("plan").map(String::as_str), Some("individual"));
+    assert_eq!(
+        r.meta.get("plan").map(String::as_str),
+        Some("GitHub Copilot · Individual")
+    );
 }
 
 #[test]

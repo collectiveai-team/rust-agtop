@@ -112,7 +112,12 @@ fn render_card(frame: &mut Frame<'_>, area: Rect, slot: &ProviderSlot) {
 }
 
 pub(crate) fn build_card_lines<'a>(slot: &'a ProviderSlot) -> (Line<'a>, Line<'a>, Option<Style>) {
-    let provider_name = provider_short_name(slot.current.provider_id);
+    let provider_name = slot
+        .current
+        .meta
+        .get("plan")
+        .map(String::as_str)
+        .unwrap_or_else(|| provider_short_name(slot.current.provider_id));
     let stale = !slot.current.ok && slot.last_good.is_some();
     let errored = !slot.current.ok && slot.last_good.is_none();
 

@@ -174,7 +174,12 @@ pub(crate) fn parse(body: &[u8], now_ms: i64) -> ProviderResult {
         }
     }
 
+    let raw_level = raw.data.as_ref().and_then(|d| d.level.as_deref());
+    let plan_label = crate::quota::subscription::zai_plan(raw_level);
+
     let mut meta: BTreeMap<String, String> = BTreeMap::new();
+    meta.insert("plan".to_string(), plan_label);
+    // Keep the raw level for any tooling that reads meta directly.
     if let Some(level) = raw.data.as_ref().and_then(|d| d.level.clone()) {
         meta.insert("level".to_string(), level);
     }

@@ -63,6 +63,9 @@ fn addon_meta_matches_copilot() {
     let http = FakeHttp::new();
     http.push_ok(200, &copilot_body());
     let r = CopilotAddon.fetch(&auth_full(), &http);
-    assert_eq!(r.meta.get("plan").map(String::as_str), Some("individual"));
+    assert_eq!(
+        r.meta.get("plan").map(String::as_str),
+        Some("GitHub Copilot Add-on · Individual")
+    );
     assert_eq!(r.meta.get("login").map(String::as_str), Some("jedzill4"));
 }
