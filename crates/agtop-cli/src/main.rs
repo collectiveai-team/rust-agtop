@@ -6,6 +6,7 @@
 mod fmt;
 mod quota_cmd;
 mod tui;
+mod version;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -20,7 +21,7 @@ use agtop_core::{
 #[derive(Parser, Debug)]
 #[command(
     name = "agtop",
-    version,
+    version = version::DISPLAY_VERSION,
     about = "htop-style dashboard for AI coding agent sessions (Claude Code, Codex, OpenCode)",
     long_about = None,
 )]
@@ -383,6 +384,7 @@ fn filtered_clients(
 mod client_parse_tests {
     use super::*;
     use agtop_core::ClientKind;
+    use clap::CommandFactory;
 
     #[test]
     fn parse_client_kind_covers_all_variants() {
@@ -397,6 +399,14 @@ mod client_parse_tests {
             Some(ClientKind::Antigravity)
         );
         assert_eq!(parse_client_kind("bogus"), None);
+    }
+
+    #[test]
+    fn clap_version_matches_display_version() {
+        assert_eq!(
+            Cli::command().get_version(),
+            Some(version::display_version())
+        );
     }
 }
 

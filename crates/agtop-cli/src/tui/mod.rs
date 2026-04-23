@@ -37,6 +37,7 @@ use ratatui::{
 use theme as th;
 
 use crate::fmt;
+use crate::version;
 use agtop_core::pricing::Plan;
 use agtop_core::Client;
 
@@ -553,8 +554,19 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {
         sel,
         app.last_error().unwrap_or(""),
     );
-    let p = Paragraph::new(status).style(th::STATUS_BAR);
-    frame.render_widget(p, area);
+
+    let ver = version::display_version();
+    let [left_area, right_area] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(ver.len() as u16 + 1)])
+            .areas(area);
+
+    frame.render_widget(Paragraph::new(status).style(th::STATUS_BAR), left_area);
+    frame.render_widget(
+        Paragraph::new(ver.to_string())
+            .style(th::STATUS_BAR.add_modifier(Modifier::DIM))
+            .alignment(Alignment::Right),
+        right_area,
+    );
 }
 
 fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mut UiLayout) {
@@ -708,6 +720,7 @@ fn install_panic_hook() {
 mod tests {
     use super::*;
     use crate::tui::column_config::ColumnId;
+    use crate::version;
     use agtop_core::session::{
         ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
     };
@@ -824,6 +837,10 @@ mod tests {
         assert!(contents.contains("EFFORT"), "effort header missing");
         assert!(contents.contains("waiting"), "state value missing");
         assert!(contents.contains("high"), "effort value missing");
+        assert!(
+            contents.contains(version::display_version()),
+            "version badge missing"
+        );
     }
 
     #[test]
