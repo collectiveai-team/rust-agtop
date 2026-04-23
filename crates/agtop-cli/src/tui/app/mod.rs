@@ -391,6 +391,7 @@ impl App {
     pub fn history(&self) -> &UsageHistory {
         &self.history
     }
+    #[allow(dead_code)]
     pub fn plan_usage(&self) -> &[agtop_core::PlanUsage] {
         &self.plan_usage
     }
@@ -430,6 +431,7 @@ impl App {
     }
 
     /// Move the subscription list selection down by 1, clamped to the list length.
+    #[allow(dead_code)]
     pub fn plan_select_next(&mut self, list_len: usize) {
         if list_len > 0 {
             self.plan_selected = (self.plan_selected + 1).min(list_len - 1);
@@ -437,6 +439,7 @@ impl App {
     }
 
     /// Move the subscription list selection up by 1, clamped to 0.
+    #[allow(dead_code)]
     pub fn plan_select_prev(&mut self) {
         self.plan_selected = self.plan_selected.saturating_sub(1);
     }

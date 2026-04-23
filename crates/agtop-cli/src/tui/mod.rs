@@ -217,6 +217,7 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
                 Event::Key(k) => match apply_key(app, k) {
                     Action::None => {}
                     Action::ManualRefresh => handle.trigger_manual(),
+                    Action::QuotaCmd(cmd) => handle.send_quota_cmd(cmd),
                 },
                 Event::Mouse(m) => apply_mouse(app, m, &layout),
                 Event::Resize(_, _) => {
@@ -1293,5 +1294,106 @@ mod tests {
             out.push('\n');
         }
         out
+    }
+
+    #[test]
+    fn quota_tab_renders_after_apply_results() {
+        use agtop_core::quota::{ProviderId, ProviderResult, Usage, UsageWindow};
+        use indexmap::IndexMap;
+
+        let backend = TestBackend::new(140, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.set_tab(Tab::Quota);
+
+        let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
+        windows.insert(
+            "5h".into(),
+            UsageWindow {
+                used_percent: Some(42.0),
+                window_seconds: Some(18000),
+                reset_at: None,
+                value_label: None,
+            },
+        );
+        let usage = Usage {
+            windows,
+            models: Default::default(),
+            extras: Default::default(),
+        };
+        app.apply_quota_results(vec![ProviderResult {
+            provider_id: ProviderId::Claude,
+            provider_name: ProviderId::Claude.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(usage),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }]);
+
+        let mut state = ratatui::widgets::TableState::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
+            .expect("draw");
+
+        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        assert!(contents.contains("Claude"), "Claude missing:\n{contents}");
+        assert!(contents.contains("5h"), "5h missing:\n{contents}");
+        assert!(contents.contains("42"), "percentage missing:\n{contents}");
+        assert!(contents.contains('■'), "bar char missing:\n{contents}");
+    }
+
+    #[test]
+    fn dashboard_mode_shows_quota_block() {
+        use agtop_core::quota::{ProviderId, ProviderResult, Usage, UsageWindow};
+        use indexmap::IndexMap;
+
+        let backend = TestBackend::new(140, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.toggle_ui_mode(); // Dashboard
+
+        let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
+        windows.insert(
+            "5h".into(),
+            UsageWindow {
+                used_percent: Some(88.0),
+                window_seconds: None,
+                reset_at: None,
+                value_label: None,
+            },
+        );
+        let usage = Usage {
+            windows,
+            models: Default::default(),
+            extras: Default::default(),
+        };
+        app.apply_quota_results(vec![ProviderResult {
+            provider_id: ProviderId::Zai,
+            provider_name: ProviderId::Zai.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(usage),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }]);
+
+        let mut state = ratatui::widgets::TableState::default();
+        terminal
+            .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
+            .expect("draw");
+
+        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        assert!(
+            contents.contains("Quota"),
+            "Quota title missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("z.ai"),
+            "z.ai provider missing:\n{contents}"
+        );
+        assert!(contents.contains("88"), "percentage missing:\n{contents}");
     }
 }

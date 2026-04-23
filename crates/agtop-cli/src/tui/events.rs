@@ -19,6 +19,8 @@ pub enum Action {
     None,
     /// Trigger a synchronous / manual refresh of the session list.
     ManualRefresh,
+    /// Send a command to the quota refresh worker.
+    QuotaCmd(crate::tui::refresh::QuotaCmd),
 }
 
 /// Translate a crossterm key event into a state mutation + optional
@@ -94,14 +96,14 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         }
         KeyCode::Char('j') | KeyCode::Down => {
             if app.ui_mode() == UiMode::Dashboard {
-                app.plan_select_next(app.plan_usage().len());
+                app.quota_select_next();
             } else {
                 app.move_selection(1);
             }
         }
         KeyCode::Char('k') | KeyCode::Up => {
             if app.ui_mode() == UiMode::Dashboard {
-                app.plan_select_prev();
+                app.quota_select_prev();
             } else {
                 app.move_selection(-1);
             }
@@ -121,9 +123,25 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::F(6) | KeyCode::Char('>') => app.cycle_sort_column(),
         KeyCode::Char('i') => app.flip_sort_direction(),
         KeyCode::F(5) | KeyCode::Char('r') => return Action::ManualRefresh,
-        KeyCode::Char('d') => app.toggle_ui_mode(),
-        KeyCode::Tab => app.next_tab(),
-        KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Char('d') => {
+            use crate::tui::app::UiMode;
+            let was_dashboard = app.ui_mode() == UiMode::Dashboard;
+            app.toggle_ui_mode();
+            let is_dashboard = app.ui_mode() == UiMode::Dashboard;
+            return quota_cmd_for_transition(was_dashboard, is_dashboard);
+        }
+        KeyCode::Tab => {
+            let was_quota = app.tab() == Tab::Quota;
+            app.next_tab();
+            let is_quota = app.tab() == Tab::Quota;
+            return quota_cmd_for_transition(was_quota, is_quota);
+        }
+        KeyCode::BackTab => {
+            let was_quota = app.tab() == Tab::Quota;
+            app.prev_tab();
+            let is_quota = app.tab() == Tab::Quota;
+            return quota_cmd_for_transition(was_quota, is_quota);
+        }
         // [ / ] cycle the Cost Summary sub-tab (only meaningful in dashboard mode).
         KeyCode::Char('[') if app.ui_mode() == UiMode::Dashboard => app.cycle_cost_tab_back(),
         KeyCode::Char(']') if app.ui_mode() == UiMode::Dashboard => app.cycle_cost_tab_forward(),
@@ -138,9 +156,24 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
                 }
             }
         }
+        KeyCode::Left if app.tab() == Tab::Quota && app.ui_mode() == UiMode::Classic => {
+            app.quota_card_scroll_left();
+        }
+        KeyCode::Right if app.tab() == Tab::Quota && app.ui_mode() == UiMode::Classic => {
+            app.quota_card_scroll_right(1);
+        }
         _ => {}
     }
     Action::None
+}
+
+fn quota_cmd_for_transition(was_active: bool, is_active: bool) -> Action {
+    use crate::tui::refresh::QuotaCmd;
+    match (was_active, is_active) {
+        (false, true) => Action::QuotaCmd(QuotaCmd::Start),
+        (true, false) => Action::QuotaCmd(QuotaCmd::Stop),
+        _ => Action::None,
+    }
 }
 
 fn apply_config_key(app: &mut App, key: KeyEvent) -> Action {
@@ -148,8 +181,18 @@ fn apply_config_key(app: &mut App, key: KeyEvent) -> Action {
     match key.code {
         // Always allow quit and tab-switching from config.
         KeyCode::Char('q') | KeyCode::F(10) => app.request_quit(),
-        KeyCode::Tab => app.next_tab(),
-        KeyCode::BackTab => app.prev_tab(),
+        KeyCode::Tab => {
+            let was_quota = app.tab() == Tab::Quota;
+            app.next_tab();
+            let is_quota = app.tab() == Tab::Quota;
+            return quota_cmd_for_transition(was_quota, is_quota);
+        }
+        KeyCode::BackTab => {
+            let was_quota = app.tab() == Tab::Quota;
+            app.prev_tab();
+            let is_quota = app.tab() == Tab::Quota;
+            return quota_cmd_for_transition(was_quota, is_quota);
+        }
 
         // Cursor movement.
         KeyCode::Char('j') | KeyCode::Down if !shift => app.config_move_down(),
@@ -426,8 +469,7 @@ mod tests {
         app.toggle_ui_mode(); // switch to Dashboard
         assert_eq!(app.ui_mode(), UiMode::Dashboard);
         // Tests App navigation methods directly — these are the underlying methods
-        // that apply_key routes to. The actual routing is tested in
-        // dashboard_j_key_routes_to_plan_selection below.
+        // that apply_key routes to (quota selection in Dashboard mode).
         app.plan_select_next(10);
         assert_eq!(app.plan_selected(), 1);
         app.plan_select_prev();
@@ -443,37 +485,39 @@ mod tests {
     }
 
     #[test]
-    fn dashboard_j_key_routes_to_plan_selection() {
-        use agtop_core::session::{ClientKind, PlanUsage};
+    fn dashboard_j_key_routes_to_quota_selection() {
+        use agtop_core::quota::{ProviderResult, Usage};
 
         let mut app = App::new();
         app.toggle_ui_mode(); // Dashboard mode
 
-        // Populate plan_usage with 2 entries so plan_select_next has room to move.
-        let make_pu = |label: &str| {
-            PlanUsage::new(
-                ClientKind::Claude,
-                label.to_string(),
-                None,
-                Vec::new(),
-                None,
-                None,
-            )
+        let mk = |id: agtop_core::quota::ProviderId| ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(Usage::default()),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
         };
-        app.set_snapshot(Vec::new(), vec![make_pu("Sub A"), make_pu("Sub B")]);
+        app.apply_quota_results(vec![
+            mk(agtop_core::quota::ProviderId::Claude),
+            mk(agtop_core::quota::ProviderId::Codex),
+        ]);
 
         apply_key(&mut app, press(KeyCode::Char('j')));
         assert_eq!(
-            app.plan_selected(),
+            app.selected_provider(),
             1,
-            "j in Dashboard should increment plan_selected"
+            "j in Dashboard should increment selected_provider"
         );
 
         apply_key(&mut app, press(KeyCode::Char('k')));
         assert_eq!(
-            app.plan_selected(),
+            app.selected_provider(),
             0,
-            "k in Dashboard should decrement plan_selected"
+            "k in Dashboard should decrement selected_provider"
         );
     }
 
@@ -485,5 +529,105 @@ mod tests {
         // Just verify it doesn't panic with empty session list.
         apply_key(&mut app, press(KeyCode::Char('j')));
         apply_key(&mut app, press(KeyCode::Char('k')));
+    }
+
+    use crate::tui::refresh::QuotaCmd;
+
+    #[test]
+    fn tab_into_quota_emits_start_action() {
+        let mut app = App::new();
+        // Info → Cost → Config → Quota (3 tabs forward)
+        apply_key(&mut app, press(KeyCode::Tab));
+        apply_key(&mut app, press(KeyCode::Tab));
+        let action = apply_key(&mut app, press(KeyCode::Tab));
+        assert_eq!(app.tab(), Tab::Quota);
+        assert!(
+            matches!(action, Action::QuotaCmd(QuotaCmd::Start)),
+            "expected Start action, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn tab_out_of_quota_emits_stop_action() {
+        let mut app = App::new();
+        app.set_tab(Tab::Quota);
+        let action = apply_key(&mut app, press(KeyCode::Tab));
+        assert_ne!(app.tab(), Tab::Quota);
+        assert!(
+            matches!(action, Action::QuotaCmd(QuotaCmd::Stop)),
+            "expected Stop action, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn d_into_dashboard_emits_start() {
+        let mut app = App::new();
+        // Classic → Dashboard: was_dashboard=false, is_dashboard=true → Start
+        let action = apply_key(&mut app, press(KeyCode::Char('d')));
+        assert_eq!(app.ui_mode(), UiMode::Dashboard);
+        assert!(matches!(action, Action::QuotaCmd(QuotaCmd::Start)));
+    }
+
+    #[test]
+    fn d_into_classic_emits_stop() {
+        let mut app = App::new();
+        app.toggle_ui_mode(); // Classic → Dashboard
+        let action = apply_key(&mut app, press(KeyCode::Char('d')));
+        assert_eq!(app.ui_mode(), UiMode::Classic);
+        assert!(matches!(action, Action::QuotaCmd(QuotaCmd::Stop)));
+    }
+
+    #[test]
+    fn j_in_dashboard_quota_advances_provider() {
+        use agtop_core::quota::{ProviderResult, Usage};
+        let mut app = App::new();
+        app.toggle_ui_mode(); // Dashboard
+        let mk = |id: agtop_core::quota::ProviderId| ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(Usage::default()),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        };
+        app.apply_quota_results(vec![
+            mk(agtop_core::quota::ProviderId::Claude),
+            mk(agtop_core::quota::ProviderId::Codex),
+        ]);
+        assert_eq!(app.selected_provider(), 0);
+        apply_key(&mut app, press(KeyCode::Char('j')));
+        assert_eq!(app.selected_provider(), 1);
+    }
+
+    #[test]
+    fn left_right_in_classic_quota_tab_scrolls_cards() {
+        use agtop_core::quota::{ProviderResult, Usage};
+        let mut app = App::new();
+        app.set_tab(Tab::Quota);
+        let mk = |id: agtop_core::quota::ProviderId| ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(Usage::default()),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        };
+        app.apply_quota_results(vec![
+            mk(agtop_core::quota::ProviderId::Claude),
+            mk(agtop_core::quota::ProviderId::Codex),
+            mk(agtop_core::quota::ProviderId::Copilot),
+        ]);
+        let before = app.card_scroll();
+        apply_key(&mut app, press(KeyCode::Right));
+        assert!(
+            app.card_scroll() >= before,
+            "Right should increment or stay"
+        );
+        apply_key(&mut app, press(KeyCode::Left));
+        assert_eq!(app.card_scroll(), 0);
     }
 }
