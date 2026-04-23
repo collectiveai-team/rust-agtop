@@ -19,6 +19,8 @@ use std::time::Duration;
 
 use agtop_core::pricing::Plan;
 use agtop_core::quota::ProviderResult;
+
+const QUOTA_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 use agtop_core::session::SessionAnalysis;
 use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
@@ -191,7 +193,7 @@ pub fn spawn(
     };
     let (tx, rx) = watch::channel(initial);
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
-    let (quota_trigger_tx, _quota_trigger_rx) = watch::channel(QuotaCmd::Stop);
+    let (quota_trigger_tx, quota_trigger_rx) = watch::channel(QuotaCmd::Stop);
 
     let clients_arc = clients.clone();
     // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
@@ -200,6 +202,10 @@ pub fn spawn(
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_worker = Arc::clone(&shutdown);
     let enabled_worker = Arc::clone(&enabled);
+
+    // Clone tx before it is captured by the session-loop spawn below.
+    // The quota loop uses this clone to publish QuotaSnapshot / QuotaError.
+    let tx_quota = tx.clone();
 
     // Spawn the worker on the runtime. We use `spawn_blocking` for the
     // CPU/IO-bound `analyze_all` so timers keep ticking.
@@ -311,6 +317,96 @@ pub fn spawn(
                 changed = manual_rx.changed() => {
                     if changed.is_err() {
                         break;
+                    }
+                }
+            }
+        }
+    });
+
+    // ── Quota inner loop ──────────────────────────────────────────────────────
+    let mut quota_trigger_rx = quota_trigger_rx;
+    let mut manual_rx_quota = manual_tx.subscribe();
+    let shutdown_quota = Arc::clone(&shutdown);
+
+    runtime.spawn(async move {
+        let mut quota_generation: u64 = 0;
+        loop {
+            if shutdown_quota.load(Ordering::Acquire) {
+                break;
+            }
+
+            // Idle: wait for Start.
+            loop {
+                if shutdown_quota.load(Ordering::Acquire) {
+                    return;
+                }
+                match *quota_trigger_rx.borrow() {
+                    QuotaCmd::Start => break,
+                    QuotaCmd::Stop => {}
+                }
+                if quota_trigger_rx.changed().await.is_err() {
+                    return;
+                }
+            }
+
+            // Active: fetch-and-publish loop. Exits on Stop or shutdown.
+            'active: loop {
+                if shutdown_quota.load(Ordering::Acquire) {
+                    return;
+                }
+                quota_generation = quota_generation.wrapping_add(1);
+
+                let result = tokio::task::spawn_blocking(|| {
+                    let config = match agtop_core::quota::QuotaConfig::load(None) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return Err(format!("QuotaConfig::load failed: {e}"));
+                        }
+                    };
+                    let auth = match &config.opencode_auth_path {
+                        Some(p) => agtop_core::quota::OpencodeAuth::load_from(p)
+                            .unwrap_or_else(|_| agtop_core::quota::OpencodeAuth::empty()),
+                        None => agtop_core::quota::OpencodeAuth::load()
+                            .unwrap_or_else(|_| agtop_core::quota::OpencodeAuth::empty()),
+                    };
+                    let http = agtop_core::quota::UreqClient::new();
+                    Ok(agtop_core::quota::fetch_all(&auth, &http, &config))
+                })
+                .await;
+
+                let msg = match result {
+                    Ok(Ok(results)) => RefreshMsg::QuotaSnapshot {
+                        generation: quota_generation,
+                        results,
+                    },
+                    Ok(Err(err_msg)) => RefreshMsg::QuotaError {
+                        generation: quota_generation,
+                        message: err_msg,
+                    },
+                    Err(join_err) => RefreshMsg::QuotaError {
+                        generation: quota_generation,
+                        message: format!("quota fetch task panicked: {join_err}"),
+                    },
+                };
+                if tx_quota.send(msg).is_err() {
+                    return;
+                }
+
+                tokio::select! {
+                    _ = tokio::time::sleep(QUOTA_REFRESH_INTERVAL) => {}
+                    changed = quota_trigger_rx.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
+                        match *quota_trigger_rx.borrow() {
+                            QuotaCmd::Stop => break 'active,
+                            QuotaCmd::Start => {}
+                        }
+                    }
+                    changed = manual_rx_quota.changed() => {
+                        if changed.is_err() {
+                            return;
+                        }
                     }
                 }
             }
@@ -731,5 +827,70 @@ mod tests {
     fn quota_cmd_is_copy() {
         fn assert_copy<T: Copy>() {}
         assert_copy::<QuotaCmd>();
+    }
+
+    #[test]
+    fn quota_loop_publishes_snapshot_after_start() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+
+        // With no configured providers (default empty auth), fetch_all returns
+        // an empty Vec which is still a valid QuotaSnapshot.
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
+        let enabled = Arc::new(RwLock::new(HashSet::new()));
+        let mut handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+
+        handle.send_quota_cmd(QuotaCmd::Start);
+
+        let start = std::time::Instant::now();
+        let mut got = false;
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Some(msg) = handle.try_recv() {
+                if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
+                    got = true;
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(got, "expected QuotaSnapshot within 5s");
+    }
+
+    #[test]
+    fn quota_loop_stops_on_stop_cmd() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+
+        // With no configured providers, fetch_all returns an empty QuotaSnapshot
+        // very quickly. We use that to verify the Stop command halts the loop.
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
+        let enabled = Arc::new(RwLock::new(HashSet::new()));
+        let mut handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+
+        handle.send_quota_cmd(QuotaCmd::Start);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut saw_first = false;
+        while std::time::Instant::now() < deadline {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+                saw_first = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(saw_first, "setup failed — no initial QuotaSnapshot");
+        handle.send_quota_cmd(QuotaCmd::Stop);
+
+        std::thread::sleep(Duration::from_millis(1500));
+        let mut extra = 0;
+        while let Some(msg) = handle.try_recv() {
+            if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
+                extra += 1;
+            }
+        }
+
+        assert_eq!(extra, 0, "stopped loop kept publishing ({extra} extra)");
     }
 }
