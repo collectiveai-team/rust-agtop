@@ -912,42 +912,35 @@ mod tests {
     }
 
     #[test]
-    fn renders_dashboard_with_plan_usage() {
-        use agtop_core::session::{PlanUsage, PlanWindow};
-
+    fn renders_dashboard_with_quota_idle() {
         let backend = TestBackend::new(140, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
-        app.toggle_ui_mode(); // switch to Dashboard
-
-        let reset_at = Utc.with_ymd_and_hms(2026, 4, 18, 13, 0, 0).unwrap();
-        let windows = vec![
-            PlanWindow::new("5h".into(), Some(0.71), Some(reset_at), None, true),
-            PlanWindow::new("7d".into(), Some(0.18), Some(reset_at), None, false),
-        ];
-        let plan_usage = vec![PlanUsage::new(
-            ClientKind::Claude,
-            "Max 5x via Claude Code".into(),
-            Some("Max 5x".into()),
-            windows,
-            None,
-            None,
-        )];
-        app.set_snapshot(vec![], plan_usage);
+        app.toggle_ui_mode(); // Dashboard
 
         let mut state = ratatui::widgets::TableState::default();
         terminal
             .draw(|f| render(f, &app, &mut state, &mut UiLayout::default()))
             .expect("draw");
 
-        let contents = buffer_to_string(&terminal.backend().buffer().clone());
+        let buffer = terminal.backend().buffer().clone();
+        let contents = {
+            let mut s = String::new();
+            for y in 0..buffer.area.height {
+                for x in 0..buffer.area.width {
+                    s.push_str(buffer.cell((x, y)).unwrap().symbol());
+                }
+                s.push('\n');
+            }
+            s
+        };
         assert!(
-            contents.contains("Subscription Details"),
-            "panel title missing:\n{contents}"
+            contents.contains("Quota"),
+            "Quota panel title missing:\n{contents}"
         );
         assert!(
-            contents.contains("Max 5x"),
-            "subscription name missing:\n{contents}"
+            contents.contains("Press r"),
+            "idle placeholder missing:\n{contents}"
         );
     }
 

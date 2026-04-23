@@ -1,528 +1,641 @@
-use chrono::{DateTime, Local, Utc};
+//! Dashboard mode — Quota pane.
+//!
+//! Replaces the previous local-estimate Subscription Details pane. Driven
+//! by `App::quota_slots` (populated by the refresh worker from
+//! `agtop_core::quota::fetch_all`). 40 % left (compact list) / 60 % right
+//! (full detail) split. See the 2026-04-22-quota-tui design spec.
+
 use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     prelude::*,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 
-use crate::tui::app::App;
+use crate::tui::app::{App, QuotaState};
 use crate::tui::theme as th;
-use agtop_core::session::{ClientKind, PlanUsage};
-
-// ---------------------------------------------------------------------------
-// Merged subscription data
-// ---------------------------------------------------------------------------
-
-/// One subscription entry after deduplication across clients/agents.
-struct MergedPlan<'a> {
-    subscription_name: String,
-    windows: Vec<&'a agtop_core::session::PlanWindow>,
-    last_limit_hit: Option<DateTime<Utc>>,
-    notes: Vec<String>,
-    clients: Vec<ClientKind>,
-}
-
-/// Strip known agent-tool suffixes/prefixes to derive a canonical subscription name.
-fn canonical_name(pu: &PlanUsage) -> String {
-    // Prefer the structured plan_name field.
-    if let Some(name) = &pu.plan_name {
-        if !name.is_empty() {
-            return name.clone();
-        }
-    }
-    // Fall back to stripping known agent labels from `pu.label`.
-    let s = pu.label.as_str();
-    // Strip " via <agent>" suffix.
-    for suffix in &[" via Claude Code", " via OpenCode", " via Codex"] {
-        if let Some(stripped) = s.strip_suffix(suffix) {
-            return stripped.trim().to_string();
-        }
-    }
-    // Strip "<agent> · " prefix.
-    for prefix in &["Claude Code · ", "OpenCode · ", "Codex · "] {
-        if let Some(stripped) = s.strip_prefix(prefix) {
-            return stripped.trim().to_string();
-        }
-    }
-    s.trim().to_string()
-}
-
-/// Merge a slice of `PlanUsage` entries into deduplicated `MergedPlan` entries.
-/// Entries with the same canonical name (case-insensitive) are merged.
-/// For duplicate window labels, keep the window with the most recent reset_at.
-fn merge_plans(usages: &[PlanUsage]) -> Vec<MergedPlan<'_>> {
-    // We preserve insertion order (first occurrence of a subscription name).
-    let mut order: Vec<String> = Vec::new(); // canonical names in order
-    let mut map: std::collections::HashMap<String, MergedPlan<'_>> =
-        std::collections::HashMap::new();
-
-    for pu in usages {
-        let display = canonical_name(pu);
-        let key = display.to_lowercase();
-
-        if !map.contains_key(&key) {
-            order.push(key.clone());
-            map.insert(
-                key.clone(),
-                MergedPlan {
-                    subscription_name: display,
-                    windows: Vec::new(),
-                    last_limit_hit: pu.last_limit_hit,
-                    notes: Vec::new(),
-                    clients: vec![pu.client],
-                },
-            );
-        }
-
-        let entry = map.get_mut(&key).unwrap();
-
-        if !entry.clients.contains(&pu.client) {
-            entry.clients.push(pu.client);
-        }
-
-        // Update last_limit_hit to the most recent.
-        if let Some(lh) = pu.last_limit_hit {
-            entry.last_limit_hit = Some(match entry.last_limit_hit {
-                Some(existing) if existing >= lh => existing,
-                _ => lh,
-            });
-        }
-
-        // Merge notes (dedup).
-        if let Some(note) = &pu.note {
-            if !note.is_empty() && !entry.notes.contains(note) {
-                entry.notes.push(note.clone());
-            }
-        }
-
-        // Merge windows: if a window with the same label already exists,
-        // keep the one with the more recent reset_at (or replace if new has
-        // reset_at and existing doesn't).
-        for w in &pu.windows {
-            let existing_pos = entry.windows.iter().position(|e| e.label == w.label);
-            match existing_pos {
-                None => entry.windows.push(w),
-                Some(pos) => {
-                    let keep_new = match (entry.windows[pos].reset_at, w.reset_at) {
-                        (None, Some(_)) => true,
-                        (Some(existing_ts), Some(new_ts)) => new_ts > existing_ts,
-                        _ => false,
-                    };
-                    if keep_new {
-                        entry.windows[pos] = w;
-                    }
-                }
-            }
-        }
-    }
-
-    // Sort windows within each merged entry: nearest reset_at first, None last.
-    for key in &order {
-        let entry = map.get_mut(key).unwrap();
-        entry
-            .windows
-            .sort_by(|a, b| match (a.reset_at, b.reset_at) {
-                (Some(ta), Some(tb)) => ta.cmp(&tb),
-                (Some(_), None) => std::cmp::Ordering::Less,
-                (None, Some(_)) => std::cmp::Ordering::Greater,
-                (None, None) => std::cmp::Ordering::Equal,
-            });
-    }
-
-    order.into_iter().map(|k| map.remove(&k).unwrap()).collect()
-}
-
-// ---------------------------------------------------------------------------
-// Bar helpers
-// ---------------------------------------------------------------------------
-
-/// Choose the style for a bar based on utilization thresholds.
-/// green < 0.30, yellow 0.30–0.80, red ≥ 0.80, dim for None.
-fn bar_style(util: Option<f64>) -> Style {
-    match util {
-        None => th::PLAN_NOTE,
-        Some(u) if u < 0.30 => th::PLAN_BAR_GREEN,
-        Some(u) if u < 0.80 => th::PLAN_BAR_YELLOW,
-        _ => th::PLAN_BAR_RED,
-    }
-}
-
-/// Build a fixed-width bar as two styled `Span`s (filled + empty).
-/// Width is the total char width of the bar.
-fn bar_spans(util: Option<f64>, width: usize) -> [Span<'static>; 2] {
-    let filled = util
-        .map(|u| (u.clamp(0.0, 1.0) * width as f64).round() as usize)
-        .unwrap_or(0);
-    let empty = width.saturating_sub(filled);
-    let style = bar_style(util);
-    [
-        Span::styled("█".repeat(filled), style),
-        Span::styled("░".repeat(empty), th::PLAN_NOTE),
-    ]
-}
-
-/// Format a DateTime<Utc> into local time as "Mon DD, HH:MM AM/PM".
-fn format_local(ts: DateTime<Utc>) -> String {
-    let local: DateTime<Local> = ts.into();
-    local.format("%a %b %-d, %-I:%M %p").to_string()
-}
-
-fn relative_since(ts: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = (now - ts).num_seconds().max(0);
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Render entry point
-// ---------------------------------------------------------------------------
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Subscription Details ");
+    let outer_block = Block::default().borders(Borders::ALL).title(" Quota ");
     let inner = outer_block.inner(area);
     frame.render_widget(outer_block, area);
 
-    let merged = merge_plans(app.plan_usage());
+    match app.quota_state() {
+        QuotaState::Idle => {
+            render_centered(frame, inner, "Press r to load quota data");
+            return;
+        }
+        QuotaState::Loading => {
+            render_centered(frame, inner, "Fetching quota data\u{2026}");
+            return;
+        }
+        QuotaState::Error(msg) => {
+            render_centered(frame, inner, &format!("Error: {msg}"));
+            return;
+        }
+        QuotaState::Ready => {}
+    }
 
-    if merged.is_empty() {
-        let p = Paragraph::new(Span::styled("(no subscription data)", th::PLAN_EMPTY));
-        frame.render_widget(p, inner);
+    if app.quota_slots().is_empty() {
+        render_centered(frame, inner, "No quota data");
         return;
     }
 
-    // Split inner area: 40% list | 60% details.
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(inner);
 
-    // Clamp selected against merged list length (raw count may exceed merged count).
-    let selected = app.plan_selected().min(merged.len().saturating_sub(1));
-
-    render_list(frame, panes[0], &merged, selected, app);
-    render_details(frame, panes[1], &merged, selected, app);
+    render_list(frame, panes[0], app);
+    render_details(frame, panes[1], app);
 }
 
-// ---------------------------------------------------------------------------
-// Left pane: subscription list
-// ---------------------------------------------------------------------------
+fn render_centered(frame: &mut Frame<'_>, area: Rect, msg: &str) {
+    let p = Paragraph::new(msg)
+        .style(th::QUOTA_TITLE)
+        .alignment(Alignment::Center);
+    frame.render_widget(p, area);
+}
 
-fn render_list(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    merged: &[MergedPlan<'_>],
-    selected: usize,
-    app: &App,
-) {
-    const BAR_WIDTH: usize = 20;
+fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    use crate::tui::app::quota::preferred_window;
+    use crate::tui::widgets::quota_bar::{bar_spans, error_token, status_glyph};
 
-    let items: Vec<ListItem> = merged
-        .iter()
-        .enumerate()
-        .map(|(i, mp)| {
-            let util = mp
-                .windows
-                .iter()
-                .filter_map(|w| w.reset_at.map(|t| (t, w.utilization)))
-                .min_by_key(|(t, _)| *t)
-                .and_then(|(_, util)| util)
-                .or_else(|| mp.windows.iter().find_map(|w| w.utilization));
+    const BAR_WIDTH: usize = 10;
 
-            let pct_str = util
-                .map(|u| format!("{:>3.0}%", u * 100.0))
-                .unwrap_or_else(|| "  - ".to_string());
+    let slots = app.quota_slots();
+    let selected = app.selected_provider();
 
-            let name_style = if i == selected {
-                th::PLAN_SELECTED
+    let mut lines: Vec<Line<'_>> = Vec::with_capacity(slots.len());
+    for (i, slot) in slots.iter().enumerate() {
+        let is_selected = i == selected;
+        let stale = !slot.current.ok && slot.last_good.is_some();
+        let errored = !slot.current.ok && slot.last_good.is_none();
+        let loading = slot.current.usage.is_none() && slot.current.ok;
+
+        let glyph = status_glyph(slot.current.ok, slot.last_good.is_some(), loading);
+        let name_suffix = if stale { " \u{2020}" } else { "" };
+        let prefix = format!(
+            "{glyph} {name}{name_suffix}  ",
+            name = slot.current.provider_name
+        );
+
+        let body: Vec<Span<'_>> = if errored {
+            let token = slot
+                .current
+                .error
+                .as_ref()
+                .map(error_token)
+                .unwrap_or_else(|| "err".into());
+            vec![Span::raw(format!("— {token}"))]
+        } else if loading {
+            vec![Span::raw("— loading\u{2026}")]
+        } else {
+            let effective = if stale {
+                slot.last_good.as_ref().unwrap_or(&slot.current)
             } else {
-                th::PLAN_LABEL
+                &slot.current
             };
-
-            let [filled_span, empty_span] = bar_spans(util, BAR_WIDTH);
-
-            let has_logo = mp
-                .clients
-                .first()
-                .map(|c| app.logo(*c).is_some())
-                .unwrap_or(false);
-            let name_prefix = if has_logo { "   " } else { "  " };
-
-            let bar_line = Line::from(vec![
-                Span::raw("  "),
-                filled_span,
-                empty_span,
-                Span::raw(format!(" {pct_str}")),
-            ]);
-
-            ListItem::new(vec![
-                Line::from(vec![
-                    Span::raw(name_prefix),
-                    Span::styled(mp.subscription_name.clone(), name_style),
-                ]),
-                bar_line,
-            ])
-        })
-        .collect();
-
-    let list = List::new(items);
-    frame.render_widget(list, area);
-
-    for (i, mp) in merged.iter().enumerate() {
-        if let Some(client) = mp.clients.first() {
-            if let Some(proto) = app.logo(*client) {
-                let y = area.y + (i as u16) * 2;
-                if y + 1 > area.y + area.height {
-                    break;
-                }
-                let logo_rect = ratatui::layout::Rect {
-                    x: area.x + 1,
-                    y,
-                    width: 1,
-                    height: 1,
-                };
-                let img_widget = ratatui_image::Image::new(proto);
-                frame.render_widget(img_widget, logo_rect);
+            match effective
+                .usage
+                .as_ref()
+                .and_then(|u| preferred_window(effective.provider_id, u))
+            {
+                None => vec![Span::raw("—")],
+                Some((label, w)) => match w.used_percent {
+                    Some(p) => {
+                        let [filled, empty] = bar_spans(Some(p), BAR_WIDTH, stale);
+                        vec![Span::raw(format!("{label}  {p:>3.0}%  ")), filled, empty]
+                    }
+                    None => {
+                        let label_text = w.value_label.clone().unwrap_or_else(|| "—".into());
+                        vec![Span::raw(format!("{label}  {label_text}"))]
+                    }
+                },
             }
-        }
+        };
+
+        let mut spans = vec![Span::raw(prefix)];
+        spans.extend(body);
+        let line = Line::from(spans);
+
+        let line = if is_selected {
+            Line::from(
+                line.spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content.to_string(), s.style.patch(th::QUOTA_SELECTED)))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            line
+        };
+        lines.push(line);
     }
+
+    let p = Paragraph::new(lines);
+    frame.render_widget(p, area);
 }
 
-// ---------------------------------------------------------------------------
-// Right pane: details
-// ---------------------------------------------------------------------------
+fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    const BAR_WIDTH: usize = 10;
 
-fn render_details(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    merged: &[MergedPlan<'_>],
-    selected: usize,
-    app: &App,
-) {
-    let now = Utc::now();
-    let mp = match merged.get(selected) {
-        Some(m) => m,
+    let slots = app.quota_slots();
+    let sel = app.selected_provider();
+    let slot = match slots.get(sel) {
+        Some(s) => s,
         None => return,
     };
 
-    let bar_width = (area.width as usize).saturating_sub(4).max(4);
+    let stale = !slot.current.ok && slot.last_good.is_some();
+    let error_only = !slot.current.ok && slot.last_good.is_none();
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut lines: Vec<Line<'_>> = Vec::new();
 
-    let mut header_spans: Vec<Span<'static>> = Vec::new();
-    if let Some(client) = mp.clients.first() {
-        if let Some(proto) = app.logo(*client) {
-            let logo_rect = ratatui::layout::Rect {
-                x: area.x + 1,
-                y: area.y,
-                width: 1,
-                height: 1,
-            };
-            let img_widget = ratatui_image::Image::new(proto);
-            frame.render_widget(img_widget, logo_rect);
-            header_spans.push(Span::raw(" "));
-        }
+    // Header: provider name + plan + login (from meta).
+    let mut header_parts = vec![slot.current.provider_name.to_string()];
+    if let Some(plan) = slot.current.meta.get("plan") {
+        header_parts.push(plan.clone());
     }
-    header_spans.push(Span::styled(mp.subscription_name.clone(), th::PLAN_LABEL));
-    lines.push(Line::from(header_spans));
-    lines.push(Line::from(""));
+    if let Some(login) = slot.current.meta.get("login") {
+        header_parts.push(login.clone());
+    }
+    lines.push(Line::from(Span::styled(
+        header_parts.join(" \u{00b7} "),
+        th::PLAN_LABEL,
+    )));
 
-    for w in &mp.windows {
-        // Note: `w.binding` is not displayed here; windows are ordered by reset_at
-        // so the binding window typically appears first naturally.
-        // Label + percentage on one line, right-aligned pct.
-        let pct_str = w
-            .utilization
-            .map(|u| format!("{:.0}%", u * 100.0))
-            .unwrap_or_else(|| "-".to_string());
-        let line_width = (area.width as usize).saturating_sub(2);
-        let label_width = line_width.saturating_sub(pct_str.len() + 1);
-        let label_line = format!(
-            "  {:<label_width$} {pct_str}",
-            w.label,
-            label_width = label_width,
+    // Stale banner.
+    if stale {
+        let err_label = slot
+            .current
+            .error
+            .as_ref()
+            .map(|e| format!("{:?}", e.kind))
+            .unwrap_or_else(|| "unknown".into());
+        let fetched_at_str = format_epoch_ms(
+            slot.last_good
+                .as_ref()
+                .map(|r| r.fetched_at)
+                .unwrap_or(slot.current.fetched_at),
         );
-        lines.push(Line::from(Span::styled(label_line, Style::new())));
-
-        // Bar line.
-        let [filled_span, empty_span] = bar_spans(w.utilization, bar_width);
-        lines.push(Line::from(vec![Span::raw("  "), filled_span, empty_span]));
-
-        // Reset line.
-        let reset_text = if let Some(ts) = w.reset_at {
-            format!("  Resets: {}", format_local(ts))
-        } else if let Some(hint) = &w.reset_hint {
-            format!("  {hint}")
-        } else {
-            "  (no reset time)".to_string()
-        };
-        lines.push(Line::from(Span::styled(reset_text, th::PLAN_NOTE)));
-        lines.push(Line::from(""));
-    }
-
-    if let Some(ts) = mp.last_limit_hit {
         lines.push(Line::from(Span::styled(
-            format!("  Last limit hit: {} ago", relative_since(ts, now)),
-            th::PLAN_NOTE,
+            format!("! Stale — data from {fetched_at_str} \u{00b7} last error: {err_label}"),
+            th::QUOTA_BAR_STALE,
         )));
     }
 
-    for note in &mp.notes {
-        lines.push(Line::from(Span::styled(format!("  {note}"), th::PLAN_NOTE)));
+    lines.push(Line::from(""));
+
+    if error_only {
+        let err = slot.current.error.as_ref();
+        let kind = err
+            .map(|e| format!("{:?}", e.kind))
+            .unwrap_or_else(|| "unknown".into());
+        let detail = err.map(|e| e.detail.clone()).unwrap_or_default();
+        lines.push(Line::from(Span::styled(
+            format!("Error: {kind}"),
+            th::QUOTA_BAR_CRIT,
+        )));
+        if !detail.is_empty() {
+            lines.push(Line::from(Span::raw(detail)));
+        }
+        let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(p, area);
+        return;
     }
+
+    // Effective usage (stale → last_good).
+    let effective = if stale {
+        slot.last_good.as_ref().unwrap_or(&slot.current)
+    } else {
+        &slot.current
+    };
+
+    if let Some(usage) = effective.usage.as_ref() {
+        for (label, w) in &usage.windows {
+            lines.push(window_line(label, w, BAR_WIDTH, stale));
+        }
+
+        // Google per-model windows.
+        if !usage.models.is_empty() {
+            lines.push(Line::from(""));
+            for (model, windows) in &usage.models {
+                for (wlabel, w) in windows {
+                    let label = format!("{model}  {wlabel}");
+                    lines.push(window_line(&label, w, BAR_WIDTH, stale));
+                }
+            }
+        }
+
+        // Extras.
+        if !usage.extras.is_empty() {
+            lines.push(Line::from(""));
+            for (name, extra) in &usage.extras {
+                lines.push(extra_line(name, extra));
+            }
+        }
+    }
+
+    // Fetched-at footer (right-aligned).
+    let footer = format!("fetched at {}", format_epoch_ms(effective.fetched_at));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(footer, th::PLAN_NOTE)).alignment(Alignment::Right));
 
     let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
     frame.render_widget(p, area);
 }
 
+fn window_line<'a>(
+    label: &str,
+    w: &'a agtop_core::quota::UsageWindow,
+    bar_width: usize,
+    stale: bool,
+) -> Line<'a> {
+    use crate::tui::widgets::quota_bar::bar_spans;
+    match w.used_percent {
+        Some(p) => {
+            let [filled, empty] = bar_spans(Some(p), bar_width, stale);
+            Line::from(vec![
+                Span::raw(format!("{label:<14}")),
+                filled,
+                empty,
+                Span::raw(format!("  {p:>3.0}%  {}", reset_suffix(w))),
+            ])
+        }
+        None => {
+            let text = w.value_label.clone().unwrap_or_else(|| "—".into());
+            Line::from(Span::raw(format!(
+                "{label:<14}  {text}  {}",
+                reset_suffix(w)
+            )))
+        }
+    }
+}
+
+fn reset_suffix(w: &agtop_core::quota::UsageWindow) -> String {
+    use chrono::Utc;
+    match w.reset_at {
+        None => "".into(),
+        Some(ms) => {
+            let now_ms = Utc::now().timestamp_millis();
+            let delta = ms - now_ms;
+            if delta < 0 {
+                return "resets (any moment)".into();
+            }
+            let secs = delta / 1000;
+            if secs < 3600 {
+                format!("resets in {}m", secs / 60)
+            } else if secs < 86_400 {
+                format!("resets in {}h {}m", secs / 3600, (secs % 3600) / 60)
+            } else {
+                format!("resets in {}d {}h", secs / 86_400, (secs % 86_400) / 3600)
+            }
+        }
+    }
+}
+
+fn extra_line<'a>(name: &'a str, extra: &'a agtop_core::quota::UsageExtra) -> Line<'a> {
+    use agtop_core::quota::UsageExtra;
+    match extra {
+        UsageExtra::OverageBudget {
+            monthly_limit,
+            used,
+            utilization,
+            currency,
+            enabled,
+        } => {
+            let cur = currency.clone().unwrap_or_else(|| "$".into());
+            let limit = monthly_limit.unwrap_or(0.0);
+            let used_v = used.unwrap_or(0.0);
+            let pct = utilization
+                .map(|u| format!(" ({u:.0}%)"))
+                .unwrap_or_default();
+            let status = if *enabled {
+                format!("enabled \u{00b7} {cur}{used_v:.2} used of {cur}{limit:.2}{pct}")
+            } else {
+                format!("disabled \u{00b7} limit {cur}{limit:.2}")
+            };
+            Line::from(Span::raw(format!("Overage  {status}")))
+        }
+        UsageExtra::PerToolCounts {
+            items,
+            total_cap,
+            reset_at: _,
+        } => {
+            let total = items.iter().map(|(_, n)| *n).sum::<u64>();
+            let cap = total_cap.map(|c| format!(" / {c}")).unwrap_or_default();
+            Line::from(Span::raw(format!("{name}  {total}{cap}")))
+        }
+        UsageExtra::KeyValue(kv) => {
+            let s = kv
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" \u{00b7} ");
+            Line::from(Span::raw(format!("{name}  {s}")))
+        }
+    }
+}
+
+fn format_epoch_ms(ms: i64) -> String {
+    use chrono::{DateTime, Local, Utc};
+    let utc: DateTime<Utc> = DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_default();
+    let local: DateTime<Local> = utc.into();
+    local.format("%H:%M:%S").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{ClientKind, PlanUsage, PlanWindow};
+    use agtop_core::quota::{ProviderId, ProviderResult, Usage, UsageWindow};
+    use indexmap::IndexMap;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
-    fn make_pu(label: &str, plan_name: Option<&str>) -> PlanUsage {
-        PlanUsage::new(
-            ClientKind::Claude,
-            label.to_string(),
-            plan_name.map(|s| s.to_string()),
-            Vec::new(),
-            None,
-            None,
-        )
+    pub(super) fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
+        let mut out = String::new();
+        let area = buf.area;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = buf.cell((x, y)).expect("cell in bounds");
+                out.push_str(cell.symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    pub(super) fn ok_result(id: ProviderId, usage: Usage) -> ProviderResult {
+        ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(usage),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
+    pub(super) fn make_usage(pairs: &[(&str, f64)]) -> Usage {
+        let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
+        for (k, p) in pairs {
+            windows.insert(
+                (*k).to_string(),
+                UsageWindow {
+                    used_percent: Some(*p),
+                    window_seconds: None,
+                    reset_at: None,
+                    value_label: None,
+                },
+            );
+        }
+        Usage {
+            windows,
+            models: Default::default(),
+            extras: Default::default(),
+        }
     }
 
     #[test]
-    fn canonical_name_prefers_plan_name() {
-        let pu = make_pu("Claude Code · Max 5x", Some("max_5x"));
-        assert_eq!(canonical_name(&pu), "max_5x");
+    fn idle_state_shows_placeholder() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::new();
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Press r"),
+            "idle placeholder missing:\n{contents}"
+        );
     }
 
     #[test]
-    fn canonical_name_strips_via_suffix() {
-        let pu = make_pu("Max 5x via Claude Code", None);
-        assert_eq!(canonical_name(&pu), "Max 5x");
+    fn ready_state_renders_block_title() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let r = ok_result(ProviderId::Claude, make_usage(&[("5h", 72.0)]));
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("Quota"), "block title missing");
+    }
+
+    use agtop_core::quota::{ErrorKind, QuotaError};
+
+    pub(super) fn err_result(id: ProviderId, status: u16) -> ProviderResult {
+        ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: false,
+            usage: None,
+            error: Some(QuotaError {
+                kind: ErrorKind::Http {
+                    status,
+                    retry_after: None,
+                },
+                detail: "".into(),
+            }),
+            fetched_at: 0,
+            meta: Default::default(),
+        }
     }
 
     #[test]
-    fn canonical_name_strips_agent_prefix() {
-        let pu = make_pu("Claude Code · Max 5x", None);
-        assert_eq!(canonical_name(&pu), "Max 5x");
+    fn left_list_shows_ok_provider_with_bar() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_result(
+            ProviderId::Claude,
+            make_usage(&[("5h", 72.0)]),
+        )]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("Claude"));
+        assert!(contents.contains("5h"));
+        assert!(contents.contains("72"));
+        assert!(contents.contains('\u{25a0}'));
+        assert!(
+            contents.contains('\u{25cf}'),
+            "ok glyph missing:\n{contents}"
+        );
     }
 
     #[test]
-    fn canonical_name_strips_opencode_prefix() {
-        let pu = make_pu("OpenCode · Max 5x", None);
-        assert_eq!(canonical_name(&pu), "Max 5x");
+    fn left_list_shows_error_provider() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.apply_quota_results(vec![err_result(ProviderId::Google, 401)]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("Google"));
+        assert!(contents.contains("401"));
+        assert!(
+            contents.contains('\u{2717}'),
+            "error glyph missing:\n{contents}"
+        );
     }
 
     #[test]
-    fn merge_deduplicates_same_subscription() {
-        let pu1 = make_pu("Max 5x via Claude Code", None);
-        let pu2 = make_pu("Max 5x via OpenCode", None);
-        let plans = [pu1, pu2];
-        let merged = merge_plans(&plans);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].subscription_name, "Max 5x");
+    fn right_pane_lists_all_windows_for_selected_provider() {
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let r = ok_result(
+            ProviderId::Claude,
+            make_usage(&[("5h", 72.0), ("7d", 45.0), ("7d-sonnet", 12.0)]),
+        );
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("5h"), "5h missing");
+        assert!(contents.contains("7d"), "7d missing");
+        assert!(contents.contains("sonnet"), "7d-sonnet missing");
+        assert!(contents.contains("72"));
+        assert!(contents.contains("45"));
+        assert!(contents.contains("12"));
     }
 
     #[test]
-    fn merge_keeps_two_different_subscriptions() {
-        let pu1 = make_pu("Max 5x via Claude Code", None);
-        let pu2 = make_pu("ChatGPT Plus", None);
-        let plans = [pu1, pu2];
-        let merged = merge_plans(&plans);
-        assert_eq!(merged.len(), 2);
+    fn right_pane_stale_banner_appears_when_stale() {
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let id = ProviderId::Claude;
+        app.apply_quota_results(vec![ok_result(id, make_usage(&[("5h", 72.0)]))]);
+        app.apply_quota_results(vec![err_result(id, 503)]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Stale"),
+            "stale banner missing:\n{contents}"
+        );
     }
 
     #[test]
-    fn merge_window_dedup_keeps_newer_reset() {
-        use chrono::TimeZone;
-
-        let t1 = Utc.with_ymd_and_hms(2026, 4, 18, 10, 0, 0).unwrap();
-        let t2 = Utc.with_ymd_and_hms(2026, 4, 18, 12, 0, 0).unwrap();
-
-        let mut pu1 = make_pu("Max via Claude Code", None);
-        pu1.windows.push(PlanWindow::new(
-            "5h".to_string(),
-            Some(0.5),
-            Some(t1),
-            None,
-            false,
-        ));
-
-        let mut pu2 = make_pu("Max via OpenCode", None);
-        pu2.windows.push(PlanWindow::new(
-            "5h".to_string(),
-            Some(0.7),
-            Some(t2),
-            None,
-            false,
-        ));
-
-        let plans = [pu1, pu2];
-        let merged = merge_plans(&plans);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].windows.len(), 1);
-        // t2 is more recent, so the window with utilization 0.7 should be kept.
-        assert!((merged[0].windows[0].utilization.unwrap() - 0.7).abs() < 1e-9);
+    fn right_pane_error_only_state_shows_detail() {
+        let backend = TestBackend::new(120, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.apply_quota_results(vec![err_result(ProviderId::Codex, 401)]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Error"),
+            "error heading missing:\n{contents}"
+        );
+        assert!(contents.contains("401"), "status code missing:\n{contents}");
     }
 
     #[test]
-    fn bar_style_green_below_30() {
-        assert_eq!(bar_style(Some(0.29)), th::PLAN_BAR_GREEN);
-        assert_eq!(bar_style(Some(0.0)), th::PLAN_BAR_GREEN);
+    fn google_provider_renders_per_model() {
+        let backend = TestBackend::new(120, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        let mut m1: IndexMap<String, UsageWindow> = IndexMap::new();
+        m1.insert(
+            "daily".into(),
+            UsageWindow {
+                used_percent: Some(31.0),
+                window_seconds: Some(86400),
+                reset_at: None,
+                value_label: None,
+            },
+        );
+        let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
+        models.insert("gemini/gemini-2.5-pro".into(), m1);
+
+        let usage = Usage {
+            windows: Default::default(),
+            models,
+            extras: Default::default(),
+        };
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("gemini-2.5-pro"),
+            "model name missing:\n{contents}"
+        );
+        assert!(contents.contains("31"), "percentage missing:\n{contents}");
     }
 
     #[test]
-    fn bar_style_yellow_30_to_80() {
-        assert_eq!(bar_style(Some(0.30)), th::PLAN_BAR_YELLOW);
-        assert_eq!(bar_style(Some(0.79)), th::PLAN_BAR_YELLOW);
+    fn overage_budget_disabled_renders_correctly() {
+        use agtop_core::quota::UsageExtra;
+
+        let backend = TestBackend::new(120, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        let mut extras: IndexMap<String, agtop_core::quota::UsageExtra> = IndexMap::new();
+        extras.insert(
+            "extra_usage".into(),
+            UsageExtra::OverageBudget {
+                monthly_limit: Some(0.0),
+                used: Some(0.0),
+                utilization: Some(0.0),
+                currency: Some("$".into()),
+                enabled: false,
+            },
+        );
+        let usage = Usage {
+            windows: make_usage(&[("5h", 50.0)]).windows,
+            models: Default::default(),
+            extras,
+        };
+        let r = ok_result(ProviderId::Claude, usage);
+        app.apply_quota_results(vec![r]);
+
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("Overage"), "overage line missing");
+        assert!(contents.contains("disabled"), "disabled status missing");
     }
 
     #[test]
-    fn bar_style_red_at_or_above_80() {
-        assert_eq!(bar_style(Some(0.80)), th::PLAN_BAR_RED);
-        assert_eq!(bar_style(Some(1.0)), th::PLAN_BAR_RED);
-    }
+    fn overage_budget_enabled_shows_used_value() {
+        use agtop_core::quota::UsageExtra;
 
-    #[test]
-    fn bar_spans_correct_char_counts() {
-        let [filled, empty] = bar_spans(Some(0.5), 10);
-        // 50% of 10 = 5 filled, 5 empty.
-        assert_eq!(filled.content.chars().count(), 5);
-        assert_eq!(empty.content.chars().count(), 5);
-    }
+        let backend = TestBackend::new(120, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
 
-    #[test]
-    fn bar_style_none_is_dim() {
-        assert_eq!(bar_style(None), th::PLAN_NOTE);
-    }
+        let mut extras: IndexMap<String, agtop_core::quota::UsageExtra> = IndexMap::new();
+        extras.insert(
+            "extra_usage".into(),
+            UsageExtra::OverageBudget {
+                monthly_limit: Some(50.0),
+                used: Some(12.34),
+                utilization: Some(24.0),
+                currency: Some("$".into()),
+                enabled: true,
+            },
+        );
+        let usage = Usage {
+            windows: make_usage(&[("5h", 30.0)]).windows,
+            models: Default::default(),
+            extras,
+        };
+        let r = ok_result(ProviderId::Claude, usage);
+        app.apply_quota_results(vec![r]);
 
-    #[test]
-    fn canonical_name_passthrough_when_no_prefix_or_suffix() {
-        let pu = make_pu("Pro Plan", None);
-        assert_eq!(canonical_name(&pu), "Pro Plan");
-    }
-
-    #[test]
-    fn canonical_name_empty_plan_name_falls_through_to_label() {
-        // plan_name is Some("") — should fall through to label stripping.
-        let pu = make_pu("Claude Code · Max 5x", Some(""));
-        assert_eq!(canonical_name(&pu), "Max 5x");
-    }
-
-    #[test]
-    fn bar_spans_rounding() {
-        // 33% of 10 = 3.3 → rounds to 3 filled, 7 empty.
-        let [filled, empty] = bar_spans(Some(0.33), 10);
-        assert_eq!(filled.content.chars().count(), 3);
-        assert_eq!(empty.content.chars().count(), 7);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("12.34"),
+            "used value missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("50.00"),
+            "limit value missing:\n{contents}"
+        );
     }
 }
