@@ -561,6 +561,13 @@ fn cached_analyze_all(
 mod tests {
     use super::*;
 
+    // These three quota-loop integration tests each spawn a real tokio runtime
+    // that competes for blocking threads with other parallel tests.  Acquire
+    // this lock at the start of each test so they run sequentially even when
+    // `cargo test` uses multiple threads (the default).  This is equivalent to
+    // `#[serial]` from the `serial_test` crate without adding a dependency.
+    static QUOTA_LOOP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     /// Smoke test: the worker should publish *something* within a short
     /// window. We use an empty client list to keep the test hermetic
     /// — a real `default_clients()` run can take multiple seconds
@@ -833,6 +840,7 @@ mod tests {
 
     #[test]
     fn quota_loop_honors_manual_trigger() {
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
@@ -873,6 +881,7 @@ mod tests {
 
     #[test]
     fn quota_loop_publishes_snapshot_after_start() {
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
@@ -902,6 +911,7 @@ mod tests {
 
     #[test]
     fn quota_loop_stops_on_stop_cmd() {
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
