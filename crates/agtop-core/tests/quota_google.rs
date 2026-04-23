@@ -50,7 +50,7 @@ fn is_configured_false_when_no_sources() {
 
 #[test]
 #[serial]
-fn fetch_gemini_only_queries_both_endpoints() {
+fn fetch_gemini_free_tier_surfaces_tier_and_project() {
     // Antigravity disabled by pointing the env override at a non-existent file.
     std::env::set_var(
         "AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS",
@@ -58,23 +58,56 @@ fn fetch_gemini_only_queries_both_endpoints() {
     );
     let auth = auth_full();
     let http = FakeHttp::new();
-    // Call 1: :retrieveUserQuota (Gemini).
-    http.push_ok(200, &load_bytes("google/retrieveUserQuota_gemini.json"));
-    // Call 2: :fetchAvailableModels — first sandbox fails, primary succeeds.
-    http.push_ok(404, b"{}");
-    http.push_ok(404, b"{}");
-    http.push_ok(200, &load_bytes("google/fetchAvailableModels_gemini.json"));
+    // Free-tier flow: loadCodeAssist only. No quota buckets fetched since
+    // there's no paidTier. Mirrors what Gemini CLI itself does.
+    http.push_ok(200, &load_bytes("google/loadCodeAssist_free_tier.json"));
 
     let r = fetch_impl(&auth, &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
 
     assert!(r.ok, "{:?}", r.error);
     assert_eq!(r.provider_id, ProviderId::Google);
-    let u = r.usage.unwrap();
-
-    // Top-level windows empty — Google only emits per-model.
+    let u = r.usage.as_ref().unwrap();
     assert!(u.windows.is_empty());
-    // Both sources contribute models under "gemini/..." prefix.
+    // Free-tier has no per-model quota windows — Gemini CLI itself skips the
+    // retrieveUserQuota call when there's no onboarded paid project.
+    assert!(u.models.is_empty());
+    // Meta surfaces the tier label and project id so the TUI can render a
+    // helpful row instead of an error.
+    assert_eq!(
+        r.meta.get("tier").map(String::as_str),
+        Some("Gemini Code Assist for individuals")
+    );
+    assert_eq!(
+        r.meta.get("project_id").map(String::as_str),
+        Some("pure-pentameter-m2hpz")
+    );
+    assert!(r
+        .meta
+        .get("plan")
+        .unwrap()
+        .contains("Gemini Code Assist for individuals"));
+}
+
+#[test]
+#[serial]
+fn fetch_gemini_paid_tier_fetches_quota_buckets() {
+    std::env::set_var(
+        "AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS",
+        "/tmp/does_not_exist_agtop_test",
+    );
+    let auth = auth_full();
+    let http = FakeHttp::new();
+    // Paid-tier flow: loadCodeAssist, then retrieveUserQuota using the
+    // onboarded project id.
+    http.push_ok(200, &load_bytes("google/loadCodeAssist_paid_tier.json"));
+    http.push_ok(200, &load_bytes("google/retrieveUserQuota_gemini.json"));
+
+    let r = fetch_impl(&auth, &http, NOW_MS);
+    std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
+
+    assert!(r.ok, "{:?}", r.error);
+    let u = r.usage.unwrap();
     assert!(u.models.contains_key("gemini/gemini-2.5-pro"));
     assert!(u.models.contains_key("gemini/gemini-2.5-flash"));
     let pro = &u.models["gemini/gemini-2.5-pro"];
@@ -90,22 +123,17 @@ fn fetch_aggregates_both_sources_when_both_configured() {
 
     let auth = auth_full();
     let http = FakeHttp::new();
-    // Gemini path.
-    http.push_ok(200, &load_bytes("google/retrieveUserQuota_gemini.json"));
-    http.push_ok(200, &load_bytes("google/fetchAvailableModels_gemini.json"));
-    // Antigravity path:
-    // - Antigravity source has no access_token (its access_token is None by
-    //   design — we don't refresh). So the Antigravity source produces an
-    //   error and never calls the http client. Nothing to queue.
+    // Free-tier loadCodeAssist for the Gemini source. Antigravity source has
+    // no access token (we don't refresh), so it never hits the http client.
+    http.push_ok(200, &load_bytes("google/loadCodeAssist_free_tier.json"));
 
     let r = fetch_impl(&auth, &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
 
-    // Partial success: Gemini succeeded, Antigravity failed silently.
+    // Partial success: Gemini succeeded, Antigravity contributes nothing.
     assert!(r.ok);
-    let u = r.usage.unwrap();
-    assert!(u.models.contains_key("gemini/gemini-2.5-pro"));
-    // Meta records both sources being present, even when one failed.
+    // Meta records both sources being present, even when one contributed
+    // no data.
     let sources = r.meta.get("sources").unwrap();
     assert!(sources.contains("Gemini"));
     assert!(sources.contains("Antigravity"));
@@ -120,12 +148,9 @@ fn fetch_all_sources_fail_returns_error() {
     );
     let auth = auth_full();
     let http = FakeHttp::new();
-    // :retrieveUserQuota 401.
+    // :loadCodeAssist returns 401 — token expired. Our policy is to surface
+    // the HTTP status rather than refresh.
     http.push_ok(401, b"{\"error\":\"unauthorized\"}");
-    // :fetchAvailableModels: all three fallback URLs return 401.
-    http.push_ok(401, b"nope");
-    http.push_ok(401, b"nope");
-    http.push_ok(401, b"nope");
 
     let r = fetch_impl(&auth, &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");

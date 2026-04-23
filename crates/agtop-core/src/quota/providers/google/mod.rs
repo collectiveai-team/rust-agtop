@@ -1,16 +1,30 @@
 //! Google (Gemini CLI + Antigravity) quota provider.
 //!
-//! See spec section 3.5 for the full behaviour. Key points:
-//! - Reads credentials from TWO sources (Gemini CLI + Antigravity) and
-//!   collects results from both. If at least one source succeeds, the
-//!   overall result is ok=true with partial data.
-//! - Gemini source calls `:retrieveUserQuota` and merges the result.
-//!   Both sources call `:fetchAvailableModels` (with a 3-URL fallback chain).
-//! - NO token refresh. If the stored access token is expired, the API
-//!   returns 401 and we surface it as ErrorKind::Http{401}. The TUI's
-//!   last-known-good policy provides the UX buffer.
-//! - Per-model windows emitted under `Usage.models`, keyed by
-//!   `<sourceId>/<modelName>`.
+//! Behaviour (revised — see the upstream Gemini CLI source for the reference
+//! flow):
+//!
+//! 1. For the Gemini source, we start by calling `:loadCodeAssist` in
+//!    `HEALTH_CHECK` mode. That endpoint works for both free-tier and paid
+//!    accounts without a caller-supplied project id and returns the account's
+//!    current tier plus its onboarded `cloudaicompanionProject`.
+//! 2. If the account is on a paid tier (i.e. `paidTier` is present in the
+//!    response), we additionally call `:retrieveUserQuota` with the project
+//!    id we just discovered — that's the exact sequence Gemini CLI uses for
+//!    paid tiers. Per-bucket quota becomes `Usage.models` entries.
+//! 3. For free-tier accounts, Gemini CLI itself does **not** query quota
+//!    (see the guard `if (!codeAssistServer.projectId) return` in the
+//!    upstream source). We therefore mark the provider result as OK with an
+//!    empty Usage, and surface the tier + project id via `meta` so the TUI
+//!    can render a helpful row instead of a 403 error.
+//! 4. Antigravity is kept as a second source. Because its on-disk
+//!    `accounts.json` never stores a live access token — and we explicitly
+//!    don't refresh tokens — the Antigravity source generally contributes
+//!    nothing to the aggregated result in practice.
+//!
+//! We no longer call `:fetchAvailableModels`: it isn't used by Gemini CLI
+//! itself and returns 403 for every free-tier caller we tested against.
+//! Per-model windows (when present) come exclusively from
+//! `:retrieveUserQuota` buckets.
 
 pub mod api;
 pub mod auth;
@@ -63,6 +77,8 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
     let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
     let mut last_error: Option<QuotaError> = None;
     let mut any_success = false;
+    let mut tier_label: Option<String> = None;
+    let mut project_id_seen: Option<String> = None;
 
     for src in &sources {
         let token = match src.access_token.as_deref() {
@@ -81,26 +97,77 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
                 continue;
             }
         };
-        let project = src.project_id.as_deref().or(Some(DEFAULT_PROJECT_ID));
 
         let mut source_progress = false;
 
-        // Gemini-only: retrieve buckets.
         if src.source_id == SourceId::Gemini {
-            match api::fetch_quota_buckets(http, token, project) {
+            // Step 1: discover the account's tier and onboarded project via
+            // :loadCodeAssist. This call is what Gemini CLI itself runs.
+            match api::load_code_assist(http, token) {
                 Ok(body) => {
-                    match serde_json::from_slice::<transforms::RetrieveUserQuotaResponse>(&body) {
+                    match serde_json::from_slice::<transforms::LoadCodeAssistResponse>(&body) {
                         Ok(parsed) => {
-                            for bucket in parsed.buckets.iter() {
-                                if let Some((scoped, label, window)) =
-                                    transforms::transform_quota_bucket(
-                                        bucket,
-                                        src.source_id,
-                                        now_ms,
-                                    )
-                                {
-                                    models.entry(scoped).or_default().insert(label, window);
-                                    source_progress = true;
+                            source_progress = true;
+                            if let Some(ref tier) = parsed.current_tier {
+                                if let Some(ref name) = tier.name {
+                                    tier_label = Some(name.clone());
+                                } else if let Some(ref id) = tier.id {
+                                    tier_label = Some(id.clone());
+                                }
+                            }
+                            if let Some(ref pid) = parsed.cloudaicompanion_project {
+                                project_id_seen = Some(pid.clone());
+                            }
+
+                            // Step 2: paid tier only — fetch per-model buckets
+                            // using the onboarded project id. Gemini CLI skips
+                            // this for free-tier users, so we skip it too.
+                            let is_paid = parsed.paid_tier.is_some();
+                            let project = src
+                                .project_id
+                                .as_deref()
+                                .or(parsed.cloudaicompanion_project.as_deref());
+                            if is_paid {
+                                match api::fetch_quota_buckets(http, token, project) {
+                                    Ok(body) => {
+                                        match serde_json::from_slice::<
+                                            transforms::RetrieveUserQuotaResponse,
+                                        >(&body)
+                                        {
+                                            Ok(parsed) => {
+                                                for bucket in parsed.buckets.iter() {
+                                                    if let Some((scoped, label, window)) =
+                                                        transforms::transform_quota_bucket(
+                                                            bucket,
+                                                            src.source_id,
+                                                            now_ms,
+                                                        )
+                                                    {
+                                                        models
+                                                            .entry(scoped)
+                                                            .or_default()
+                                                            .insert(label, window);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                last_error = Some(QuotaError {
+                                                    kind: ErrorKind::Parse,
+                                                    detail: format!(
+                                                        "{}: retrieveUserQuota parse failure: {e}",
+                                                        src.source_label
+                                                    ),
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        last_error = Some(with_source_prefix(
+                                            e,
+                                            &src.source_label,
+                                            ":retrieveUserQuota",
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -108,7 +175,7 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
                             last_error = Some(QuotaError {
                                 kind: ErrorKind::Parse,
                                 detail: format!(
-                                    "{}: retrieveUserQuota parse failure: {e}",
+                                    "{}: loadCodeAssist parse failure: {e}",
                                     src.source_label
                                 ),
                             });
@@ -116,48 +183,18 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
                     }
                 }
                 Err(e) => {
-                    last_error = Some(with_source_prefix(
-                        e,
-                        &src.source_label,
-                        ":retrieveUserQuota",
-                    ));
+                    last_error = Some(with_source_prefix(e, &src.source_label, ":loadCodeAssist"));
                 }
             }
         }
 
-        // Both sources: fetch available models.
-        match api::fetch_available_models(http, token, project) {
-            Ok(body) => match serde_json::from_slice::<transforms::FetchModelsResponse>(&body) {
-                Ok(parsed) => {
-                    for (model_name, data) in parsed.models.iter() {
-                        let (scoped, label, window) = transforms::transform_model_data(
-                            model_name,
-                            data,
-                            src.source_id,
-                            now_ms,
-                        );
-                        models.entry(scoped).or_default().insert(label, window);
-                        source_progress = true;
-                    }
-                }
-                Err(e) => {
-                    last_error = Some(QuotaError {
-                        kind: ErrorKind::Parse,
-                        detail: format!(
-                            "{}: fetchAvailableModels parse failure: {e}",
-                            src.source_label
-                        ),
-                    });
-                }
-            },
-            Err(e) => {
-                last_error = Some(with_source_prefix(
-                    e,
-                    &src.source_label,
-                    ":fetchAvailableModels",
-                ));
-            }
-        }
+        // Antigravity note: the source is kept around so the UI can still
+        // display "Gemini, Antigravity" in the plan label when accounts.json
+        // is present. We do not call any endpoint for it here — historically
+        // that path was driven by :fetchAvailableModels, which we've removed
+        // because it's 403 for every caller we've observed. Antigravity
+        // never stores a live access token on disk, so in practice this
+        // branch is also a no-op.
 
         if source_progress {
             any_success = true;
@@ -184,9 +221,21 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
         Some(labels.join(","))
     };
     let plan_label = crate::quota::subscription::google_plan(raw_sources.as_deref());
+    // Append tier info (e.g. "free-tier") so the TUI subtitle is informative
+    // even when there's no quantitative quota data to display.
+    let plan_label = match tier_label.as_deref() {
+        Some(t) if !t.is_empty() => format!("{plan_label} ({t})"),
+        _ => plan_label,
+    };
     meta.insert("plan".to_string(), plan_label);
     if let Some(ref s) = raw_sources {
         meta.insert("sources".to_string(), s.clone());
+    }
+    if let Some(ref t) = tier_label {
+        meta.insert("tier".to_string(), t.clone());
+    }
+    if let Some(ref pid) = project_id_seen {
+        meta.insert("project_id".to_string(), pid.clone());
     }
 
     let usage = Usage {

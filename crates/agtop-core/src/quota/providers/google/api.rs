@@ -18,12 +18,37 @@ pub const AUTOPUSH_SANDBOX_HOST: &str = "https://autopush-cloudcode-pa.sandbox.g
 
 pub const RETRIEVE_QUOTA_PATH: &str = "/v1internal:retrieveUserQuota";
 pub const FETCH_MODELS_PATH: &str = "/v1internal:fetchAvailableModels";
+pub const LOAD_CODE_ASSIST_PATH: &str = "/v1internal:loadCodeAssist";
 
 pub const USER_AGENT: &str = "antigravity/1.11.5 windows/amd64";
 pub const X_GOOG_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
 pub const CLIENT_METADATA: &str = "{\"ideType\":\"IDE_UNSPECIFIED\",\"platform\":\"PLATFORM_UNSPECIFIED\",\"pluginType\":\"GEMINI\"}";
 
 pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Call `:loadCodeAssist` in `HEALTH_CHECK` mode. Used to discover the
+/// account's tier and `cloudaicompanionProject`.
+///
+/// This is the same call Gemini CLI makes at startup (see the upstream
+/// source: `refreshAvailableCredits` in `packages/core/src/code_assist`).
+/// It works for both free-tier and paid-tier users without a caller-supplied
+/// project id.
+///
+/// The HEALTH_CHECK mode tells the server we want current tier/quota info
+/// without triggering onboarding. Returns raw bytes on 2xx.
+pub fn load_code_assist(http: &dyn HttpClient, access_token: &str) -> Result<Vec<u8>, QuotaError> {
+    let url = format!("{PRIMARY_HOST}{LOAD_CODE_ASSIST_PATH}");
+    let body = serde_json::to_vec(&serde_json::json!({
+        "metadata": {
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI",
+        },
+        "mode": "HEALTH_CHECK",
+    }))
+    .unwrap();
+    request_once(http, &url, access_token, body)
+}
 
 /// Fetch quota buckets. Only meaningful for the Gemini source.
 /// Returns Ok(response bytes) or Err(QuotaError). 2xx only.

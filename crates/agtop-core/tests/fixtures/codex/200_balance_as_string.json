@@ -1,0 +1,14 @@
+{
+  "rate_limit": {
+    "primary_window":   { "used_percent": 0, "limit_window_seconds": 18000,  "reset_at": 1776939588 },
+    "secondary_window": { "used_percent": 0, "limit_window_seconds": 604800, "reset_at": 1777526388 }
+  },
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": "0",
+    "approx_local_messages": [0, 0],
+    "approx_cloud_messages": [0, 0]
+  }
+}

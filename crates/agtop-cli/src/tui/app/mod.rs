@@ -715,6 +715,9 @@ impl App {
             let idx = client_idx(a.summary.client);
             let tok = a.tokens.grand_total();
             tokens_by_client[idx] += tok;
+            for c in &a.children {
+                tokens_by_client[idx] += c.tokens.grand_total();
+            }
         }
         self.history.push(UsagePoint {
             ts: Utc::now(),

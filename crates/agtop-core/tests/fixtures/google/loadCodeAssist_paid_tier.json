@@ -1,0 +1,15 @@
+{
+  "_comment": "Synthetic paid-tier response. paidTier.availableCredits comes as strings (matches gemini-cli parsing at parseInt).",
+  "currentTier": {
+    "id": "standard-tier",
+    "name": "Gemini Code Assist"
+  },
+  "cloudaicompanionProject": "my-paid-project",
+  "paidTier": {
+    "id": "standard-tier",
+    "name": "Gemini Code Assist",
+    "availableCredits": [
+      { "creditType": "G1_CREDIT", "creditAmount": "100000" }
+    ]
+  }
+}

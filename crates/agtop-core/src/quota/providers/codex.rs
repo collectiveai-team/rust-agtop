@@ -136,12 +136,14 @@ pub(crate) fn parse(body: &[u8]) -> ProviderResult {
     }
 
     if let Some(credits) = raw.credits.as_ref() {
-        let label = if credits.unlimited == Some(true) {
+        let unlimited = credits
+            .get("unlimited")
+            .and_then(serde_json::Value::as_bool);
+        let balance = extract_f64(credits, "balance");
+        let label = if unlimited == Some(true) {
             Some("Unlimited".to_string())
         } else {
-            credits
-                .balance
-                .map(|balance| format!("${:.2} remaining", balance))
+            balance.map(|b| format!("${:.2} remaining", b))
         };
         // Only emit the credits window if we have something to say.
         if label.is_some() {
@@ -179,14 +181,10 @@ struct RawResponse {
     // Nested rate-limit windows (spec shape: primary_window / secondary_window).
     // Kept as Value to tolerate real-API shape divergence.
     rate_limit: Option<serde_json::Value>,
-    credits: Option<Credits>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct Credits {
-    balance: Option<f64>,
-    unlimited: Option<bool>,
+    // Also kept as Value: the real API returns `balance` as a JSON string
+    // (e.g. "0") on some plan tiers, which breaks a strict Option<f64>
+    // deserialize. Extraction helpers below tolerate both number and string.
+    credits: Option<serde_json::Value>,
 }
 
 /// Extract an `f64` from a JSON value that may be a number or a numeric string.
@@ -225,6 +223,8 @@ mod tests {
     const SAMPLE: &[u8] = include_bytes!("../../../tests/fixtures/codex/200_sample.json");
     const UNLIMITED: &[u8] =
         include_bytes!("../../../tests/fixtures/codex/200_unlimited_credits.json");
+    const BALANCE_AS_STRING: &[u8] =
+        include_bytes!("../../../tests/fixtures/codex/200_balance_as_string.json");
 
     #[test]
     fn parse_sample_has_all_three_windows() {
@@ -252,6 +252,19 @@ mod tests {
         let u = r.usage.as_ref().unwrap();
         let credits = &u.windows["credits"];
         assert_eq!(credits.value_label.as_deref(), Some("Unlimited"));
+    }
+
+    #[test]
+    fn parse_tolerates_balance_as_string() {
+        // Real-world regression: chatgpt.com/backend-api/wham/usage returns
+        // credits.balance as a JSON string ("0") on the Plus plan. A strict
+        // Option<f64> deserialize fails the whole payload. The parser must
+        // tolerate both numeric and string balances.
+        let r = parse(BALANCE_AS_STRING);
+        assert!(r.ok, "{:?}", r.error);
+        let u = r.usage.as_ref().unwrap();
+        let credits = &u.windows["credits"];
+        assert_eq!(credits.value_label.as_deref(), Some("$0.00 remaining"));
     }
 
     #[test]

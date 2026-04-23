@@ -1,0 +1,13 @@
+{
+  "_comment": "Captured from cloudcode-pa.googleapis.com/v1internal:loadCodeAssist for a free-tier account on 2026-04-23. paidTier absent.",
+  "currentTier": {
+    "id": "free-tier",
+    "name": "Gemini Code Assist for individuals",
+    "description": "Gemini-powered code suggestions and chat in multiple IDEs"
+  },
+  "allowedTiers": [
+    { "id": "free-tier", "isDefault": true }
+  ],
+  "cloudaicompanionProject": "pure-pentameter-m2hpz",
+  "gcpManaged": false
+}

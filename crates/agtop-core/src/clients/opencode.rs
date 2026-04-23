@@ -1026,7 +1026,8 @@ fn list_sessions_sqlite(
     let conn = open_db(db_path)?;
     let mut stmt = conn.prepare(
         "SELECT id, directory, time_created, time_updated, title FROM session \
-         WHERE time_archived IS NULL OR time_archived = 0 \
+         WHERE (time_archived IS NULL OR time_archived = 0) \
+           AND parent_id IS NULL \
          ORDER BY time_updated DESC",
     )?;
 
@@ -1701,7 +1702,7 @@ mod tests {
     fn init_db(root: &Path) {
         let conn = rusqlite::Connection::open(root.join("opencode.db")).expect("open sqlite");
         conn.execute(
-            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT)",
+            "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, time_created INTEGER, time_updated INTEGER, time_archived INTEGER, title TEXT, parent_id TEXT)",
             [],
         )
         .expect("create session table");

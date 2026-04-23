@@ -99,6 +99,55 @@ pub struct QuotaInfo {
     pub reset_time: Option<String>,
 }
 
+// ---------- loadCodeAssist response ----------
+//
+// Shape (observed against a free-tier account on cloudcode-pa.googleapis.com):
+//
+// {
+//   "currentTier":            { "id": "free-tier", "name": "...", ... },
+//   "allowedTiers":           [ { "id": "free-tier", "isDefault": true }, ... ],
+//   "cloudaicompanionProject": "<project-id>",
+//   "paidTier":               { "id": "...", "name": "...",
+//                               "availableCredits": [ { ... } ] }  // optional
+// }
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct LoadCodeAssistResponse {
+    #[serde(rename = "currentTier")]
+    pub current_tier: Option<TierInfo>,
+    #[serde(rename = "cloudaicompanionProject")]
+    pub cloudaicompanion_project: Option<String>,
+    #[serde(rename = "paidTier")]
+    pub paid_tier: Option<PaidTierInfo>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct TierInfo {
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct PaidTierInfo {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    #[serde(rename = "availableCredits")]
+    pub available_credits: Option<Vec<AvailableCredit>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct AvailableCredit {
+    /// Credit amount. The API returns this as a string (e.g. "100000").
+    #[serde(rename = "creditAmount")]
+    pub credit_amount: Option<String>,
+    #[serde(rename = "creditType")]
+    pub credit_type: Option<String>,
+}
+
 /// Translate a `QuotaBucket` into a scoped (model, window_label, UsageWindow) triple.
 /// Returns None if `modelId` is missing (we can't scope the entry).
 pub fn transform_quota_bucket(
