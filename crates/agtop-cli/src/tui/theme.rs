@@ -103,6 +103,7 @@ pub const PLAN_LABEL: Style = Style::new().fg(Color::Cyan).add_modifier(Modifier
 pub const PLAN_NOTE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::DIM);
 
 /// Dimmed text used when no plan data is available.
+#[allow(dead_code)]
 pub const PLAN_EMPTY: Style = Style::new().add_modifier(Modifier::DIM);
 
 /// Filled portion of a usage bar when utilization < 30 % (safe).
@@ -115,6 +116,7 @@ pub const PLAN_BAR_YELLOW: Style = Style::new().fg(Color::Yellow);
 pub const PLAN_BAR_RED: Style = Style::new().fg(Color::Red);
 
 /// Highlighted / selected row in the subscription list.
+#[allow(dead_code)]
 pub const PLAN_SELECTED: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Cyan)

@@ -424,6 +424,7 @@ impl App {
     pub fn cost_scroll(&self) -> usize {
         self.cost_scroll
     }
+    #[allow(dead_code)]
     pub fn plan_selected(&self) -> usize {
         self.plan_selected
     }
@@ -573,6 +574,7 @@ impl App {
         self.logos = LogoMap(logos);
     }
 
+    #[allow(dead_code)]
     pub fn logo(
         &self,
         client: agtop_core::ClientKind,
