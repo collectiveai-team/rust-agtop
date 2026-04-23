@@ -830,6 +830,46 @@ mod tests {
     }
 
     #[test]
+    fn quota_loop_honors_manual_trigger() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
+        let enabled = Arc::new(RwLock::new(HashSet::new()));
+        // Long interval → any extra snapshot must come from a manual trigger.
+        let mut handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_secs(120)).expect("spawn");
+
+        handle.send_quota_cmd(QuotaCmd::Start);
+
+        // Consume initial snapshot.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        handle.trigger_manual();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut got_second = false;
+        while std::time::Instant::now() < deadline {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+                got_second = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(
+            got_second,
+            "manual trigger did not produce a second QuotaSnapshot"
+        );
+    }
+
+    #[test]
     fn quota_loop_publishes_snapshot_after_start() {
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
