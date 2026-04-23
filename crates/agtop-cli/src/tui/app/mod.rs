@@ -969,6 +969,54 @@ impl App {
         }
     }
 
+    /// Advance the selected provider index by 1, clamping at the last slot.
+    /// Resets `model_scroll` to 0 on change.
+    #[allow(dead_code)] // wired up in phase 5
+    pub fn quota_select_next(&mut self) {
+        let len = self.quota_slots.len();
+        if len == 0 {
+            return;
+        }
+        let before = self.selected_provider;
+        self.selected_provider = (self.selected_provider + 1).min(len - 1);
+        if self.selected_provider != before {
+            self.model_scroll = 0;
+        }
+    }
+
+    /// Decrement the selected provider index by 1, clamping at 0.
+    /// Resets `model_scroll` to 0 on change.
+    #[allow(dead_code)] // wired up in phase 5
+    pub fn quota_select_prev(&mut self) {
+        let before = self.selected_provider;
+        self.selected_provider = self.selected_provider.saturating_sub(1);
+        if self.selected_provider != before {
+            self.model_scroll = 0;
+        }
+    }
+
+    /// Scroll the Classic Quota tab card row left by 1 (clamped at 0).
+    #[allow(dead_code)] // wired up in phase 5
+    pub fn quota_card_scroll_left(&mut self) {
+        self.card_scroll = self.card_scroll.saturating_sub(1);
+    }
+
+    /// Scroll the Classic Quota tab card row right by 1.
+    /// `cards_visible` is how many cards fit in the current render area.
+    /// Clamped at `quota_slots.len().saturating_sub(cards_visible)`.
+    #[allow(dead_code)] // wired up in phase 5
+    pub fn quota_card_scroll_right(&mut self, cards_visible: usize) {
+        let max = self.quota_slots.len().saturating_sub(cards_visible.max(1));
+        self.card_scroll = (self.card_scroll + 1).min(max);
+    }
+
+    /// Test-only helper to set `model_scroll` directly. Production code
+    /// should not need this; `quota_select_*` is the normal path.
+    #[cfg(test)]
+    pub fn set_model_scroll_for_test(&mut self, v: usize) {
+        self.model_scroll = v;
+    }
+
     // ---- internal helpers --------------------------------------------------
 
     fn update_sticky(&mut self) {
@@ -1588,6 +1636,77 @@ mod quota_state_tests {
         app.apply_quota_results(vec![ok_result(ProviderId::Claude)]);
         app.set_quota_error("should be ignored".into());
         assert_eq!(app.quota_state(), &QuotaState::Ready);
+    }
+
+    #[test]
+    fn quota_select_next_clamps_at_last() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![
+            ok_result(ProviderId::Claude),
+            ok_result(ProviderId::Codex),
+        ]);
+        assert_eq!(app.selected_provider(), 0);
+        app.quota_select_next();
+        assert_eq!(app.selected_provider(), 1);
+        app.quota_select_next();
+        assert_eq!(app.selected_provider(), 1, "clamps at last slot");
+    }
+
+    #[test]
+    fn quota_select_prev_clamps_at_zero() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_result(ProviderId::Claude)]);
+        app.quota_select_prev();
+        assert_eq!(app.selected_provider(), 0);
+    }
+
+    #[test]
+    fn quota_select_resets_model_scroll() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![
+            ok_result(ProviderId::Claude),
+            ok_result(ProviderId::Google),
+        ]);
+        // Simulate scrolling models on the first slot, then switching.
+        app.set_model_scroll_for_test(5);
+        assert_eq!(app.model_scroll(), 5);
+        app.quota_select_next();
+        assert_eq!(
+            app.model_scroll(),
+            0,
+            "switching providers resets model_scroll"
+        );
+    }
+
+    #[test]
+    fn quota_card_scroll_left_clamps_at_zero() {
+        let mut app = App::new();
+        app.quota_card_scroll_left();
+        assert_eq!(app.card_scroll(), 0);
+    }
+
+    #[test]
+    fn quota_card_scroll_right_clamps_at_max() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![
+            ok_result(ProviderId::Claude),
+            ok_result(ProviderId::Codex),
+            ok_result(ProviderId::Google),
+        ]);
+        // With cards_visible=2 and 3 slots, max scroll = 1.
+        app.quota_card_scroll_right(2);
+        assert_eq!(app.card_scroll(), 1);
+        app.quota_card_scroll_right(2);
+        assert_eq!(app.card_scroll(), 1, "clamps at slots - visible");
+    }
+
+    #[test]
+    fn quota_card_scroll_right_noop_when_all_visible() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_result(ProviderId::Claude)]);
+        // 1 slot, 5 visible → no scroll possible.
+        app.quota_card_scroll_right(5);
+        assert_eq!(app.card_scroll(), 0);
     }
 }
 
