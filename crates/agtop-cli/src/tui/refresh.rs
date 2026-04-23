@@ -18,6 +18,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use agtop_core::pricing::Plan;
+use agtop_core::quota::ProviderResult;
 use agtop_core::session::SessionAnalysis;
 use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
@@ -43,6 +44,28 @@ pub enum RefreshMsg {
         generation: u64,
         message: String,
     },
+    /// Fresh quota results from `fetch_all`.
+    QuotaSnapshot {
+        #[allow(dead_code)]
+        generation: u64,
+        results: Vec<ProviderResult>,
+    },
+    /// `fetch_all` orchestration failed before any per-provider results
+    /// were produced.
+    QuotaError {
+        #[allow(dead_code)]
+        generation: u64,
+        message: String,
+    },
+}
+
+/// Command issued by the UI to control the quota fetch loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaCmd {
+    /// The user entered the quota pane. Start auto-refresh.
+    Start,
+    /// The user left the quota pane. Pause auto-refresh.
+    Stop,
 }
 
 /// Handle returned to the UI. Holding this alive keeps the worker
@@ -463,6 +486,8 @@ mod tests {
                         break;
                     }
                     RefreshMsg::Error { .. } => "error",
+                    RefreshMsg::QuotaSnapshot { .. } => "quota-snapshot",
+                    RefreshMsg::QuotaError { .. } => "quota-error",
                 };
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -669,5 +694,23 @@ mod tests {
             parent.subagent_file_count, 1,
             "subagent_file_count should equal number of children"
         );
+    }
+
+    #[test]
+    fn refresh_msg_has_quota_variants() {
+        let _ = RefreshMsg::QuotaSnapshot {
+            generation: 1,
+            results: Vec::new(),
+        };
+        let _ = RefreshMsg::QuotaError {
+            generation: 1,
+            message: "boom".into(),
+        };
+    }
+
+    #[test]
+    fn quota_cmd_is_copy() {
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<QuotaCmd>();
     }
 }

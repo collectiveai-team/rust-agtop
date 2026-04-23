@@ -195,6 +195,8 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
                     ..
                 } => app.set_snapshot(analyses, plan_usage),
                 RefreshMsg::Error { message, .. } => app.set_refresh_error(message),
+                RefreshMsg::QuotaSnapshot { results, .. } => app.apply_quota_results(results),
+                RefreshMsg::QuotaError { message, .. } => app.set_quota_error(message),
             }
         }
 
