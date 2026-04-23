@@ -72,18 +72,69 @@ impl AuthSource {
 
 /// Collect every available Google auth source, in order of preference.
 /// Empty vec means Google is not configured.
+///
+/// Order:
+///   1. Gemini CLI native credentials (`~/.gemini/oauth_creds.json`) — primary
+///   2. opencode auth.json `google` entry — fallback when Gemini CLI absent
+///   3. Antigravity accounts.json
 pub fn resolve_sources(auth: &OpencodeAuth) -> Vec<AuthSource> {
     let mut out = Vec::new();
-    if let Some(src) = resolve_gemini(auth) {
+
+    // Primary: Gemini CLI's own credential file.
+    if let Some(src) = resolve_gemini_cli_native() {
+        out.push(src);
+    } else if let Some(src) = resolve_gemini_from_auth(auth) {
+        // Fallback: opencode auth.json `google` entry.
         out.push(src);
     }
+
     if let Some(src) = resolve_antigravity(antigravity_accounts_path().as_deref()) {
         out.push(src);
     }
     out
 }
 
-fn resolve_gemini(auth: &OpencodeAuth) -> Option<AuthSource> {
+/// Read Gemini CLI's own credential file: `~/.gemini/oauth_creds.json`.
+///
+/// Fields: `access_token`, `refresh_token`, `expiry_date` (epoch ms).
+///
+/// Env override: `AGTOP_QUOTA_GEMINI_CLI_CREDS` — set to an empty or
+/// non-existent path in tests to disable native credential discovery.
+fn resolve_gemini_cli_native() -> Option<AuthSource> {
+    let path = if let Ok(p) = std::env::var("AGTOP_QUOTA_GEMINI_CLI_CREDS") {
+        std::path::PathBuf::from(p)
+    } else {
+        let home = dirs::home_dir()?;
+        home.join(".gemini").join("oauth_creds.json")
+    };
+    let bytes = std::fs::read(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+
+    let access_token = v
+        .get("access_token")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    let refresh_token = v
+        .get("refresh_token")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    let expires = v.get("expiry_date").and_then(|x| x.as_i64());
+
+    if access_token.is_none() && refresh_token.is_none() {
+        return None;
+    }
+
+    Some(AuthSource {
+        source_id: SourceId::Gemini,
+        source_label: "Gemini".to_string(),
+        access_token,
+        refresh_token,
+        expires,
+        project_id: None,
+    })
+}
+
+fn resolve_gemini_from_auth(auth: &OpencodeAuth) -> Option<AuthSource> {
     let entry = auth.lookup(&["google", "google.oauth"])?;
     // Tolerate both shapes: top-level fields on the entry, and nested under
     // `oauth`. Prefer the nested form (openchamber does).
@@ -201,7 +252,7 @@ mod tests {
     #[test]
     fn gemini_from_flat_entry() {
         let auth = fixture_auth("opencode_full.json");
-        let src = resolve_gemini(&auth).expect("gemini source present");
+        let src = resolve_gemini_from_auth(&auth).expect("gemini source present");
         assert_eq!(src.source_id, SourceId::Gemini);
         assert_eq!(
             src.access_token.as_deref(),
@@ -217,7 +268,7 @@ mod tests {
     #[test]
     fn gemini_from_nested_oauth() {
         let auth = fixture_auth("opencode_nested_google_oauth.json");
-        let src = resolve_gemini(&auth).expect("gemini source present");
+        let src = resolve_gemini_from_auth(&auth).expect("gemini source present");
         assert_eq!(src.access_token.as_deref(), Some("NESTED_GOOGLE_ACCESS"));
         assert_eq!(src.expires, Some(1_800_000_000_000));
     }
@@ -225,7 +276,7 @@ mod tests {
     #[test]
     fn gemini_missing_when_no_google_entry() {
         let auth = fixture_auth("opencode_minimal.json");
-        assert!(resolve_gemini(&auth).is_none());
+        assert!(resolve_gemini_from_auth(&auth).is_none());
     }
 
     #[test]

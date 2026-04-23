@@ -57,6 +57,15 @@ fn fetch_one_unknown_returns_transport_error() {
 
 #[test]
 fn fetch_all_skips_unconfigured_providers() {
+    // Disable native credential files so the test is hermetic.
+    std::env::set_var(
+        "AGTOP_QUOTA_GEMINI_CLI_CREDS",
+        "/tmp/does_not_exist_agtop_gemini",
+    );
+    std::env::set_var(
+        "AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS",
+        "/tmp/does_not_exist_agtop_ag",
+    );
     let http = FakeHttp::new();
     // Only Claude is configured in the minimal fixture.
     let auth = OpencodeAuth::load_from(&fixture("auth/opencode_minimal.json")).unwrap();
@@ -64,6 +73,8 @@ fn fetch_all_skips_unconfigured_providers() {
     http.push_ok(200, &read("claude/200_active_subscription.json"));
     let cfg = QuotaConfig::default();
     let results = fetch_all(&auth, &http, &cfg);
+    std::env::remove_var("AGTOP_QUOTA_GEMINI_CLI_CREDS");
+    std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].provider_id, ProviderId::Claude);
     assert!(results[0].ok);
@@ -121,21 +132,21 @@ fn fetch_all_completes_every_configured_provider_in_parallel() {
     //
     // For now we assert a weaker property: fetch_all returns exactly 5
     // results after pushing 5 successful bodies keyed by URL content.
+    // CopilotAddon is suppressed when Copilot uses the same credential,
+    // so we expect 4 providers (Claude, Codex, Copilot, Zai).
     http.push_ok(200, &read("claude/200_active_subscription.json"));
     http.push_ok(200, &read("codex/200_sample.json"));
     http.push_ok(200, &read("copilot/200_individual_unlimited.json"));
-    http.push_ok(200, &read("copilot/200_individual_unlimited.json")); // addon re-reads the same endpoint
     http.push_ok(200, &read("zai/200_lite_both_windows.json"));
 
     let results = fetch_all(&auth_full(), &http, &cfg);
-    assert_eq!(results.len(), 5);
+    assert_eq!(results.len(), 4);
     // Every provider should appear exactly once.
     let ids: std::collections::HashSet<ProviderId> =
         results.iter().map(|r| r.provider_id).collect();
-    assert_eq!(ids.len(), 5);
+    assert_eq!(ids.len(), 4);
     assert!(ids.contains(&ProviderId::Claude));
     assert!(ids.contains(&ProviderId::Codex));
     assert!(ids.contains(&ProviderId::Copilot));
-    assert!(ids.contains(&ProviderId::CopilotAddon));
     assert!(ids.contains(&ProviderId::Zai));
 }

@@ -24,8 +24,10 @@ fn copilot_body() -> Vec<u8> {
 }
 
 #[test]
-fn addon_is_configured_uses_same_aliases_as_copilot() {
-    assert!(CopilotAddon.is_configured(&auth_full()));
+fn addon_is_not_configured_when_copilot_is_present() {
+    // CopilotAddon suppresses itself when the base Copilot provider already
+    // claims the same credential, to avoid duplicate rows in the quota pane.
+    assert!(!CopilotAddon.is_configured(&auth_full()));
 }
 
 #[test]

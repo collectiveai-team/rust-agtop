@@ -25,6 +25,12 @@ impl Provider for CopilotAddon {
         PROVIDER_NAME
     }
     fn is_configured(&self, auth: &OpencodeAuth) -> bool {
+        // Skip Add-on when the base Copilot provider is already using the same
+        // credential — they share the same API key and showing both creates a
+        // confusing duplicate row in the quota pane.
+        if crate::quota::providers::copilot::Copilot.is_configured(auth) {
+            return false;
+        }
         auth.lookup(ALIASES)
             .map(|e| e.access.is_some() || e.token.is_some())
             .unwrap_or(false)

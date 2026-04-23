@@ -36,8 +36,16 @@ fn is_configured_true_when_gemini_entry_present() {
 #[test]
 #[serial]
 fn is_configured_false_when_no_sources() {
-    std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
+    std::env::set_var(
+        "AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS",
+        "/tmp/does_not_exist_agtop_test",
+    );
+    std::env::set_var(
+        "AGTOP_QUOTA_GEMINI_CLI_CREDS",
+        "/tmp/does_not_exist_agtop_gemini",
+    );
     assert!(!Google.is_configured(&OpencodeAuth::empty()));
+    std::env::remove_var("AGTOP_QUOTA_GEMINI_CLI_CREDS");
 }
 
 #[test]
@@ -133,9 +141,14 @@ fn fetch_not_configured_when_empty_auth_and_no_file() {
         "AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS",
         "/tmp/does_not_exist_agtop_test",
     );
+    std::env::set_var(
+        "AGTOP_QUOTA_GEMINI_CLI_CREDS",
+        "/tmp/does_not_exist_agtop_gemini",
+    );
     let http = FakeHttp::new();
     let r = fetch_impl(&OpencodeAuth::empty(), &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
+    std::env::remove_var("AGTOP_QUOTA_GEMINI_CLI_CREDS");
     assert!(!r.ok);
     assert!(!r.configured);
 }
