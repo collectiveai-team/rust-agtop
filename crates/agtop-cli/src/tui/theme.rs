@@ -152,6 +152,7 @@ pub const QUOTA_BAR_STALE: Style = Style::new().fg(Color::DarkGray).add_modifier
 pub const QUOTA_EMPTY: Style = Style::new();
 
 /// Highlighted provider row in the Dashboard list.
+#[allow(dead_code)]
 pub const QUOTA_SELECTED: Style = Style::new()
     .fg(Color::Black)
     .bg(Color::Cyan)

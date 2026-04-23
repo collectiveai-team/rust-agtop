@@ -55,6 +55,7 @@ pub fn error_token(err: &QuotaError) -> String {
 }
 
 /// Status glyph for the Dashboard list column.
+#[allow(dead_code)]
 pub fn status_glyph(current_ok: bool, last_good_some: bool, loading: bool) -> char {
     if loading {
         '○'
