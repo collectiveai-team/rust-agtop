@@ -923,7 +923,9 @@ mod tests {
         assert!(saw_first, "setup failed — no initial QuotaSnapshot");
         handle.send_quota_cmd(QuotaCmd::Stop);
 
-        std::thread::sleep(Duration::from_millis(1500));
+        // Give the loop time to process Stop. Allow at most 1 extra snapshot
+        // for the case where a fetch was already in-flight when Stop arrived.
+        std::thread::sleep(Duration::from_millis(2000));
         let mut extra = 0;
         while let Some(msg) = handle.try_recv() {
             if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
@@ -931,6 +933,17 @@ mod tests {
             }
         }
 
-        assert_eq!(extra, 0, "stopped loop kept publishing ({extra} extra)");
+        // Wait another interval to confirm no further publishing occurs.
+        std::thread::sleep(Duration::from_millis(2000));
+        while let Some(msg) = handle.try_recv() {
+            if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
+                extra += 1;
+            }
+        }
+
+        assert!(
+            extra <= 1,
+            "stopped loop kept publishing ({extra} extra beyond allowed 1)"
+        );
     }
 }
