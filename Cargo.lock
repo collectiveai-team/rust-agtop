@@ -20,6 +20,7 @@ dependencies = [
  "ctrlc",
  "dirs",
  "image",
+ "indexmap",
  "ratatui",
  "ratatui-image",
  "resvg",
@@ -36,6 +37,7 @@ name = "agtop-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "clap",
  "dirs",
  "figment",
  "indexmap",

@@ -1,5 +1,7 @@
 //! Quota-specific helpers that don't belong on `App` itself.
 
+#![allow(dead_code)]
+
 use agtop_core::quota::{ProviderId, Usage, UsageWindow};
 
 /// Resolve the "preferred window" for a provider — the single window

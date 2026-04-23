@@ -224,9 +224,10 @@ impl ProviderSlot {
 }
 
 /// Top-level state of the quota subsystem as seen by the UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum QuotaState {
     /// Quota pane has never been opened in this session.
+    #[default]
     Idle,
     /// First fetch is in flight; no slot results yet.
     Loading,
@@ -234,12 +235,6 @@ pub enum QuotaState {
     Ready,
     /// First fetch failed before any result arrived. `String` is the error message.
     Error(String),
-}
-
-impl Default for QuotaState {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 // ---------------------------------------------------------------------------
