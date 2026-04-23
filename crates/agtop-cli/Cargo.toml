@@ -17,6 +17,7 @@ workspace = true
 
 [dependencies]
 agtop-core = { workspace = true, features = ["cli"] }
+indexmap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

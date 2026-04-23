@@ -9,6 +9,7 @@
 mod cost;
 mod filter;
 mod history;
+pub mod quota;
 mod sort;
 
 // ---------------------------------------------------------------------------
