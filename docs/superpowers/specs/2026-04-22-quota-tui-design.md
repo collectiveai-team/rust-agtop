@@ -228,16 +228,19 @@ A **single wide panel** with one card per configured provider, laid out
 provider's **preferred window** as a short view (name + bar + %). Only one
 window per provider — full details are Dashboard-only.
 
+Content within each card is **horizontally centered** in its allocated width
+(both the name line and the value line).
+
 ```
 ┌─ Quota ───────────────────────────────────────────────────────────────────┐
-│ Claude         z.ai †        Copilot        Codex ○       Google ✗  ›    │
-│ 5h 72% ███▌░░  5h 88% ████▌░  premium  ∞    loading…      401           │
+│    Claude          z.ai †         Copilot         Codex ○       Google ✗ ›│
+│  5h 72% ■■■■       5h 88% ■■■■■    premium ∞       loading…        401    │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
 Each card occupies two lines:
-- Line 1: provider name + status glyph (if non-ok)
-- Line 2: preferred-window label + % + bar  (or `value_label` when `used_percent` is None)
+- Line 1: provider name + status glyph (if non-ok) — centered
+- Line 2: preferred-window label + % + bar (or `value_label` when `used_percent` is None) — centered
 
 ### Preferred window table
 
@@ -257,8 +260,10 @@ If no windows at all, show `—` in the short view.
 
 ### Card dimensions
 
-- Fixed card width: **20 columns** (including 2-column gutter between cards).
-- Content width: 18 columns (provider name line truncated with `…` if needed; bar 6 cells fixed when shown).
+- Fixed card slot width: **20 columns** (including 2-column gutter between cards).
+- Content width: 18 columns — content is centered within these 18 columns.
+- Bar width: **6 cells** fixed when shown (each cell = 1 `■` or 1 space).
+- Provider name line truncated with `…` if it exceeds 18 columns.
 - Card count computed from available area width: `cards_visible = area.width / 20`.
 
 ### Horizontal scrolling
@@ -278,22 +283,32 @@ When `quota_slots.len() > cards_visible`:
 - `QuotaState::Error(msg)` → centered line: `"Error: {msg}"`
 - `QuotaState::Ready` → render card row
 
-**Per-card rendering:**
+**Per-card rendering** (all lines centered within the 18-col content area):
 - Name line: `{provider_name}{glyph}` where glyph is one of:
   - (nothing) — ok
   - ` †` — stale (`current.ok=false && last_good=Some`), entire card rendered dim
   - ` ✗` — error (`current.ok=false && last_good=None`), bar replaced by short error token (`401`, `net`, `parse`, etc.)
   - ` ○` — loading (slot not yet populated), bar replaced by `loading…`
 - Value line:
-  - `used_percent = Some(p)`: `{label} {p}% {bar}` (bar 6 cells)
+  - `used_percent = Some(p)`: `{label} {p}% {bar}` (bar 6 cells of `■`/space)
   - `used_percent = None, value_label = Some(s)`: `{label} {s}` truncated to fit
   - both None: `{label} —`
 
-**Color thresholds** (use existing theme constants, or define new ones in `theme.rs`):
-- `< 75%` → normal
-- `75–90%` → yellow (`theme::WARN`)
-- `> 90%` → red (`theme::CRIT`)
-- Stale cards: dim variant of the above regardless of threshold.
+### Bar characters and colors
+
+- Filled cell: `■` (U+25A0 BLACK SQUARE)
+- Empty cell: ` ` (space) rendered with default/white foreground to leave visual
+  whitespace — no character drawn, the column is blank
+- Fill count: `round((p / 100.0) * bar_width)`, clamped to `[0, bar_width]`
+- Bar color (applied to the `■` characters only):
+  - `< 75%` → green (`theme::OK`)
+  - `75–90%` → yellow (`theme::WARN`)
+  - `> 90%` → red (`theme::CRIT`)
+- Percentage text color: same threshold coloring as the bar.
+- Stale cards: entire card rendered in a dim variant (dim green/yellow/red)
+  regardless of threshold.
+- The existing `theme.rs` `OK` / `WARN` / `CRIT` constants are used; define them
+  if not already present as green/yellow/red.
 
 **`NotConfigured` providers**: omitted entirely (no card).
 
@@ -316,12 +331,13 @@ the full area instead of the split.
 
 One line per provider. Each line shows: status glyph + provider name + the
 provider's **preferred window** (same table as Classic tab) with bar + %.
+The bar uses `■` cells colored by threshold, same as the Classic tab cards.
 
 ```
 ┌─ Quota ────────────────────────────────┐
-│ ● Claude    5h       72%  ███████░░░   │
+│ ● Claude    5h       72%  ■■■■■■■      │
 │ ● Copilot   premium       Unlimited    │
-│ ▲ z.ai †    5h       88%  ████████░░   │
+│ ▲ z.ai †    5h       88%  ■■■■■■■■■    │
 │ ✗ Google    — 401                      │
 │ ○ Codex     — loading…                 │
 └────────────────────────────────────────┘
@@ -336,12 +352,15 @@ provider's **preferred window** (same table as Classic tab) with bar + %.
 | `○` | Loading / not yet fetched |
 
 **Line content** (preferred-window short view):
-- Ok: `{glyph} {provider}  {label} {p}%  {bar}` (bar 10 cells)
+- Ok: `{glyph} {provider}  {label} {p}%  {bar}` (bar 10 cells of `■`/space)
 - Ok, unlimited: `{glyph} {provider}  {label}  Unlimited` (no bar)
 - Ok, value_label without %: `{glyph} {provider}  {label}  {value_label}`
 - Stale: same as ok, dim colors, ` †` after provider name
 - Error: `{glyph} {provider}  — {short_error_token}` (e.g. `— 401`)
 - Loading: `{glyph} {provider}  — loading…`
+
+Bar colors (green/yellow/red) and stale dimming rules: identical to the
+Classic tab cards (see "Bar characters and colors" above).
 
 Preferred window table: same as the Classic tab (see above).
 
@@ -356,15 +375,18 @@ provider disappears from the slot list (e.g. deconfigured), selection clamps to
 ┌─ Claude · Pro · user@example.com ───────────────────────────┐
 │ ! Stale — data from 14:23 · last error: Transport           │
 │                                                              │
-│ 5h        [███████░░░]  72%   resets in 2h 14m             │
-│ 7d        [████░░░░░░]  45%   resets in 3d 12h             │
-│ 7d-sonnet [█░░░░░░░░░]  12%   resets in 3d 12h             │
+│ 5h        ■■■■■■■        72%   resets in 2h 14m            │
+│ 7d        ■■■■           45%   resets in 3d 12h            │
+│ 7d-sonnet ■              12%   resets in 3d 12h            │
 │                                                              │
 │ Overage   disabled · limit $0.00                            │
 │                                                              │
 │                                  fetched at 14:23:05        │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+Right-panel bar width: 10 cells. Same `■`/space characters and same
+green/yellow/red coloring rules as the Classic tab.
 
 **Block title:** `provider_name · meta["plan"] · meta["login"]` (omit absent keys).
 
@@ -399,8 +421,8 @@ Error: <ErrorKind human text>
 Top-level `windows` is empty for Google (per fetchers spec). Instead, detail area
 shows a scrollable sub-list of models:
 ```
-gemini/gemini-2.5-pro    daily   [███░░░░░░░]  31%   resets in 18h
-antigravity/gemini-pro   5h      [██████████]  98%   resets in 0h 12m
+gemini/gemini-2.5-pro    daily   ■■■         31%   resets in 18h
+antigravity/gemini-pro   5h      ■■■■■■■■■■  98%   resets in 0h 12m
 ```
 `selected_provider` list navigation drives model scroll position via a secondary
 `model_scroll: usize` in `App` (reset to 0 when selected provider changes).
