@@ -30,6 +30,7 @@ use chrono::Utc;
 use agtop_core::session::SessionAnalysis;
 
 use super::column_config::ColumnConfig;
+use agtop_core::quota::ProviderResult;
 
 struct LogoMap(
     std::collections::HashMap<agtop_core::ClientKind, ratatui_image::protocol::Protocol>,
@@ -177,6 +178,67 @@ impl CostPeriod {
 pub enum InputMode {
     Normal,
     Filter,
+}
+
+// ---------------------------------------------------------------------------
+// Quota state
+// ---------------------------------------------------------------------------
+
+/// One slot per provider, tracking the most recent fetch and the
+/// most recent successful fetch. Rendering policy defined in the spec:
+/// - (None, ok)    → normal render
+/// - (None, err)   → error row, no gauges
+/// - (Some, ok)    → normal render
+/// - (Some, err)   → stale gauges + inline warning
+#[derive(Debug, Clone)]
+pub struct ProviderSlot {
+    pub last_good: Option<ProviderResult>,
+    pub current: ProviderResult,
+}
+
+impl ProviderSlot {
+    /// Create a fresh slot from the first fetch result for a provider.
+    /// If the result is ok, it becomes both `current` and `last_good`.
+    pub fn new(result: ProviderResult) -> Self {
+        let last_good = if result.ok {
+            Some(result.clone())
+        } else {
+            None
+        };
+        Self {
+            last_good,
+            current: result,
+        }
+    }
+
+    /// Upsert a new fetch result into this slot.
+    /// - `current` is always replaced.
+    /// - `last_good` is replaced only if the new result is ok.
+    pub fn upsert(&mut self, result: ProviderResult) {
+        if result.ok {
+            self.last_good = Some(result.clone());
+        }
+        self.current = result;
+    }
+}
+
+/// Top-level state of the quota subsystem as seen by the UI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaState {
+    /// Quota pane has never been opened in this session.
+    Idle,
+    /// First fetch is in flight; no slot results yet.
+    Loading,
+    /// At least one fetch cycle has completed; slots may be populated.
+    Ready,
+    /// First fetch failed before any result arrived. `String` is the error message.
+    Error(String),
+}
+
+impl Default for QuotaState {
+    fn default() -> Self {
+        Self::Idle
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1304,6 +1366,81 @@ mod tests {
 
         let live = arc.read().unwrap();
         assert!(!live.contains(&kind), "disabled client still in shared set");
+    }
+}
+
+#[cfg(test)]
+mod quota_state_tests {
+    use super::*;
+    use agtop_core::quota::{ProviderId, ProviderResult};
+
+    fn ok_result(id: ProviderId) -> ProviderResult {
+        ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: None,
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
+    fn err_result(id: ProviderId) -> ProviderResult {
+        ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: false,
+            usage: None,
+            error: Some(agtop_core::quota::QuotaError {
+                kind: agtop_core::quota::ErrorKind::Transport,
+                detail: "boom".into(),
+            }),
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
+    #[test]
+    fn provider_slot_new_sets_last_good_only_if_ok() {
+        let slot_ok = ProviderSlot::new(ok_result(ProviderId::Claude));
+        assert!(slot_ok.last_good.is_some());
+        assert!(slot_ok.current.ok);
+
+        let slot_err = ProviderSlot::new(err_result(ProviderId::Claude));
+        assert!(slot_err.last_good.is_none());
+        assert!(!slot_err.current.ok);
+    }
+
+    #[test]
+    fn provider_slot_upsert_preserves_last_good_on_error() {
+        let mut slot = ProviderSlot::new(ok_result(ProviderId::Claude));
+        assert!(slot.last_good.is_some());
+        let err = err_result(ProviderId::Claude);
+        slot.upsert(err);
+        assert!(slot.last_good.is_some(), "last_good survives error");
+        assert!(!slot.current.ok, "current reflects new failure");
+    }
+
+    #[test]
+    fn provider_slot_upsert_updates_last_good_on_new_ok() {
+        let mut slot = ProviderSlot::new(ok_result(ProviderId::Claude));
+        let old_fetched = slot.last_good.as_ref().unwrap().fetched_at;
+        let mut newer = ok_result(ProviderId::Claude);
+        newer.fetched_at = old_fetched + 1000;
+        slot.upsert(newer);
+        assert_eq!(
+            slot.last_good.as_ref().unwrap().fetched_at,
+            old_fetched + 1000
+        );
+    }
+
+    #[test]
+    fn quota_state_default_is_idle() {
+        let s: QuotaState = Default::default();
+        assert_eq!(s, QuotaState::Idle);
     }
 }
 
