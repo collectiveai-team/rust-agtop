@@ -175,6 +175,8 @@ mod tests {
         ErrorKind, ProviderId, ProviderResult, QuotaError, Usage, UsageWindow,
     };
     use indexmap::IndexMap;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
     use std::collections::BTreeMap;
 
     fn make_usage(windows: &[(&str, f64)]) -> Usage {
@@ -320,5 +322,119 @@ mod tests {
         let (_, value_line, _) = build_card_lines(&slot);
         let text = line_text(&value_line);
         assert!(text.contains("net"), "expected 'net' in: {text}");
+    }
+
+    fn ok_result(id: ProviderId, usage: Usage) -> ProviderResult {
+        ProviderResult {
+            provider_id: id,
+            provider_name: id.display_name(),
+            configured: true,
+            ok: true,
+            usage: Some(usage),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
+    fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
+        let mut out = String::new();
+        let area = buf.area();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = buf.cell((x, y)).expect("cell in bounds");
+                out.push_str(cell.symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn render_idle_state_shows_press_r() {
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let app = App::new();
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Press r to load quota data"),
+            "idle placeholder missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn render_loading_state_shows_fetching() {
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.set_quota_loading();
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Fetching"),
+            "loading placeholder missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn render_ready_state_renders_card_with_bar() {
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let result = ok_result(ProviderId::Claude, make_usage(&[("5h", 72.0)]));
+        app.apply_quota_results(vec![result]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(contents.contains("Claude"), "name missing:\n{contents}");
+        assert!(contents.contains("5h"), "label missing:\n{contents}");
+        assert!(contents.contains("72%"), "percentage missing:\n{contents}");
+        assert!(contents.contains('■'), "bar char missing:\n{contents}");
+    }
+
+    #[test]
+    fn render_overflow_shows_scroll_indicator() {
+        // 80 cols / 20 card width = 4 cards visible. Five providers → › indicator.
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        for id in [
+            ProviderId::Claude,
+            ProviderId::Codex,
+            ProviderId::Copilot,
+            ProviderId::CopilotAddon,
+            ProviderId::Zai,
+        ] {
+            app.apply_quota_results(vec![ok_result(id, make_usage(&[("5h", 10.0)]))]);
+        }
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains('›'),
+            "overflow indicator missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn render_scrolled_shows_left_indicator() {
+        let backend = TestBackend::new(80, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        for id in [
+            ProviderId::Claude,
+            ProviderId::Codex,
+            ProviderId::Copilot,
+            ProviderId::CopilotAddon,
+            ProviderId::Zai,
+        ] {
+            app.apply_quota_results(vec![ok_result(id, make_usage(&[("5h", 10.0)]))]);
+        }
+        app.quota_card_scroll_right(4);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains('‹'),
+            "left indicator missing:\n{contents}"
+        );
     }
 }

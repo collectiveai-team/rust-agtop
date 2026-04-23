@@ -1,5 +1,6 @@
 //! Shared bar-rendering helpers for the quota pane.
 
+use agtop_core::quota::QuotaError;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
@@ -39,8 +40,6 @@ pub fn bar_spans(used_percent: Option<f64>, width: usize, stale: bool) -> [Span<
         Span::raw(" ".repeat(empty)),
     ]
 }
-
-use agtop_core::quota::QuotaError;
 
 /// Short (≤ 5 char) identifier for error display in cards.
 pub fn error_token(err: &QuotaError) -> String {
@@ -135,6 +134,19 @@ mod tests {
             detail: "".into(),
         };
         assert_eq!(error_token(&e), "401");
+    }
+
+    #[test]
+    fn error_token_429() {
+        use agtop_core::quota::{ErrorKind, QuotaError};
+        let e = QuotaError {
+            kind: ErrorKind::Http {
+                status: 429,
+                retry_after: Some(30),
+            },
+            detail: "".into(),
+        };
+        assert_eq!(error_token(&e), "429");
     }
 
     #[test]
