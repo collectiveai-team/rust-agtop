@@ -60,16 +60,17 @@ pub enum UiMode {
 }
 
 /// Bottom-panel tab selector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
     Info,
     Cost,
     Config,
+    Quota,
 }
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Info, Tab::Cost, Tab::Config]
+        &[Tab::Info, Tab::Cost, Tab::Config, Tab::Quota]
     }
 
     pub fn title(self) -> &'static str {
@@ -77,6 +78,7 @@ impl Tab {
             Self::Info => "Info",
             Self::Cost => "Cost",
             Self::Config => "Config",
+            Self::Quota => "Quota",
         }
     }
 
@@ -84,15 +86,17 @@ impl Tab {
         match self {
             Self::Info => Self::Cost,
             Self::Cost => Self::Config,
-            Self::Config => Self::Info,
+            Self::Config => Self::Quota,
+            Self::Quota => Self::Info,
         }
     }
 
     pub fn cycle_back(self) -> Self {
         match self {
-            Self::Info => Self::Config,
+            Self::Info => Self::Quota,
             Self::Cost => Self::Info,
             Self::Config => Self::Cost,
+            Self::Quota => Self::Config,
         }
     }
 }
@@ -1162,6 +1166,8 @@ mod tests {
         app.next_tab();
         assert_eq!(app.tab(), Tab::Config);
         app.next_tab();
+        assert_eq!(app.tab(), Tab::Quota);
+        app.next_tab();
         assert_eq!(app.tab(), Tab::Info);
     }
 
@@ -1298,5 +1304,32 @@ mod tests {
 
         let live = arc.read().unwrap();
         assert!(!live.contains(&kind), "disabled client still in shared set");
+    }
+}
+
+#[cfg(test)]
+mod tab_quota_tests {
+    use super::Tab;
+
+    #[test]
+    fn tab_all_includes_quota() {
+        assert!(Tab::all().contains(&Tab::Quota));
+    }
+
+    #[test]
+    fn tab_quota_has_title() {
+        assert_eq!(Tab::Quota.title(), "Quota");
+    }
+
+    #[test]
+    fn tab_cycle_forward_includes_quota() {
+        // Cycle through all tabs starting from Info; Quota must appear exactly once.
+        let mut seen = std::collections::HashSet::new();
+        let mut t = Tab::Info;
+        for _ in 0..8 {
+            seen.insert(t);
+            t = t.cycle_forward();
+        }
+        assert!(seen.contains(&Tab::Quota));
     }
 }

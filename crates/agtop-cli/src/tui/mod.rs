@@ -524,6 +524,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
             Tab::Info => 0,
             Tab::Cost => 1,
             Tab::Config => 2,
+            Tab::Quota => 3,
         })
         .block(Block::default().borders(Borders::NONE))
         .divider("│");
@@ -569,6 +570,13 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
                 column_rows: &mut layout.config_column_rows,
             },
         ),
+        // Phase 3 will wire this up to widgets::quota_tab::render.
+        // For now, render a placeholder so the build stays green.
+        Tab::Quota => {
+            use ratatui::widgets::Paragraph;
+            let p = Paragraph::new("(quota tab not yet implemented)");
+            frame.render_widget(p, rows[1]);
+        }
     }
 }
 
