@@ -304,6 +304,19 @@ pub struct App {
         std::sync::Arc<std::sync::RwLock<std::collections::HashSet<agtop_core::ClientKind>>>,
     >,
     logos: LogoMap,
+    /// Quota subsystem state.
+    quota_slots: Vec<ProviderSlot>,
+    /// Coarse state: idle/loading/ready/error. Drives full-pane placeholder rendering.
+    quota_state: QuotaState,
+    /// Index into `quota_slots` for the selected provider (Dashboard pane).
+    /// Clamped in accessor, not written-through.
+    selected_provider: usize,
+    /// Scroll offset for the Google per-model list within the selected provider's detail.
+    /// Reset to 0 when `selected_provider` changes.
+    model_scroll: usize,
+    /// Horizontal scroll offset for the Classic Quota tab card row.
+    /// Leftmost visible card index.
+    card_scroll: usize,
 }
 
 impl Default for App {
@@ -342,6 +355,11 @@ impl App {
             expanded_sessions: std::collections::HashSet::new(),
             enabled_arc: None,
             logos: LogoMap(std::collections::HashMap::new()),
+            quota_slots: Vec::new(),
+            quota_state: QuotaState::default(),
+            selected_provider: 0,
+            model_scroll: 0,
+            card_scroll: 0,
         }
     }
 
@@ -379,6 +397,27 @@ impl App {
     }
     pub fn plan_usage(&self) -> &[agtop_core::PlanUsage] {
         &self.plan_usage
+    }
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn quota_slots(&self) -> &[ProviderSlot] {
+        &self.quota_slots
+    }
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn quota_state(&self) -> &QuotaState {
+        &self.quota_state
+    }
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn selected_provider(&self) -> usize {
+        self.selected_provider
+            .min(self.quota_slots.len().saturating_sub(1))
+    }
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn model_scroll(&self) -> usize {
+        self.model_scroll
+    }
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn card_scroll(&self) -> usize {
+        self.card_scroll
     }
     pub fn cost_tab(&self) -> CostTab {
         self.cost_tab
@@ -1441,6 +1480,16 @@ mod quota_state_tests {
     fn quota_state_default_is_idle() {
         let s: QuotaState = Default::default();
         assert_eq!(s, QuotaState::Idle);
+    }
+
+    #[test]
+    fn app_starts_with_empty_quota_state() {
+        let app = App::new();
+        assert!(app.quota_slots().is_empty());
+        assert_eq!(app.quota_state(), &QuotaState::Idle);
+        assert_eq!(app.selected_provider(), 0);
+        assert_eq!(app.model_scroll(), 0);
+        assert_eq!(app.card_scroll(), 0);
     }
 }
 
