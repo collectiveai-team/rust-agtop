@@ -930,6 +930,45 @@ impl App {
         self.ui_mode = mode;
     }
 
+    /// Merge a batch of fetch results into `quota_slots`, upserting by
+    /// `provider_id`. Always transitions state to `QuotaState::Ready`.
+    ///
+    /// Slot preservation: existing slots for providers NOT in `results`
+    /// are left untouched. This matches the spec's policy of keeping
+    /// last-known-good around.
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn apply_quota_results(&mut self, results: Vec<ProviderResult>) {
+        for result in results {
+            if let Some(existing) = self
+                .quota_slots
+                .iter_mut()
+                .find(|s| s.current.provider_id == result.provider_id)
+            {
+                existing.upsert(result);
+            } else {
+                self.quota_slots.push(ProviderSlot::new(result));
+            }
+        }
+        self.quota_state = QuotaState::Ready;
+    }
+
+    /// Set `QuotaState::Loading`. Typically called when a `QuotaCmd::Start`
+    /// is dispatched to the worker.
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn set_quota_loading(&mut self) {
+        self.quota_state = QuotaState::Loading;
+    }
+
+    /// Surface a fetch-level error. Only transitions to `Error` if we
+    /// haven't yet reached `Ready`; once `Ready`, per-slot `current.error`
+    /// carries per-provider errors instead.
+    #[allow(dead_code)] // wired up in phase 2+
+    pub fn set_quota_error(&mut self, message: String) {
+        if self.quota_state != QuotaState::Ready {
+            self.quota_state = QuotaState::Error(message);
+        }
+    }
+
     // ---- internal helpers --------------------------------------------------
 
     fn update_sticky(&mut self) {
@@ -1490,6 +1529,65 @@ mod quota_state_tests {
         assert_eq!(app.selected_provider(), 0);
         assert_eq!(app.model_scroll(), 0);
         assert_eq!(app.card_scroll(), 0);
+    }
+
+    #[test]
+    fn apply_quota_results_sets_ready_and_upserts_by_id() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![
+            ok_result(ProviderId::Claude),
+            err_result(ProviderId::Codex),
+        ]);
+        assert_eq!(app.quota_state(), &QuotaState::Ready);
+        assert_eq!(app.quota_slots().len(), 2);
+
+        // Second batch: replace Codex with ok, leave Claude alone.
+        app.apply_quota_results(vec![ok_result(ProviderId::Codex)]);
+        assert_eq!(app.quota_slots().len(), 2);
+        let codex = app
+            .quota_slots()
+            .iter()
+            .find(|s| s.current.provider_id == ProviderId::Codex)
+            .unwrap();
+        assert!(codex.current.ok);
+        assert!(codex.last_good.is_some());
+    }
+
+    #[test]
+    fn apply_quota_results_preserves_last_good_across_failure() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_result(ProviderId::Claude)]);
+        app.apply_quota_results(vec![err_result(ProviderId::Claude)]);
+        let slot = &app.quota_slots()[0];
+        assert!(slot.last_good.is_some());
+        assert!(!slot.current.ok);
+    }
+
+    #[test]
+    fn set_quota_loading_transitions_from_idle() {
+        let mut app = App::new();
+        assert_eq!(app.quota_state(), &QuotaState::Idle);
+        app.set_quota_loading();
+        assert_eq!(app.quota_state(), &QuotaState::Loading);
+    }
+
+    #[test]
+    fn set_quota_error_before_ready_sets_error_state() {
+        let mut app = App::new();
+        app.set_quota_error("dns failure".into());
+        assert_eq!(app.quota_state(), &QuotaState::Error("dns failure".into()));
+    }
+
+    #[test]
+    fn set_quota_error_after_ready_leaves_ready() {
+        // After slots are populated, a subsequent fetch failure should be
+        // reflected per-slot (via apply_quota_results), NOT by blowing the
+        // whole state back to Error. set_quota_error is only meaningful
+        // before the first successful batch arrives.
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_result(ProviderId::Claude)]);
+        app.set_quota_error("should be ignored".into());
+        assert_eq!(app.quota_state(), &QuotaState::Ready);
     }
 }
 
