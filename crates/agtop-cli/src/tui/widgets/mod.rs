@@ -9,5 +9,6 @@ pub mod dashboard_plan;
 pub mod dashboard_usage;
 pub mod info_tab;
 pub mod quota_bar;
+pub mod quota_tab;
 pub mod session_table;
 pub mod state_display;
