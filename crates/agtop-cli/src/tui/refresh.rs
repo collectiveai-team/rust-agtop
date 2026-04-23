@@ -65,6 +65,7 @@ pub enum RefreshMsg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaCmd {
     /// The user entered the quota pane. Start auto-refresh.
+    #[allow(dead_code)]
     Start,
     /// The user left the quota pane. Pause auto-refresh.
     Stop,
@@ -123,6 +124,7 @@ impl RefreshHandle {
         let _ = self.manual_tx.send(v.wrapping_add(1));
     }
 
+    #[allow(dead_code)]
     pub fn send_quota_cmd(&self, cmd: QuotaCmd) {
         let _ = self.quota_trigger_tx.send(cmd);
     }
