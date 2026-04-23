@@ -132,3 +132,46 @@ pub const FOOTER_NORMAL: Style = Style::new().fg(Color::Gray);
 
 /// Dimmed style for child (subagent) rows in an expanded group.
 pub const SUBAGENT_CHILD: Style = Style::new().fg(Color::DarkGray);
+
+// ── Quota pane ────────────────────────────────────────────────────────────
+
+/// Bar fill when used_percent < 75 %.
+pub const QUOTA_BAR_OK: Style = Style::new().fg(Color::Green);
+
+/// Bar fill when used_percent is in [75, 90).
+pub const QUOTA_BAR_WARN: Style = Style::new().fg(Color::Yellow);
+
+/// Bar fill when used_percent >= 90.
+pub const QUOTA_BAR_CRIT: Style = Style::new().fg(Color::Red);
+
+/// Card rendered dim when the last fetch failed but a prior good result exists.
+pub const QUOTA_BAR_STALE: Style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+
+/// Empty column of a bar — not rendered, but the style is kept for callers
+/// that want to paint a background.
+pub const QUOTA_EMPTY: Style = Style::new();
+
+/// Highlighted provider row in the Dashboard list.
+pub const QUOTA_SELECTED: Style = Style::new()
+    .fg(Color::Black)
+    .bg(Color::Cyan)
+    .add_modifier(Modifier::BOLD);
+
+/// Title for centered placeholder messages (Idle / Loading / Error).
+pub const QUOTA_TITLE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quota_thresholds_exist() {
+        let _ = QUOTA_BAR_OK;
+        let _ = QUOTA_BAR_WARN;
+        let _ = QUOTA_BAR_CRIT;
+        let _ = QUOTA_BAR_STALE;
+        let _ = QUOTA_EMPTY;
+        let _ = QUOTA_SELECTED;
+        let _ = QUOTA_TITLE;
+    }
+}
