@@ -110,36 +110,29 @@ pub(crate) fn parse(body: &[u8]) -> ProviderResult {
 
     let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
 
-    if let Some(primary) = raw
-        .rate_limit
-        .as_ref()
-        .and_then(|r| r.primary_window.as_ref())
-    {
-        windows.insert(
-            "5h".to_string(),
-            UsageWindow {
-                used_percent: clamp_percent(primary.used_percent),
-                window_seconds: primary.limit_window_seconds,
-                reset_at: primary.reset_at.map(normalize_numeric_ts),
-                value_label: None,
-            },
-        );
-    }
-
-    if let Some(secondary) = raw
-        .rate_limit
-        .as_ref()
-        .and_then(|r| r.secondary_window.as_ref())
-    {
-        windows.insert(
-            "weekly".to_string(),
-            UsageWindow {
-                used_percent: clamp_percent(secondary.used_percent),
-                window_seconds: secondary.limit_window_seconds,
-                reset_at: secondary.reset_at.map(normalize_numeric_ts),
-                value_label: None,
-            },
-        );
+    if let Some(rl) = raw.rate_limit.as_ref() {
+        if let Some(primary) = rl.get("primary_window") {
+            windows.insert(
+                "5h".to_string(),
+                UsageWindow {
+                    used_percent: clamp_percent(extract_f64(primary, "used_percent")),
+                    window_seconds: extract_u64(primary, "limit_window_seconds"),
+                    reset_at: extract_i64(primary, "reset_at").map(normalize_numeric_ts),
+                    value_label: None,
+                },
+            );
+        }
+        if let Some(secondary) = rl.get("secondary_window") {
+            windows.insert(
+                "weekly".to_string(),
+                UsageWindow {
+                    used_percent: clamp_percent(extract_f64(secondary, "used_percent")),
+                    window_seconds: extract_u64(secondary, "limit_window_seconds"),
+                    reset_at: extract_i64(secondary, "reset_at").map(normalize_numeric_ts),
+                    value_label: None,
+                },
+            );
+        }
     }
 
     if let Some(credits) = raw.credits.as_ref() {
@@ -174,27 +167,19 @@ pub(crate) fn parse(body: &[u8]) -> ProviderResult {
 }
 
 // ---------- Raw response shape ----------
+//
+// The real API response shape has drifted from the original spec. We use
+// serde_json::Value for sub-objects that contain fields with inconsistent
+// types (e.g. numeric fields that arrive as strings in some plan tiers).
+// Extraction helpers below treat type errors as "field absent".
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawResponse {
-    rate_limit: Option<RateLimit>,
+    // Nested rate-limit windows (spec shape: primary_window / secondary_window).
+    // Kept as Value to tolerate real-API shape divergence.
+    rate_limit: Option<serde_json::Value>,
     credits: Option<Credits>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct RateLimit {
-    primary_window: Option<Window>,
-    secondary_window: Option<Window>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct Window {
-    used_percent: Option<f64>,
-    limit_window_seconds: Option<u64>,
-    reset_at: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -202,6 +187,33 @@ struct Window {
 struct Credits {
     balance: Option<f64>,
     unlimited: Option<bool>,
+}
+
+/// Extract an `f64` from a JSON value that may be a number or a numeric string.
+fn extract_f64(v: &serde_json::Value, key: &str) -> Option<f64> {
+    match v.get(key)? {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Extract a `u64` from a JSON value that may be a number or a numeric string.
+fn extract_u64(v: &serde_json::Value, key: &str) -> Option<u64> {
+    match v.get(key)? {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Extract an `i64` from a JSON value that may be a number or a numeric string.
+fn extract_i64(v: &serde_json::Value, key: &str) -> Option<i64> {
+    match v.get(key)? {
+        serde_json::Value::Number(n) => n.as_i64(),
+        serde_json::Value::String(s) => s.parse().ok(),
+        _ => None,
+    }
 }
 
 // ---------- Tests ----------
