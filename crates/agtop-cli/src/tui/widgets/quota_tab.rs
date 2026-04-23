@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::tui::app::{quota::preferred_window, App, ProviderSlot, QuotaState};
 use crate::tui::theme as th;
-use crate::tui::widgets::quota_bar::{bar_spans, error_token};
+use crate::tui::widgets::quota_bar::{bar_spans, error_token, provider_short_name};
 
 /// Fixed card slot width (including gutter).
 pub const CARD_SLOT_WIDTH: u16 = 20;
@@ -112,7 +112,7 @@ fn render_card(frame: &mut Frame<'_>, area: Rect, slot: &ProviderSlot) {
 }
 
 pub(crate) fn build_card_lines<'a>(slot: &'a ProviderSlot) -> (Line<'a>, Line<'a>, Option<Style>) {
-    let provider_name = slot.current.provider_name;
+    let provider_name = provider_short_name(slot.current.provider_id);
     let stale = !slot.current.ok && slot.last_good.is_some();
     let errored = !slot.current.ok && slot.last_good.is_none();
 

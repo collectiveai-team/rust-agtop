@@ -13,6 +13,7 @@ use ratatui::{
 
 use crate::tui::app::{App, QuotaState};
 use crate::tui::theme as th;
+use crate::tui::widgets::quota_bar::provider_short_name;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let outer_block = Block::default().borders(Borders::ALL).title(" Quota ");
@@ -58,7 +59,9 @@ fn render_centered(frame: &mut Frame<'_>, area: Rect, msg: &str) {
 
 fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
     use crate::tui::app::quota::preferred_window;
-    use crate::tui::widgets::quota_bar::{bar_spans, error_token, status_glyph};
+    use crate::tui::widgets::quota_bar::{
+        bar_spans, error_token, provider_short_name, status_glyph,
+    };
 
     const BAR_WIDTH: usize = 10;
 
@@ -76,7 +79,7 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         let name_suffix = if stale { " \u{2020}" } else { "" };
         let prefix = format!(
             "{glyph} {name}{name_suffix}  ",
-            name = slot.current.provider_name
+            name = provider_short_name(slot.current.provider_id)
         );
 
         let body: Vec<Span<'_>> = if errored {
@@ -148,10 +151,22 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let stale = !slot.current.ok && slot.last_good.is_some();
     let error_only = !slot.current.ok && slot.last_good.is_none();
 
+    // Reserve the last row for the "fetched at" footer (always pinned to bottom).
+    // If the area is too small to split, render everything in place.
+    let (content_area, footer_area) = if area.height >= 2 {
+        let split = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(area);
+        (split[0], Some(split[1]))
+    } else {
+        (area, None)
+    };
+
     let mut lines: Vec<Line<'_>> = Vec::new();
 
     // Header: provider name + plan + login (from meta).
-    let mut header_parts = vec![slot.current.provider_name.to_string()];
+    let mut header_parts = vec![provider_short_name(slot.current.provider_id).to_string()];
     if let Some(plan) = slot.current.meta.get("plan") {
         header_parts.push(plan.clone());
     }
@@ -185,6 +200,13 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     lines.push(Line::from(""));
 
+    // Effective usage (stale → last_good).
+    let effective = if stale {
+        slot.last_good.as_ref().unwrap_or(&slot.current)
+    } else {
+        &slot.current
+    };
+
     if error_only {
         let err = slot.current.error.as_ref();
         let kind = err
@@ -199,49 +221,43 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
             lines.push(Line::from(Span::raw(detail)));
         }
         let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
-        frame.render_widget(p, area);
-        return;
-    }
-
-    // Effective usage (stale → last_good).
-    let effective = if stale {
-        slot.last_good.as_ref().unwrap_or(&slot.current)
+        frame.render_widget(p, content_area);
     } else {
-        &slot.current
-    };
+        if let Some(usage) = effective.usage.as_ref() {
+            for (label, w) in &usage.windows {
+                lines.push(window_line(label, w, BAR_WIDTH, stale));
+            }
 
-    if let Some(usage) = effective.usage.as_ref() {
-        for (label, w) in &usage.windows {
-            lines.push(window_line(label, w, BAR_WIDTH, stale));
-        }
+            // Google per-model windows.
+            if !usage.models.is_empty() {
+                lines.push(Line::from(""));
+                for (model, windows) in &usage.models {
+                    for (wlabel, w) in windows {
+                        let label = format!("{model}  {wlabel}");
+                        lines.push(window_line(&label, w, BAR_WIDTH, stale));
+                    }
+                }
+            }
 
-        // Google per-model windows.
-        if !usage.models.is_empty() {
-            lines.push(Line::from(""));
-            for (model, windows) in &usage.models {
-                for (wlabel, w) in windows {
-                    let label = format!("{model}  {wlabel}");
-                    lines.push(window_line(&label, w, BAR_WIDTH, stale));
+            // Extras.
+            if !usage.extras.is_empty() {
+                lines.push(Line::from(""));
+                for (name, extra) in &usage.extras {
+                    lines.push(extra_line(name, extra));
                 }
             }
         }
-
-        // Extras.
-        if !usage.extras.is_empty() {
-            lines.push(Line::from(""));
-            for (name, extra) in &usage.extras {
-                lines.push(extra_line(name, extra));
-            }
-        }
+        let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(p, content_area);
     }
 
-    // Fetched-at footer (right-aligned).
-    let footer = format!("fetched at {}", format_epoch_ms(effective.fetched_at));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(footer, th::PLAN_NOTE)).alignment(Alignment::Right));
-
-    let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
-    frame.render_widget(p, area);
+    // "Fetched at" footer — pinned to the last row of the pane.
+    if let Some(footer_rect) = footer_area {
+        let footer = format!("fetched at {}", format_epoch_ms(effective.fetched_at));
+        let footer_p = Paragraph::new(Line::from(Span::styled(footer, th::PLAN_NOTE)))
+            .alignment(Alignment::Right);
+        frame.render_widget(footer_p, footer_rect);
+    }
 }
 
 fn window_line<'a>(

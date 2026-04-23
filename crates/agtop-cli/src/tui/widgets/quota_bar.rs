@@ -8,22 +8,30 @@ use crate::tui::theme as th;
 
 /// Unicode "BLACK SQUARE" — used for filled bar cells.
 pub const BAR_FILLED: char = '■';
+/// Unicode "WHITE SQUARE" — used for empty bar cells.
+pub const BAR_EMPTY: char = '□';
 
-/// Resolve a style for a bar based on `used_percent` (0..100).
+/// Resolve a style for the filled portion of a bar based on `used_percent` (0..100).
 /// `stale=true` forces the dim/gray variant regardless of threshold.
+///
+/// Thresholds: green < 30 %, yellow 30–80 %, red ≥ 80 %.
 pub fn bar_style(used_percent: Option<f64>, stale: bool) -> Style {
     if stale {
         return th::QUOTA_BAR_STALE;
     }
     match used_percent {
         None => th::QUOTA_EMPTY,
-        Some(p) if p < 75.0 => th::QUOTA_BAR_OK,
-        Some(p) if p < 90.0 => th::QUOTA_BAR_WARN,
+        Some(p) if p < 30.0 => th::QUOTA_BAR_OK,
+        Some(p) if p < 80.0 => th::QUOTA_BAR_WARN,
         Some(_) => th::QUOTA_BAR_CRIT,
     }
 }
 
-/// Build a pair of spans `[filled, empty]` of total width `width`.
+/// Build a triple of spans `[filled, empty, reset]` of total bar width `width`.
+///
+/// Both filled and empty cells use `■`/`□` so the bar always occupies
+/// exactly `width` columns. The empty portion uses a dim style so it
+/// reads as "unoccupied" without disappearing entirely.
 pub fn bar_spans(used_percent: Option<f64>, width: usize, stale: bool) -> [Span<'static>; 2] {
     let width = width.max(1);
     let fill = used_percent
@@ -33,12 +41,29 @@ pub fn bar_spans(used_percent: Option<f64>, width: usize, stale: bool) -> [Span<
         })
         .unwrap_or(0)
         .min(width);
-    let empty = width - fill;
-    let style = bar_style(used_percent, stale);
+    let empty_count = width - fill;
+    let fill_style = bar_style(used_percent, stale);
+    let empty_style = th::QUOTA_BAR_EMPTY_CELL;
     [
-        Span::styled(BAR_FILLED.to_string().repeat(fill), style),
-        Span::raw(" ".repeat(empty)),
+        Span::styled(BAR_FILLED.to_string().repeat(fill), fill_style),
+        Span::styled(BAR_EMPTY.to_string().repeat(empty_count), empty_style),
     ]
+}
+
+/// Short, consistent provider name matching the rest of the TUI's labelling.
+///
+/// Avoids long marketing names like "GitHub Copilot" or "Codex / ChatGPT Plus"
+/// in favour of compact identifiers that fit in list rows and card slots.
+pub fn provider_short_name(id: agtop_core::quota::ProviderId) -> &'static str {
+    use agtop_core::quota::ProviderId;
+    match id {
+        ProviderId::Claude => "Claude",
+        ProviderId::Codex => "Codex",
+        ProviderId::Copilot => "Copilot",
+        ProviderId::CopilotAddon => "Copilot+",
+        ProviderId::Zai => "z.ai",
+        ProviderId::Google => "Google",
+    }
 }
 
 /// Short (≤ 5 char) identifier for error display in cards.
@@ -72,19 +97,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn style_below_75_is_ok() {
-        assert_eq!(bar_style(Some(74.9), false), th::QUOTA_BAR_OK);
+    fn style_below_30_is_ok() {
+        assert_eq!(bar_style(Some(0.0), false), th::QUOTA_BAR_OK);
+        assert_eq!(bar_style(Some(29.9), false), th::QUOTA_BAR_OK);
     }
 
     #[test]
-    fn style_75_to_90_is_warn() {
-        assert_eq!(bar_style(Some(75.0), false), th::QUOTA_BAR_WARN);
-        assert_eq!(bar_style(Some(89.9), false), th::QUOTA_BAR_WARN);
+    fn style_30_to_80_is_warn() {
+        assert_eq!(bar_style(Some(30.0), false), th::QUOTA_BAR_WARN);
+        assert_eq!(bar_style(Some(79.9), false), th::QUOTA_BAR_WARN);
     }
 
     #[test]
-    fn style_at_or_above_90_is_crit() {
-        assert_eq!(bar_style(Some(90.0), false), th::QUOTA_BAR_CRIT);
+    fn style_at_or_above_80_is_crit() {
+        assert_eq!(bar_style(Some(80.0), false), th::QUOTA_BAR_CRIT);
         assert_eq!(bar_style(Some(100.0), false), th::QUOTA_BAR_CRIT);
     }
 
@@ -112,7 +138,9 @@ mod tests {
     fn spans_none_is_all_empty() {
         let [filled, empty] = bar_spans(None, 6, false);
         assert_eq!(filled.content.chars().count(), 0);
+        // Empty cells are □ characters, not spaces.
         assert_eq!(empty.content.chars().count(), 6);
+        assert!(empty.content.chars().all(|c| c == '□'));
     }
 
     #[test]

@@ -86,6 +86,9 @@ struct UiLayout {
     config_client_rows: Vec<(Rect, usize)>,
     /// One entry per Columns-section row: (full-row rect, virtual cursor idx).
     config_column_rows: Vec<(Rect, usize)>,
+    /// Left panel of the Dashboard quota pane (provider list).
+    /// Used for scroll-wheel and click hit-testing.
+    quota_list_area: Rect,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -253,6 +256,13 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
                     return;
                 }
             }
+            // Quota provider list in Dashboard mode.
+            if matches!(app.ui_mode(), UiMode::Dashboard)
+                && rect_contains(layout.quota_list_area, event.column, event.row)
+            {
+                app.quota_select_next();
+                return;
+            }
             if rect_contains(layout.cost_panel_area, event.column, event.row) {
                 // cost panel takes priority; table area may overlap in classic mode
                 app.scroll_cost_down(2, layout.cost_row_count, layout.cost_visible_rows);
@@ -273,6 +283,13 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
                     }
                     return;
                 }
+            }
+            // Quota provider list in Dashboard mode.
+            if matches!(app.ui_mode(), UiMode::Dashboard)
+                && rect_contains(layout.quota_list_area, event.column, event.row)
+            {
+                app.quota_select_prev();
+                return;
             }
             if rect_contains(layout.cost_panel_area, event.column, event.row) {
                 app.scroll_cost_up(2);
@@ -348,6 +365,30 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
                     if col >= x_start && col < x_end {
                         app.set_tab(tab);
                         break;
+                    }
+                }
+                return;
+            }
+
+            // Click inside the quota provider list (Dashboard mode).
+            if matches!(app.ui_mode(), UiMode::Dashboard)
+                && rect_contains(layout.quota_list_area, col, row)
+            {
+                // Each provider occupies one row. row relative to the list top → slot index.
+                let rel = row.saturating_sub(layout.quota_list_area.y) as usize;
+                let slots_len = app.quota_slots().len();
+                if rel < slots_len {
+                    // Drive selection via next/prev to keep model_scroll reset logic.
+                    let current = app.selected_provider();
+                    #[allow(clippy::comparison_chain)]
+                    if rel > current {
+                        for _ in 0..(rel - current) {
+                            app.quota_select_next();
+                        }
+                    } else if rel < current {
+                        for _ in 0..(current - rel) {
+                            app.quota_select_prev();
+                        }
                     }
                 }
                 return;
@@ -452,6 +493,21 @@ fn render_dashboard(
         .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
         .split(outer[2]);
     widgets::dashboard_plan::render(frame, mid[0], app);
+
+    // Record the quota provider-list area for mouse hit-testing.
+    // Mirrors the layout math inside dashboard_plan::render:
+    //   - block border removes 1 row top/bottom and 1 col left/right
+    //   - inner area is then split 40 % (list) / 60 % (details)
+    {
+        use ratatui::widgets::{Block, Borders};
+        let inner_plan = Block::default().borders(Borders::ALL).inner(mid[0]);
+        let list_panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(inner_plan);
+        layout.quota_list_area = list_panes[0];
+    }
+
     widgets::dashboard_cost::render(
         frame,
         mid[1],

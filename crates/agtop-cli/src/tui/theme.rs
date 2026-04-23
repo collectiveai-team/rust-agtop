@@ -137,20 +137,23 @@ pub const SUBAGENT_CHILD: Style = Style::new().fg(Color::DarkGray);
 
 // ── Quota pane ────────────────────────────────────────────────────────────
 
-/// Bar fill when used_percent < 75 %.
+/// Bar fill when used_percent < 30 % (safe).
 pub const QUOTA_BAR_OK: Style = Style::new().fg(Color::Green);
 
-/// Bar fill when used_percent is in [75, 90).
+/// Bar fill when used_percent is in [30, 80) (caution).
 pub const QUOTA_BAR_WARN: Style = Style::new().fg(Color::Yellow);
 
-/// Bar fill when used_percent >= 90.
+/// Bar fill when used_percent >= 80 % (critical).
 pub const QUOTA_BAR_CRIT: Style = Style::new().fg(Color::Red);
 
 /// Card rendered dim when the last fetch failed but a prior good result exists.
 pub const QUOTA_BAR_STALE: Style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
 
-/// Empty column of a bar — not rendered, but the style is kept for callers
-/// that want to paint a background.
+/// Empty (unfilled) bar cells — dim so they read as "unoccupied" without disappearing.
+pub const QUOTA_BAR_EMPTY_CELL: Style =
+    Style::new().fg(Color::DarkGray).add_modifier(Modifier::DIM);
+
+/// Style used when `used_percent` is None and no value_label exists.
 pub const QUOTA_EMPTY: Style = Style::new();
 
 /// Highlighted provider row in the Dashboard list.
