@@ -340,7 +340,7 @@ fn format_epoch_ms(ms: i64) -> String {
     use chrono::{DateTime, Local, Utc};
     let utc: DateTime<Utc> = DateTime::<Utc>::from_timestamp_millis(ms).unwrap_or_default();
     let local: DateTime<Local> = utc.into();
-    local.format("%H:%M:%S").to_string()
+    local.format("%H:%M").to_string()
 }
 
 #[cfg(test)]
@@ -395,6 +395,34 @@ mod tests {
             models: Default::default(),
             extras: Default::default(),
         }
+    }
+
+    #[test]
+    fn loading_state_shows_placeholder() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.set_quota_loading();
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Fetching"),
+            "loading placeholder missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn error_state_shows_error_message() {
+        let backend = TestBackend::new(80, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.set_quota_error("connection refused".into());
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("connection refused"),
+            "error message missing:\n{contents}"
+        );
     }
 
     #[test]
