@@ -75,6 +75,7 @@ pub enum QuotaCmd {
 pub struct RefreshHandle {
     rx: watch::Receiver<RefreshMsg>,
     manual_tx: watch::Sender<u64>,
+    quota_trigger_tx: watch::Sender<QuotaCmd>,
     /// Signals the worker loop to stop after the current iteration.
     /// Set to `true` before we drop the runtime so the worker doesn't
     /// start another `analyze_all` call while the runtime is shutting down.
@@ -84,6 +85,7 @@ pub struct RefreshHandle {
 
 impl Drop for RefreshHandle {
     fn drop(&mut self) {
+        let _ = self.quota_trigger_tx.send(QuotaCmd::Stop);
         // Signal the worker to stop after its current `spawn_blocking`
         // finishes. This prevents a new `analyze_all` from starting
         // while the runtime is being torn down.
@@ -117,6 +119,10 @@ impl RefreshHandle {
         // the channel is dropped only when the runtime is dropped, at
         // which point we don't care.
         let _ = self.manual_tx.send(v.wrapping_add(1));
+    }
+
+    pub fn send_quota_cmd(&self, cmd: QuotaCmd) {
+        let _ = self.quota_trigger_tx.send(cmd);
     }
 }
 
@@ -185,6 +191,7 @@ pub fn spawn(
     };
     let (tx, rx) = watch::channel(initial);
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
+    let (quota_trigger_tx, _quota_trigger_rx) = watch::channel(QuotaCmd::Stop);
 
     let clients_arc = clients.clone();
     // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
@@ -313,6 +320,7 @@ pub fn spawn(
     Ok(RefreshHandle {
         rx,
         manual_tx,
+        quota_trigger_tx,
         shutdown,
         _runtime: runtime,
     })
@@ -694,6 +702,17 @@ mod tests {
             parent.subagent_file_count, 1,
             "subagent_file_count should equal number of children"
         );
+    }
+
+    #[test]
+    fn handle_exposes_quota_trigger() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, RwLock};
+        let clients: Vec<Arc<dyn Client>> = Vec::new();
+        let enabled = Arc::new(RwLock::new(HashSet::new()));
+        let handle =
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+        handle.send_quota_cmd(QuotaCmd::Stop);
     }
 
     #[test]
