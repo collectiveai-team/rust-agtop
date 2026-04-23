@@ -624,8 +624,9 @@ mod tests {
         let before = app.card_scroll();
         apply_key(&mut app, press(KeyCode::Right));
         assert!(
-            app.card_scroll() >= before,
-            "Right should increment or stay"
+            app.card_scroll() > before,
+            "Right should increment card_scroll (was {before}, now {})",
+            app.card_scroll()
         );
         apply_key(&mut app, press(KeyCode::Left));
         assert_eq!(app.card_scroll(), 0);

@@ -230,6 +230,7 @@ pub enum QuotaState {
     #[default]
     Idle,
     /// First fetch is in flight; no slot results yet.
+    #[allow(dead_code)]
     Loading,
     /// At least one fetch cycle has completed; slots may be populated.
     Ready,
@@ -395,24 +396,20 @@ impl App {
     pub fn plan_usage(&self) -> &[agtop_core::PlanUsage] {
         &self.plan_usage
     }
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn quota_slots(&self) -> &[ProviderSlot] {
         &self.quota_slots
     }
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn quota_state(&self) -> &QuotaState {
         &self.quota_state
     }
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn selected_provider(&self) -> usize {
         self.selected_provider
             .min(self.quota_slots.len().saturating_sub(1))
     }
-    #[allow(dead_code)] // wired up in phase 2+
+    #[allow(dead_code)]
     pub fn model_scroll(&self) -> usize {
         self.model_scroll
     }
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn card_scroll(&self) -> usize {
         self.card_scroll
     }
@@ -937,7 +934,6 @@ impl App {
     /// Slot preservation: existing slots for providers NOT in `results`
     /// are left untouched. This matches the spec's policy of keeping
     /// last-known-good around.
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn apply_quota_results(&mut self, results: Vec<ProviderResult>) {
         for result in results {
             if let Some(existing) = self
@@ -955,7 +951,7 @@ impl App {
 
     /// Set `QuotaState::Loading`. Typically called when a `QuotaCmd::Start`
     /// is dispatched to the worker.
-    #[allow(dead_code)] // wired up in phase 2+
+    #[allow(dead_code)]
     pub fn set_quota_loading(&mut self) {
         self.quota_state = QuotaState::Loading;
     }
@@ -963,7 +959,6 @@ impl App {
     /// Surface a fetch-level error. Only transitions to `Error` if we
     /// haven't yet reached `Ready`; once `Ready`, per-slot `current.error`
     /// carries per-provider errors instead.
-    #[allow(dead_code)] // wired up in phase 2+
     pub fn set_quota_error(&mut self, message: String) {
         if self.quota_state != QuotaState::Ready {
             self.quota_state = QuotaState::Error(message);
@@ -972,7 +967,6 @@ impl App {
 
     /// Advance the selected provider index by 1, clamping at the last slot.
     /// Resets `model_scroll` to 0 on change.
-    #[allow(dead_code)] // wired up in phase 5
     pub fn quota_select_next(&mut self) {
         let len = self.quota_slots.len();
         if len == 0 {
@@ -987,7 +981,6 @@ impl App {
 
     /// Decrement the selected provider index by 1, clamping at 0.
     /// Resets `model_scroll` to 0 on change.
-    #[allow(dead_code)] // wired up in phase 5
     pub fn quota_select_prev(&mut self) {
         let before = self.selected_provider;
         self.selected_provider = self.selected_provider.saturating_sub(1);
@@ -997,7 +990,6 @@ impl App {
     }
 
     /// Scroll the Classic Quota tab card row left by 1 (clamped at 0).
-    #[allow(dead_code)] // wired up in phase 5
     pub fn quota_card_scroll_left(&mut self) {
         self.card_scroll = self.card_scroll.saturating_sub(1);
     }
@@ -1005,7 +997,6 @@ impl App {
     /// Scroll the Classic Quota tab card row right by 1.
     /// `cards_visible` is how many cards fit in the current render area.
     /// Clamped at `quota_slots.len().saturating_sub(cards_visible)`.
-    #[allow(dead_code)] // wired up in phase 5
     pub fn quota_card_scroll_right(&mut self, cards_visible: usize) {
         let max = self.quota_slots.len().saturating_sub(cards_visible.max(1));
         self.card_scroll = (self.card_scroll + 1).min(max);
