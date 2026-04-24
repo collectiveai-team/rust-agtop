@@ -2,9 +2,9 @@
 //!
 //! Older Gemini CLI builds wrote JSONL session headers; current builds store
 //! the full session as a single JSON document.
-//! Token counts are only available when the user has enabled local
-//! telemetry in `~/.gemini/settings.json`; they are read from
-//! `~/.gemini/telemetry.log` and matched to sessions by timestamp range.
+//! Local telemetry in `~/.gemini/settings.json` provides the best token and
+//! runtime metrics. When telemetry is missing, the client falls back to
+//! token fields embedded in the session file.
 
 use std::collections::HashMap;
 use std::fs;
@@ -131,18 +131,21 @@ impl Client for GeminiCliClient {
     }
 
     fn analyze(&self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
-        let tokens = extract_tokens_from_telemetry(
+        let telemetry = extract_analysis_from_telemetry(
             &self.gemini_dir,
             summary.started_at,
             summary.last_active,
+            &summary.session_id,
         );
-        let tokens = if tokens.grand_total() == 0 {
-            extract_tokens_from_session_file(&summary.data_path)
+        let session = extract_analysis_from_session_file(&summary.data_path, summary.model.clone());
+        let analysis = if telemetry.tokens.grand_total() == 0 {
+            session
         } else {
-            tokens
+            telemetry.with_session_fallback(session)
         };
+        let tokens = analysis.tokens;
 
-        let effective_model = summary.model.clone();
+        let effective_model = analysis.effective_model.or_else(|| summary.model.clone());
         let included = matches!(plan.mode_for(ClientKind::GeminiCli), PlanMode::Included);
 
         let cost = match &effective_model {
@@ -166,18 +169,22 @@ impl Client for GeminiCliClient {
                 }
             });
 
-        Ok(SessionAnalysis::new(
-            summary.clone(),
+        Ok(SessionAnalysis {
+            summary: summary.clone(),
             tokens,
             cost,
             effective_model,
-            0,
-            None,
+            subagent_file_count: 0,
+            tool_call_count: analysis.tool_call_count,
             duration_secs,
-            None,
-            None,
-            None,
-        ))
+            context_used_pct: analysis.context_used_pct,
+            context_used_tokens: analysis.context_used_tokens,
+            context_window: analysis.context_window,
+            children: Vec::new(),
+            agent_turns: analysis.agent_turns,
+            user_turns: analysis.user_turns,
+            project_name: None,
+        })
     }
 }
 
@@ -282,21 +289,7 @@ fn parse_gemini_session(
             model = Some(m.to_string());
         }
         if v.get("type").and_then(|x| x.as_str()) == Some("gemini") {
-            if let Some(tool_calls) = v.get("toolCalls").and_then(|x| x.as_array()) {
-                if tool_calls
-                    .iter()
-                    .any(|call| call.get("status").and_then(|x| x.as_str()) != Some("success"))
-                {
-                    state = Some("waiting".to_string());
-                    state_detail = Some("gemini.toolCalls.pending_or_error".to_string());
-                } else if !tool_calls.is_empty() {
-                    state = Some("stopped".to_string());
-                    state_detail = Some("gemini.toolCalls.success".to_string());
-                }
-            } else {
-                state = Some("stopped".to_string());
-                state_detail = Some("gemini.message".to_string());
-            }
+            update_state_from_gemini_message(v, &mut state, &mut state_detail);
         }
     })?;
 
@@ -370,6 +363,16 @@ fn parse_gemini_session_json(
         })
         .or(global_model);
 
+    let mut state: Option<String> = None;
+    let mut state_detail: Option<String> = None;
+    if let Some(messages) = v.get("messages").and_then(|messages| messages.as_array()) {
+        for message in messages {
+            if message.get("type").and_then(|x| x.as_str()) == Some("gemini") {
+                update_state_from_gemini_message(message, &mut state, &mut state_detail);
+            }
+        }
+    }
+
     let mut summary = SessionSummary::new(
         ClientKind::GeminiCli,
         subscription,
@@ -379,8 +382,8 @@ fn parse_gemini_session_json(
         model,
         cwd,
         path.to_path_buf(),
-        None,
-        None,
+        state,
+        state_detail,
         None,
         None,
     );
@@ -400,6 +403,28 @@ fn parse_gemini_session_json(
             })
         });
     Ok(summary)
+}
+
+fn update_state_from_gemini_message(
+    message: &serde_json::Value,
+    state: &mut Option<String>,
+    state_detail: &mut Option<String>,
+) {
+    if let Some(tool_calls) = gemini_tool_calls(message) {
+        if tool_calls
+            .iter()
+            .any(|call| call.get("status").and_then(|x| x.as_str()) != Some("success"))
+        {
+            *state = Some("waiting".to_string());
+            *state_detail = Some("gemini.toolCalls.pending_or_error".to_string());
+        } else if !tool_calls.is_empty() {
+            *state = Some("stopped".to_string());
+            *state_detail = Some("gemini.toolCalls.success".to_string());
+        }
+    } else {
+        *state = Some("stopped".to_string());
+        *state_detail = Some("gemini.message".to_string());
+    }
 }
 
 fn gemini_content_text(content: &serde_json::Value) -> Option<String> {
@@ -436,96 +461,334 @@ fn summarize_title(text: &str) -> String {
     title
 }
 
-/// Parse `~/.gemini/telemetry.log` (JSONL) for `gemini_cli.api_response`
-/// events whose timestamps fall within the session's time range.
-/// Returns aggregated `TokenTotals`.
-fn extract_tokens_from_telemetry(
+#[derive(Debug, Clone, Default)]
+struct GeminiAnalysis {
+    tokens: TokenTotals,
+    effective_model: Option<String>,
+    tool_call_count: Option<u64>,
+    agent_turns: Option<u64>,
+    user_turns: Option<u64>,
+    context_used_pct: Option<f64>,
+    context_used_tokens: Option<u64>,
+    context_window: Option<u64>,
+}
+
+impl GeminiAnalysis {
+    fn with_session_fallback(mut self, session: GeminiAnalysis) -> Self {
+        if self.effective_model.is_none() {
+            self.effective_model = session.effective_model;
+        }
+        if self.tool_call_count.is_none() {
+            self.tool_call_count = session.tool_call_count;
+        }
+        if self.agent_turns.is_none() {
+            self.agent_turns = session.agent_turns;
+        }
+        if self.user_turns.is_none() {
+            self.user_turns = session.user_turns;
+        }
+        if self.context_used_pct.is_none() {
+            self.context_used_pct = session.context_used_pct;
+            self.context_used_tokens = session.context_used_tokens;
+            self.context_window = session.context_window;
+        }
+        self
+    }
+
+    fn add_context_observation(&mut self, model: Option<&str>, total_tokens: Option<u64>) {
+        let Some(total_tokens) = total_tokens.filter(|total| *total > 0) else {
+            return;
+        };
+        let Some(model) = model else {
+            return;
+        };
+        let Some(window) = pricing::context_window(ClientKind::GeminiCli, model).filter(|w| *w > 0)
+        else {
+            return;
+        };
+
+        let pct = (total_tokens as f64 / window as f64) * 100.0;
+        if self.context_used_pct.is_none_or(|cur| pct > cur) {
+            self.context_used_pct = Some(pct);
+            self.context_used_tokens = Some(total_tokens);
+            self.context_window = Some(window);
+        }
+    }
+}
+
+/// Parse `~/.gemini/telemetry.log` (JSONL) for Gemini events whose timestamps
+/// fall within the session's time range.
+fn extract_analysis_from_telemetry(
     gemini_dir: &std::path::Path,
     started_at: Option<DateTime<Utc>>,
     last_active: Option<DateTime<Utc>>,
-) -> TokenTotals {
+    session_id: &str,
+) -> GeminiAnalysis {
     let telemetry_path = gemini_dir.join("telemetry.log");
     if !telemetry_path.exists() {
-        return TokenTotals::default();
+        return GeminiAnalysis::default();
     }
 
     let (start, end) = match (started_at, last_active) {
         (Some(s), Some(e)) => (s, e),
-        _ => return TokenTotals::default(),
+        _ => return GeminiAnalysis::default(),
     };
 
     // Add a small buffer for clock skew.
     let start_buf = start - chrono::Duration::seconds(5);
     let end_buf = end + chrono::Duration::seconds(5);
 
-    let mut totals = TokenTotals::default();
+    let mut analysis = GeminiAnalysis::default();
+    let mut tool_call_count = 0u64;
+    let mut saw_tool_call = false;
+    let mut api_response_count = 0u64;
 
     let _ = for_each_jsonl(&telemetry_path, |v| {
-        // Match only api_response events.
-        let is_api_response = v
-            .get("name")
-            .and_then(|n| n.as_str())
-            .map(|n| n == "gemini_cli.api_response")
-            .unwrap_or(false);
-        if !is_api_response {
-            return;
-        }
-
         // Check timestamp falls in session window.
-        let event_ts = v
-            .get("timestamp")
-            .and_then(|t| t.as_str())
-            .and_then(parse_ts);
+        let event_ts = telemetry_timestamp(v);
         let Some(ts) = event_ts else { return };
         if ts < start_buf || ts > end_buf {
             return;
         }
+        if let Some(event_session_id) = telemetry_str(v, "session.id") {
+            if event_session_id != session_id {
+                return;
+            }
+        }
 
-        let g = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-        totals.input += g("input_token_count");
-        totals.output += g("output_token_count");
-        totals.cache_read += g("cached_content_token_count");
-        totals.reasoning_output += g("thoughts_token_count");
+        let Some(event_name) = telemetry_event_name(v) else {
+            return;
+        };
+        match event_name {
+            "gemini_cli.api_response" => {
+                api_response_count += 1;
+                let model = telemetry_str(v, "model");
+                if let Some(model) = model {
+                    analysis.effective_model = Some(model.to_string());
+                }
+                let input = telemetry_u64(v, "input_token_count");
+                let output = telemetry_u64(v, "output_token_count");
+                let cache = telemetry_u64(v, "cached_content_token_count");
+                let thoughts = telemetry_u64(v, "thoughts_token_count");
+                analysis.tokens.input += input;
+                analysis.tokens.output += output;
+                analysis.tokens.cache_read += cache;
+                analysis.tokens.reasoning_output += thoughts;
+
+                let explicit_total = telemetry_value(v, "total_token_count").and_then(value_as_u64);
+                let derived_total =
+                    input + output + cache + thoughts + telemetry_u64(v, "tool_token_count");
+                let derived_total = if derived_total > 0 {
+                    Some(derived_total)
+                } else {
+                    None
+                };
+                analysis.add_context_observation(model, explicit_total.or(derived_total));
+            }
+            "gemini_cli.tool_call" => {
+                saw_tool_call = true;
+                tool_call_count += 1;
+            }
+            _ => {}
+        }
     });
 
     // Post-accumulation: cached_input mirrors cache_read.
-    totals.cached_input = totals.cache_read;
+    analysis.tokens.cached_input = analysis.tokens.cache_read;
+    if saw_tool_call {
+        analysis.tool_call_count = Some(tool_call_count);
+    }
+    if api_response_count > 0 {
+        analysis.agent_turns = Some(api_response_count);
+    }
 
-    totals
+    analysis
 }
 
-fn extract_tokens_from_session_file(path: &std::path::Path) -> TokenTotals {
-    let mut totals = TokenTotals::default();
+fn extract_analysis_from_session_file(
+    path: &std::path::Path,
+    initial_model: Option<String>,
+) -> GeminiAnalysis {
+    let mut analysis = GeminiAnalysis {
+        effective_model: initial_model,
+        ..Default::default()
+    };
     if path.extension().and_then(|e| e.to_str()) == Some("json") {
         let Ok(bytes) = fs::read(path) else {
-            return totals;
+            return analysis;
         };
         let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-            return totals;
+            return analysis;
         };
         if let Some(messages) = v.get("messages").and_then(|x| x.as_array()) {
             for message in messages {
-                add_gemini_tokens(&mut totals, message.get("tokens"));
+                analysis.add_session_message(message);
             }
         }
     } else {
         let _ = for_each_jsonl(path, |v| {
-            add_gemini_tokens(&mut totals, v.get("tokens"));
+            analysis.add_session_message(v);
         });
     }
-    totals.cached_input = totals.cache_read;
-    totals
+    analysis.tokens.cached_input = analysis.tokens.cache_read;
+    analysis
+}
+
+impl GeminiAnalysis {
+    fn add_session_message(&mut self, message: &serde_json::Value) {
+        match message.get("type").and_then(|x| x.as_str()) {
+            Some("user") => increment_opt(&mut self.user_turns),
+            Some("gemini" | "assistant" | "model") => {
+                increment_opt(&mut self.agent_turns);
+                let call_count = gemini_tool_calls(message).map_or(0, |calls| calls.len() as u64);
+                if call_count > 0 {
+                    add_opt(&mut self.tool_call_count, call_count);
+                }
+            }
+            _ => {}
+        }
+
+        if let Some(m) = message.get("model").and_then(|x| x.as_str()) {
+            self.effective_model = Some(m.to_string());
+        }
+
+        let before = self.tokens.clone();
+        add_gemini_tokens(&mut self.tokens, message.get("tokens"));
+        let added_total = self.tokens.input.saturating_sub(before.input)
+            + self.tokens.output.saturating_sub(before.output)
+            + self.tokens.cache_read.saturating_sub(before.cache_read)
+            + self
+                .tokens
+                .reasoning_output
+                .saturating_sub(before.reasoning_output);
+
+        let model = self.effective_model.clone();
+        self.add_context_observation(model.as_deref(), Some(added_total));
+    }
 }
 
 fn add_gemini_tokens(totals: &mut TokenTotals, raw: Option<&serde_json::Value>) {
     let Some(tokens) = raw else {
         return;
     };
-    let g = |k: &str| tokens.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
-    totals.input += g("input");
-    totals.output += g("output");
-    totals.cache_read += g("cached");
-    totals.reasoning_output += g("thoughts");
+    totals.input += token_u64(
+        tokens,
+        &["input", "input_tokens", "prompt", "prompt_tokens"],
+    );
+    totals.output += token_u64(
+        tokens,
+        &["output", "output_tokens", "response", "response_tokens"],
+    );
+    totals.cache_read += token_u64(
+        tokens,
+        &[
+            "cached",
+            "cached_tokens",
+            "cached_content_token_count",
+            "cache_read",
+            "cache_read_input_tokens",
+        ],
+    );
+    if let Some(cache) = tokens.get("cache") {
+        totals.cache_read += token_u64(cache, &["read", "input", "cached"]);
+        totals.cache_write_5m += token_u64(cache, &["write"]);
+    }
+    totals.reasoning_output += token_u64(
+        tokens,
+        &[
+            "thoughts",
+            "thought",
+            "thoughts_token_count",
+            "reasoning",
+            "reasoning_output_tokens",
+        ],
+    );
+}
+
+fn token_u64(tokens: &serde_json::Value, keys: &[&str]) -> u64 {
+    keys.iter()
+        .find_map(|key| tokens.get(*key).and_then(value_as_u64))
+        .unwrap_or(0)
+}
+
+fn gemini_tool_calls(message: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    message
+        .get("toolCalls")
+        .or_else(|| message.get("tool_calls"))
+        .or_else(|| message.get("functionCalls"))
+        .or_else(|| message.get("function_calls"))
+        .and_then(|x| x.as_array())
+}
+
+fn increment_opt(value: &mut Option<u64>) {
+    add_opt(value, 1);
+}
+
+fn add_opt(value: &mut Option<u64>, amount: u64) {
+    *value = Some(value.unwrap_or(0) + amount);
+}
+
+fn telemetry_event_name(v: &serde_json::Value) -> Option<&str> {
+    v.get("name")
+        .and_then(|x| x.as_str())
+        .or_else(|| telemetry_str(v, "event.name"))
+}
+
+fn telemetry_timestamp(v: &serde_json::Value) -> Option<DateTime<Utc>> {
+    v.get("timestamp")
+        .or_else(|| v.get("time"))
+        .or_else(|| v.get("time_unix_nano"))
+        .and_then(|x| {
+            x.as_str()
+                .and_then(parse_ts)
+                .or_else(|| x.as_u64().and_then(timestamp_nanos_to_datetime))
+        })
+}
+
+fn timestamp_nanos_to_datetime(nanos: u64) -> Option<DateTime<Utc>> {
+    let secs = (nanos / 1_000_000_000) as i64;
+    let sub_nanos = (nanos % 1_000_000_000) as u32;
+    DateTime::<Utc>::from_timestamp(secs, sub_nanos)
+}
+
+fn telemetry_str<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    telemetry_value(v, key).and_then(|x| x.as_str())
+}
+
+fn telemetry_u64(v: &serde_json::Value, key: &str) -> u64 {
+    telemetry_value(v, key).and_then(value_as_u64).unwrap_or(0)
+}
+
+fn telemetry_value<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    v.get(key).or_else(|| {
+        let attrs = v.get("attributes")?;
+        attrs.get(key).and_then(otel_attribute_value).or_else(|| {
+            attrs.as_array().and_then(|items| {
+                items.iter().find_map(|item| {
+                    if item.get("key").and_then(|x| x.as_str()) == Some(key) {
+                        item.get("value").and_then(otel_attribute_value)
+                    } else {
+                        None
+                    }
+                })
+            })
+        })
+    })
+}
+
+fn otel_attribute_value(v: &serde_json::Value) -> Option<&serde_json::Value> {
+    v.get("value")
+        .or_else(|| v.get("stringValue"))
+        .or_else(|| v.get("intValue"))
+        .or_else(|| v.get("doubleValue"))
+        .or_else(|| v.get("boolValue"))
+        .or(Some(v))
+}
+
+fn value_as_u64(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64()
+        .or_else(|| v.as_i64().and_then(|n| u64::try_from(n).ok()))
+        .or_else(|| v.as_str().and_then(|s| s.parse::<u64>().ok()))
 }
 
 #[cfg(test)]
@@ -665,7 +928,9 @@ mod tests {
 
         let start = parse_ts("2026-04-10T10:00:00Z").unwrap();
         let end = parse_ts("2026-04-10T11:00:00Z").unwrap();
-        let tokens = extract_tokens_from_telemetry(&td.path, Some(start), Some(end));
+        let analysis =
+            extract_analysis_from_telemetry(&td.path, Some(start), Some(end), "sess-001");
+        let tokens = analysis.tokens;
 
         assert_eq!(tokens.input, 100);
         assert_eq!(tokens.output, 50);
@@ -682,8 +947,124 @@ mod tests {
 
         let start = parse_ts("2026-04-10T10:00:00Z").unwrap();
         let end = parse_ts("2026-04-10T11:00:00Z").unwrap();
-        let tokens = extract_tokens_from_telemetry(&td.path, Some(start), Some(end));
+        let analysis =
+            extract_analysis_from_telemetry(&td.path, Some(start), Some(end), "sess-001");
+        let tokens = analysis.tokens;
 
         assert_eq!(tokens.input, 0);
+    }
+
+    #[test]
+    fn analyze_current_session_json_surfaces_common_metrics() {
+        let td = TestDir::new("analysis-json");
+        let session_file = td.path.join("session.json");
+        fs::write(
+            &session_file,
+            r#"{
+  "sessionId": "sess-json",
+  "startTime": "2026-04-10T10:00:00Z",
+  "lastUpdated": "2026-04-10T10:01:00Z",
+  "messages": [
+    {"type": "user", "content": "Build it"},
+    {
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "toolCalls": [{"name": "read_file", "status": "success"}, {"name": "shell", "status": "success"}],
+      "tokens": {
+        "input": 1000,
+        "output": 200,
+        "cached": 300,
+        "thoughts": 50
+      }
+    },
+    {"type": "user", "content": "Continue"},
+    {
+      "type": "gemini",
+      "model": "gemini-2.5-pro",
+      "tokens": {
+        "input": 500,
+        "output": 100
+      }
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+
+        let summary = parse_gemini_session_json(
+            &session_file,
+            Some("/repo".to_string()),
+            None,
+            Some("OAuth".to_string()),
+        )
+        .unwrap();
+        let client = GeminiCliClient {
+            gemini_dir: td.path.clone(),
+            discover_cache: Mutex::default(),
+        };
+
+        let analysis = client.analyze(&summary, Plan::Retail).unwrap();
+
+        assert_eq!(analysis.tokens.input, 1500);
+        assert_eq!(analysis.tokens.output, 300);
+        assert_eq!(analysis.tokens.cache_read, 300);
+        assert_eq!(analysis.tokens.cached_input, 300);
+        assert_eq!(analysis.tokens.reasoning_output, 50);
+        assert_eq!(analysis.effective_model.as_deref(), Some("gemini-2.5-pro"));
+        assert_eq!(analysis.tool_call_count, Some(2));
+        assert_eq!(analysis.agent_turns, Some(2));
+        assert_eq!(analysis.user_turns, Some(2));
+        assert_eq!(analysis.duration_secs, Some(60));
+        assert_eq!(analysis.context_window, Some(1_048_576));
+        assert_eq!(analysis.context_used_tokens, Some(1550));
+        assert!(analysis.context_used_pct.is_some());
+    }
+
+    #[test]
+    fn telemetry_attributes_shape_counts_tokens_tools_and_turns() {
+        let td = TestDir::new("telemetry-attrs");
+        let events = [
+            r#"{"timestamp":"2026-04-10T10:30:00Z","attributes":{"event.name":"gemini_cli.api_response","model":"gemini-2.5-pro","input_token_count":100,"output_token_count":50,"cached_content_token_count":20,"thoughts_token_count":10,"tool_token_count":5,"total_token_count":185}}"#,
+            r#"{"timestamp":"2026-04-10T10:30:01Z","attributes":{"event.name":"gemini_cli.tool_call","function_name":"read_file","success":true}}"#,
+        ]
+        .join("\n");
+        fs::write(td.path.join("telemetry.log"), events).unwrap();
+
+        let start = parse_ts("2026-04-10T10:00:00Z").unwrap();
+        let end = parse_ts("2026-04-10T11:00:00Z").unwrap();
+        let analysis =
+            extract_analysis_from_telemetry(&td.path, Some(start), Some(end), "sess-001");
+
+        assert_eq!(analysis.tokens.input, 100);
+        assert_eq!(analysis.tokens.output, 50);
+        assert_eq!(analysis.tokens.cache_read, 20);
+        assert_eq!(analysis.tokens.cached_input, 20);
+        assert_eq!(analysis.tokens.reasoning_output, 10);
+        assert_eq!(analysis.effective_model.as_deref(), Some("gemini-2.5-pro"));
+        assert_eq!(analysis.tool_call_count, Some(1));
+        assert_eq!(analysis.agent_turns, Some(1));
+        assert_eq!(analysis.context_window, Some(1_048_576));
+        assert_eq!(analysis.context_used_tokens, Some(185));
+    }
+
+    #[test]
+    fn telemetry_session_id_takes_precedence_inside_time_window() {
+        let td = TestDir::new("telemetry-session-id");
+        let events = [
+            r#"{"name":"gemini_cli.api_response","timestamp":"2026-04-10T10:30:00Z","session.id":"other-session","input_token_count":999}"#,
+            r#"{"name":"gemini_cli.api_response","timestamp":"2026-04-10T10:30:01Z","session.id":"sess-001","input_token_count":100}"#,
+            r#"{"name":"gemini_cli.api_response","timestamp":"2026-04-10T10:30:02Z","output_token_count":50}"#,
+        ]
+        .join("\n");
+        fs::write(td.path.join("telemetry.log"), events).unwrap();
+
+        let start = parse_ts("2026-04-10T10:00:00Z").unwrap();
+        let end = parse_ts("2026-04-10T11:00:00Z").unwrap();
+        let analysis =
+            extract_analysis_from_telemetry(&td.path, Some(start), Some(end), "sess-001");
+
+        assert_eq!(analysis.tokens.input, 100);
+        assert_eq!(analysis.tokens.output, 50);
+        assert_eq!(analysis.agent_turns, Some(2));
     }
 }

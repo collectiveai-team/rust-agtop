@@ -71,6 +71,8 @@ pub struct QuotaBucket {
     pub model_id: Option<String>,
     #[serde(rename = "quotaId")]
     pub quota_id: Option<String>,
+    #[serde(rename = "remainingAmount")]
+    pub remaining_amount: Option<String>,
     #[serde(rename = "remainingFraction")]
     pub remaining_fraction: Option<f64>,
     #[serde(rename = "resetTime")]
@@ -166,6 +168,10 @@ pub fn transform_quota_bucket(
         .remaining_fraction
         .map(|f| (1.0 - f) * 100.0)
         .map(|v| clamp_percent(Some(v)).unwrap_or(v));
+    let value_label = quota_value_label(
+        bucket.remaining_amount.as_deref(),
+        bucket.remaining_fraction,
+    );
     let (label, seconds) = resolve_window(source_id, reset_at, now_ms);
     Some((
         scoped,
@@ -174,9 +180,26 @@ pub fn transform_quota_bucket(
             used_percent,
             window_seconds: Some(seconds),
             reset_at,
-            value_label: None,
+            value_label,
         },
     ))
+}
+
+fn quota_value_label(
+    remaining_amount: Option<&str>,
+    remaining_fraction: Option<f64>,
+) -> Option<String> {
+    let remaining = remaining_amount?.trim().parse::<u64>().ok()?;
+    let fraction = remaining_fraction?;
+    if !fraction.is_finite() || fraction <= 0.0 {
+        return Some(format!("{remaining} left"));
+    }
+    let limit = (remaining as f64 / fraction).round() as u64;
+    if limit == 0 {
+        Some(format!("{remaining} left"))
+    } else {
+        Some(format!("{remaining} / {limit} left"))
+    }
 }
 
 /// Translate a `ModelData` into a scoped (model, window_label, UsageWindow)
@@ -288,6 +311,7 @@ mod tests {
     fn transform_bucket_scopes_model_name() {
         let b = QuotaBucket {
             model_id: Some("gemini-2.5-pro".into()),
+            remaining_amount: Some("62".into()),
             remaining_fraction: Some(0.62),
             reset_time: Some("2026-04-22T00:00:00Z".into()),
             ..QuotaBucket::default()
@@ -296,6 +320,7 @@ mod tests {
         assert_eq!(scoped, "gemini/gemini-2.5-pro");
         assert_eq!(label, "daily");
         assert_eq!(window.used_percent, Some(38.0));
+        assert_eq!(window.value_label.as_deref(), Some("62 / 100 left"));
     }
 
     #[test]

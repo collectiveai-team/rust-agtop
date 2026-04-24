@@ -11,9 +11,12 @@ token usage, and estimates cost using built-in pricing tables.
 |--------------|--------------------------------------------------------------|--------------|
 | Claude Code  | `~/.claude/projects/<slug>/<uuid>.jsonl`                     | Stable       |
 | Codex        | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`               | Stable       |
+| Gemini CLI   | `~/.gemini/tmp/<project_hash>/chats/*.(json|jsonl)`          | Best-effort  |
 | OpenCode     | `~/.local/share/opencode/storage/{session,message}/…`        | Best-effort  |
 
 Adding a new client is a single `impl Client` in `agtop-core::clients`.
+See [`docs/gemini-cli.md`](docs/gemini-cli.md) for Gemini CLI integration
+details, data sources, and implementation notes.
 
 ## Status
 

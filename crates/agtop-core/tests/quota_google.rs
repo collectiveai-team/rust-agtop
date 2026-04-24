@@ -58,9 +58,10 @@ fn fetch_gemini_free_tier_surfaces_tier_and_project() {
     );
     let auth = auth_full();
     let http = FakeHttp::new();
-    // Free-tier flow: loadCodeAssist only. No quota buckets fetched since
-    // there's no paidTier. Mirrors what Gemini CLI itself does.
+    // Free-tier flow: loadCodeAssist discovers the onboarded project, then
+    // retrieveUserQuota fetches the same per-model buckets Gemini CLI uses.
     http.push_ok(200, &load_bytes("google/loadCodeAssist_free_tier.json"));
+    http.push_ok(200, &load_bytes("google/retrieveUserQuota_gemini.json"));
 
     let r = fetch_impl(&auth, &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");
@@ -69,9 +70,8 @@ fn fetch_gemini_free_tier_surfaces_tier_and_project() {
     assert_eq!(r.provider_id, ProviderId::Google);
     let u = r.usage.as_ref().unwrap();
     assert!(u.windows.is_empty());
-    // Free-tier has no per-model quota windows — Gemini CLI itself skips the
-    // retrieveUserQuota call when there's no onboarded paid project.
-    assert!(u.models.is_empty());
+    assert!(u.models.contains_key("gemini/gemini-2.5-pro"));
+    assert!(u.models.contains_key("gemini/gemini-2.5-flash"));
     // Meta surfaces the tier label and project id so the TUI can render a
     // helpful row instead of an error.
     assert_eq!(
@@ -123,9 +123,11 @@ fn fetch_aggregates_both_sources_when_both_configured() {
 
     let auth = auth_full();
     let http = FakeHttp::new();
-    // Free-tier loadCodeAssist for the Gemini source. Antigravity source has
-    // no access token (we don't refresh), so it never hits the http client.
+    // Free-tier loadCodeAssist + retrieveUserQuota for the Gemini source.
+    // Antigravity source has no access token (we don't refresh), so it never
+    // hits the http client.
     http.push_ok(200, &load_bytes("google/loadCodeAssist_free_tier.json"));
+    http.push_ok(200, &load_bytes("google/retrieveUserQuota_gemini.json"));
 
     let r = fetch_impl(&auth, &http, NOW_MS);
     std::env::remove_var("AGTOP_QUOTA_ANTIGRAVITY_ACCOUNTS");

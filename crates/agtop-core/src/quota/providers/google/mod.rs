@@ -7,15 +7,13 @@
 //!    `HEALTH_CHECK` mode. That endpoint works for both free-tier and paid
 //!    accounts without a caller-supplied project id and returns the account's
 //!    current tier plus its onboarded `cloudaicompanionProject`.
-//! 2. If the account is on a paid tier (i.e. `paidTier` is present in the
-//!    response), we additionally call `:retrieveUserQuota` with the project
-//!    id we just discovered — that's the exact sequence Gemini CLI uses for
-//!    paid tiers. Per-bucket quota becomes `Usage.models` entries.
-//! 3. For free-tier accounts, Gemini CLI itself does **not** query quota
-//!    (see the guard `if (!codeAssistServer.projectId) return` in the
-//!    upstream source). We therefore mark the provider result as OK with an
-//!    empty Usage, and surface the tier + project id via `meta` so the TUI
-//!    can render a helpful row instead of a 403 error.
+//! 2. When the account has an onboarded project id, we call
+//!    `:retrieveUserQuota` with that project id — this matches Gemini CLI's
+//!    `refreshUserQuota` path. Per-bucket quota becomes `Usage.models`
+//!    entries.
+//! 3. When no project id is available, we still mark the provider result as
+//!    OK and surface tier metadata via `meta`, but there is no quantitative
+//!    quota data to display.
 //! 4. Antigravity is kept as a second source. Because its on-disk
 //!    `accounts.json` never stores a live access token — and we explicitly
 //!    don't refresh tokens — the Antigravity source generally contributes
@@ -119,15 +117,15 @@ pub fn fetch_impl(auth: &OpencodeAuth, http: &dyn HttpClient, now_ms: i64) -> Pr
                                 project_id_seen = Some(pid.clone());
                             }
 
-                            // Step 2: paid tier only — fetch per-model buckets
-                            // using the onboarded project id. Gemini CLI skips
-                            // this for free-tier users, so we skip it too.
-                            let is_paid = parsed.paid_tier.is_some();
+                            // Step 2: fetch per-model buckets using the
+                            // onboarded project id. Current Gemini CLI calls
+                            // retrieveUserQuota whenever CodeAssist has a
+                            // project id; it is not limited to paid tiers.
                             let project = src
                                 .project_id
                                 .as_deref()
                                 .or(parsed.cloudaicompanion_project.as_deref());
-                            if is_paid {
+                            if project.is_some() {
                                 match api::fetch_quota_buckets(http, token, project) {
                                     Ok(body) => {
                                         match serde_json::from_slice::<

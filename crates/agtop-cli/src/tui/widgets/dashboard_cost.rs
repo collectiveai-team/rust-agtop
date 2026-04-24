@@ -281,12 +281,7 @@ fn build_rows(app: &App, period: CostPeriod, cur_year: i32, cur_month: u32) -> V
 }
 
 fn client_label(kind: ClientKind) -> String {
-    match kind {
-        ClientKind::Claude => "claude".to_string(),
-        ClientKind::Codex => "codex".to_string(),
-        ClientKind::OpenCode => "opencode".to_string(),
-        _ => "unknown".to_string(),
-    }
+    kind.as_str().to_string()
 }
 
 /// Shorten a path like `/home/user/projects/foo` → `~/projects/foo`,
@@ -299,4 +294,16 @@ fn shorten_path(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_label_uses_core_client_name_for_all_clients() {
+        for client in ClientKind::all() {
+            assert_eq!(client_label(*client), client.as_str());
+        }
+    }
 }
