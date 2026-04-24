@@ -272,6 +272,8 @@ fn row_for<'a>(
         agtop_core::session::ClientKind::Claude => th::CLIENT_CLAUDE,
         agtop_core::session::ClientKind::Codex => th::CLIENT_CODEX,
         agtop_core::session::ClientKind::OpenCode => th::CLIENT_OPENCODE,
+        agtop_core::session::ClientKind::Copilot => th::CLIENT_COPILOT,
+        agtop_core::session::ClientKind::GeminiCli => th::CLIENT_GEMINI_CLI,
         _ => Style::new(),
     };
 

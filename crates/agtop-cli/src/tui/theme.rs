@@ -43,6 +43,8 @@ pub const EMPTY_HINT: Style = Style::new().add_modifier(Modifier::DIM);
 pub const CLIENT_CLAUDE: Style = Style::new().fg(Color::Magenta);
 pub const CLIENT_CODEX: Style = Style::new().fg(Color::Cyan);
 pub const CLIENT_OPENCODE: Style = Style::new().fg(Color::Green);
+pub const CLIENT_COPILOT: Style = Style::new().fg(Color::Blue);
+pub const CLIENT_GEMINI_CLI: Style = Style::new().fg(Color::Yellow);
 
 // ── Cost cell colours ─────────────────────────────────────────────────────
 
