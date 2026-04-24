@@ -13,7 +13,6 @@ use ratatui::{
 
 use crate::tui::app::{App, QuotaState};
 use crate::tui::theme as th;
-use crate::tui::widgets::quota_bar::provider_short_name;
 use agtop_core::quota::UsageWindow;
 use indexmap::IndexMap;
 
@@ -84,7 +83,7 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         let is_selected = i == selected;
         let stale = !slot.current.ok && slot.last_good.is_some();
         let errored = !slot.current.ok && slot.last_good.is_none();
-        let loading = slot.current.usage.is_none() && slot.current.ok;
+        let loading = slot.current.usage.is_none() && slot.current.ok; // ok but no data yet
 
         let glyph = status_glyph(slot.current.ok, slot.last_good.is_some(), loading);
         let name_suffix = if stale { " \u{2020}" } else { "" };
@@ -172,6 +171,7 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
+    use crate::tui::widgets::quota_bar::provider_short_name;
     const BAR_WIDTH: usize = 10;
     const LABEL_WIDTH: usize = 16;
 
