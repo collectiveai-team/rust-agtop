@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 /// One candidate process that might be running an agent CLI.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Candidate {
     pub pid: u32,
@@ -18,6 +19,7 @@ pub(crate) struct Candidate {
 }
 
 /// OS process enumeration.
+#[allow(dead_code)]
 pub(crate) trait Scanner {
     /// Re-read the OS process table. Must be called before `candidates()`
     /// each snapshot.
@@ -30,11 +32,13 @@ pub(crate) trait Scanner {
 /// Only candidates whose executable name is in the known-CLIs set are
 /// returned, keeping per-snapshot cost proportional to running agents
 /// rather than total system processes.
+#[allow(dead_code)]
 pub(crate) struct SysinfoScanner {
     system: sysinfo::System,
     candidates: Vec<Candidate>,
 }
 
+#[allow(dead_code)]
 impl SysinfoScanner {
     pub(crate) fn new() -> Self {
         // `new_with_specifics(ProcessRefreshKind::everything())` is heavier
@@ -59,7 +63,7 @@ impl SysinfoScanner {
             "cursor-agent",
             "antigravity",
         ];
-        if DIRECT.iter().any(|&known| binary == known) {
+        if DIRECT.contains(&binary) {
             return true;
         }
         // Gemini CLI runs under node; disambiguate via argv.
