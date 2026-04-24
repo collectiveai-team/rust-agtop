@@ -13,6 +13,7 @@ use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
 use crate::tui::widgets::state_display::display_state;
 use agtop_core::session::SessionAnalysis;
+use ratatui_image::Image;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -118,6 +119,25 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     ]));
                 }
             }
+            // Determine which line index corresponds to the Subscription row.
+            // ColumnId::all() order determines line index (0-based after optional parent line).
+            let sub_col_pos = ColumnId::all()
+                .iter()
+                .position(|&c| c == ColumnId::Subscription)
+                .unwrap_or(0);
+            let parent_line_offset: usize = if parent_id.is_some() { 1 } else { 0 };
+            let sub_line_idx = parent_line_offset + sub_col_pos;
+
+            // Prepend 3 spaces to the subscription value span so the logo can
+            // overlay that blank area later.
+            if let Some(line) = lines.get_mut(sub_line_idx) {
+                // kv_line format: [key_span(idx 0)][gap_span(idx 1)][value_span(idx 2)]
+                if let Some(value_span) = line.spans.get_mut(2) {
+                    let original = value_span.content.to_string();
+                    value_span.content = format!("   {original}").into();
+                }
+            }
+
             // Split lines across two columns for better space utilisation.
             // The first column gets the metadata fields; the second gets any
             // child/subagent rows so they stay together.
@@ -142,6 +162,36 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 Paragraph::new(right_lines).wrap(Wrap { trim: false }),
                 cols[1],
             );
+
+            // Overlay the provider logo on the subscription line.
+            // Key is right-aligned in 16 chars, then 2-char gap → value starts at col x+18.
+            // The 3 prepended spaces give us a 3-wide cell for the logo image.
+            let logo_col_rect;
+            let logo_line_in_col;
+            if sub_line_idx < split {
+                // Subscription is in the left column.
+                logo_col_rect = cols[0];
+                logo_line_in_col = sub_line_idx;
+            } else {
+                // Subscription is in the right column.
+                logo_col_rect = cols[1];
+                logo_line_in_col = sub_line_idx - split;
+            }
+
+            let logo_y = logo_col_rect.y + logo_line_in_col as u16;
+            // key (16) + gap (2) = 18 chars before the value starts
+            let logo_x = logo_col_rect.x + 18;
+
+            if logo_y < logo_col_rect.y + logo_col_rect.height
+                && logo_x + 3 <= logo_col_rect.x + logo_col_rect.width
+            {
+                let logo_rect = Rect::new(logo_x, logo_y, 3, 1);
+                let client = a.summary.client;
+                if let Some(proto) = app.logo(client) {
+                    frame.render_widget(Image::new(proto), logo_rect);
+                }
+            }
+
             return;
         }
     };
