@@ -728,20 +728,24 @@ mod tests {
     use ratatui::backend::TestBackend;
     use std::path::PathBuf;
 
-    /// Tiny fixture: two sessions, deterministic timestamps, Claude +
-    /// Codex. We pin `last_active` in the past so the AGE column is
-    /// stable ("2d" etc.) regardless of when the test runs — within a
-    /// reasonable range.
+    /// Tiny fixture: two sessions, Claude + Codex.
+    ///
+    /// `s1_last` uses `Utc::now()` so the "waiting" state check always
+    /// falls within `WAITING_STALE_SECS` regardless of when the test runs.
     fn fixture_app() -> App {
         let ts_started = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let ts_last = Utc.with_ymd_and_hms(2026, 1, 1, 10, 30, 0).unwrap();
+        // Use a recent timestamp for the waiting session so `display_state`
+        // returns "waiting" rather than "stale" (sessions inactive for
+        // > WAITING_STALE_SECS are classified as stale even if waiting).
+        let s1_last = Utc::now();
 
         let s1_summary = SessionSummary::new(
             ClientKind::Claude,
             Some("Max 5x".into()),
             "deadbeef-aaaa-bbbb-cccc-1234".into(),
             Some(ts_started),
-            Some(ts_last),
+            Some(s1_last),
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),

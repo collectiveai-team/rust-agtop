@@ -4,20 +4,25 @@ use ratatui::style::Style;
 use crate::tui::theme as th;
 
 const WORKING_WINDOW_SECS: i64 = 30;
+/// A session reporting "waiting" that has had no activity for this long is
+/// considered stale — the agent process likely died or was killed.
+const WAITING_STALE_SECS: i64 = 300; // 5 minutes
 
 pub fn display_state(
     a: &agtop_core::session::SessionAnalysis,
     now: DateTime<Utc>,
 ) -> (&'static str, Style) {
-    if a.summary.state.as_deref() == Some("waiting") {
+    let age_secs = a
+        .summary
+        .last_active
+        .map(|ts| (now - ts).num_seconds())
+        .unwrap_or(i64::MAX);
+
+    if a.summary.state.as_deref() == Some("waiting") && age_secs <= WAITING_STALE_SECS {
         return ("waiting", th::STATE_WAITING);
     }
 
-    let is_recent = a
-        .summary
-        .last_active
-        .map(|ts| (now - ts).num_seconds() <= WORKING_WINDOW_SECS)
-        .unwrap_or(false);
+    let is_recent = age_secs <= WORKING_WINDOW_SECS;
 
     if is_recent {
         ("working", th::STATE_WORKING)
@@ -94,5 +99,29 @@ mod tests {
 
         assert_eq!(label, "stale");
         assert_eq!(style, th::STATE_STALE);
+    }
+
+    #[test]
+    fn waiting_state_older_than_stale_threshold_maps_to_stale() {
+        // A session stuck in "waiting" for > 5 minutes is stale (agent died).
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
+        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(301)));
+
+        let (label, style) = display_state(&a, now);
+
+        assert_eq!(label, "stale");
+        assert_eq!(style, th::STATE_STALE);
+    }
+
+    #[test]
+    fn waiting_state_within_stale_threshold_maps_to_waiting() {
+        // A session in "waiting" for < 5 minutes is still shown as waiting.
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
+        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(120)));
+
+        let (label, style) = display_state(&a, now);
+
+        assert_eq!(label, "waiting");
+        assert_eq!(style, th::STATE_WAITING);
     }
 }

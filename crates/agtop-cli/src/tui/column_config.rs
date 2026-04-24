@@ -276,8 +276,12 @@ impl ColumnConfig {
     }
 
     /// Toggle visibility of a column by index into `self.columns`.
+    /// The `Session` column is always visible and cannot be hidden.
     pub fn toggle(&mut self, idx: usize) {
         if let Some(entry) = self.columns.get_mut(idx) {
+            if entry.id == ColumnId::Session {
+                return;
+            }
             entry.visible = !entry.visible;
         }
     }

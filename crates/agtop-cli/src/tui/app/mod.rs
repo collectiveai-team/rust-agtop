@@ -1453,11 +1453,13 @@ mod tests {
     fn toggle_cursor_item_on_column_flips_visibility() {
         let mut app = App::new();
         let n_clients = app.column_config().clients.len();
-        // Place cursor at first column entry (after all client rows).
-        app.set_config_cursor(n_clients);
-        let was = app.column_config().columns[0].visible;
+        // The Session column (columns[0]) cannot be hidden; use the second
+        // column (index 1) which is a regular toggleable column.
+        let col_idx = 1;
+        app.set_config_cursor(n_clients + col_idx);
+        let was = app.column_config().columns[col_idx].visible;
         app.toggle_cursor_item();
-        assert_eq!(app.column_config().columns[0].visible, !was);
+        assert_eq!(app.column_config().columns[col_idx].visible, !was);
     }
 
     #[test]

@@ -57,11 +57,13 @@ pub fn render(
         .collect();
     let header = Row::new(header_cells).style(header_style).height(1);
 
+    let last_idx = visible.len().saturating_sub(1);
     let widths: Vec<Constraint> = visible
         .iter()
-        .map(|&col_id| {
-            if col_id.is_flexible() {
-                Constraint::Min(16)
+        .enumerate()
+        .map(|(i, &col_id)| {
+            if col_id.is_flexible() || i == last_idx {
+                Constraint::Fill(1)
             } else {
                 Constraint::Length(col_id.fixed_width().unwrap_or(8))
             }
@@ -247,9 +249,9 @@ fn row_for<'a>(
             RowKind::Child => format!("  {}", id),
             RowKind::Normal => {
                 if a.subagent_file_count > 0 {
-                    format!("{}+{}", id, a.subagent_file_count)
+                    format!("  {}+{}", id, a.subagent_file_count)
                 } else {
-                    id
+                    format!("  {}", id)
                 }
             }
         }

@@ -6,7 +6,7 @@
 //! (full detail) split. See the 2026-04-22-quota-tui design spec.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     prelude::*,
     widgets::{Block, Borders, Paragraph},
 };
@@ -47,7 +47,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .split(inner);
 
     render_list(frame, panes[0], app);
-    render_details(frame, panes[1], app);
+    // Add a 2-column left margin to the right pane so there is clear blank
+    // space separating the provider list from the detail content.
+    let detail_area = panes[1].inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+    render_details(frame, detail_area, app);
 }
 
 fn render_centered(frame: &mut Frame<'_>, area: Rect, msg: &str) {
@@ -58,12 +64,7 @@ fn render_centered(frame: &mut Frame<'_>, area: Rect, msg: &str) {
 }
 
 fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    use crate::tui::app::quota::preferred_window;
-    use crate::tui::widgets::quota_bar::{
-        bar_spans, error_token, provider_short_name, status_glyph,
-    };
-
-    const BAR_WIDTH: usize = 10;
+    use crate::tui::widgets::quota_bar::{error_token, provider_short_name, status_glyph};
 
     let slots = app.quota_slots();
     let selected = app.selected_provider();
@@ -83,46 +84,28 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
             .get("plan")
             .map(String::as_str)
             .unwrap_or_else(|| provider_short_name(slot.current.provider_id));
-        let prefix = format!("{glyph} {name}{name_suffix}  ");
 
-        let body: Vec<Span<'_>> = if errored {
+        // Left column shows only the status glyph + plan name (no usage bar).
+        // The bar/percentage live exclusively in the right detail pane.
+        let status_text: Option<String> = if errored {
             let token = slot
                 .current
                 .error
                 .as_ref()
                 .map(error_token)
                 .unwrap_or_else(|| "err".into());
-            vec![Span::raw(format!("— {token}"))]
+            Some(format!(" — {token}"))
         } else if loading {
-            vec![Span::raw("— loading\u{2026}")]
+            Some(" — loading\u{2026}".into())
         } else {
-            let effective = if stale {
-                slot.last_good.as_ref().unwrap_or(&slot.current)
-            } else {
-                &slot.current
-            };
-            match effective
-                .usage
-                .as_ref()
-                .and_then(|u| preferred_window(effective.provider_id, u))
-            {
-                None => vec![Span::raw("—")],
-                Some((label, w)) => match w.used_percent {
-                    Some(p) => {
-                        let [filled, empty] = bar_spans(Some(p), BAR_WIDTH, stale);
-                        vec![Span::raw(format!("{label}  {p:>3.0}%  ")), filled, empty]
-                    }
-                    None => {
-                        let label_text = w.value_label.clone().unwrap_or_else(|| "—".into());
-                        vec![Span::raw(format!("{label}  {label_text}"))]
-                    }
-                },
-            }
+            None
         };
 
-        let mut spans = vec![Span::raw(prefix)];
-        spans.extend(body);
-        let line = Line::from(spans);
+        let line_text = format!(
+            "{glyph} {name}{name_suffix}{}",
+            status_text.as_deref().unwrap_or("")
+        );
+        let line = Line::from(Span::raw(line_text));
 
         let line = if is_selected {
             Line::from(

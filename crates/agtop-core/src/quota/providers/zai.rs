@@ -237,7 +237,11 @@ fn resolve_window(limit: &Limit, now_ms: i64) -> (String, Option<u64>) {
         (None, None) => None,
     };
 
-    let label = match chosen {
+    // Use the hardcoded window size for the label when available, so that a
+    // "weekly" window is always labelled "weekly" regardless of how much time
+    // remains until the next reset (which the API reports as nextResetTime).
+    let label_secs = hardcoded.or(chosen);
+    let label = match label_secs {
         Some(s) => seconds_to_label(s),
         None => "tokens".to_string(),
     };

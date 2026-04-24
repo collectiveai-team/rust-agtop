@@ -387,6 +387,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut cwd: Option<String> = None;
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
+    let mut session_title: Option<String> = None;
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
@@ -424,6 +425,12 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
             state = Some(next_state);
             state_detail = Some(detail);
         }
+        // Claude Code writes an "ai-title" record with an AI-generated session summary.
+        if session_title.is_none() && v.get("type").and_then(|x| x.as_str()) == Some("ai-title") {
+            if let Some(t) = v.get("aiTitle").and_then(|x| x.as_str()) {
+                session_title = Some(t.to_string());
+            }
+        }
     })?;
 
     let last_active = mtime(path).or(earliest);
@@ -440,7 +447,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         state_detail,
         model_effort: None,
         model_effort_detail: None,
-        session_title: None,
+        session_title,
         data_path: path.to_path_buf(),
     })
 }

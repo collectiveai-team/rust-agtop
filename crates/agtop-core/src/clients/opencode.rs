@@ -1139,8 +1139,14 @@ fn latest_message_state_sqlite(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> (Option<String>, Option<String>) {
+    // Only inspect the most recent *assistant* message for state.
+    // User messages (tool results, question responses) do not carry a
+    // `finish` field and would otherwise mask the actual assistant state.
     conn.query_row(
-        "SELECT data FROM message WHERE session_id = ?1 ORDER BY time_created DESC LIMIT 1",
+        "SELECT data FROM message \
+         WHERE session_id = ?1 \
+           AND json_extract(data, '$.role') = 'assistant' \
+         ORDER BY time_created DESC LIMIT 1",
         rusqlite::params![session_id],
         |row| row.get::<_, String>(0),
     )
@@ -1509,7 +1515,10 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
         return (None, None);
     }
 
-    let mut latest: Option<(std::time::SystemTime, serde_json::Value)> = None;
+    // Collect all messages with their modification time, then pick the most
+    // recent *assistant* message for state — user messages do not carry a
+    // `finish` field and would otherwise mask the actual assistant state.
+    let mut latest_assistant: Option<(std::time::SystemTime, serde_json::Value)> = None;
     let entries = match fs::read_dir(msg_dir) {
         Ok(entries) => entries,
         Err(_) => return (None, None),
@@ -1528,13 +1537,17 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
         let Ok(value) = read_json(&p) else {
             continue;
         };
-        match &latest {
+        // Only consider assistant messages.
+        if value.get("role").and_then(|x| x.as_str()) != Some("assistant") {
+            continue;
+        }
+        match &latest_assistant {
             Some((cur_modified, _)) if *cur_modified >= modified => {}
-            _ => latest = Some((modified, value)),
+            _ => latest_assistant = Some((modified, value)),
         }
     }
 
-    latest
+    latest_assistant
         .and_then(|(_, value)| state_from_opencode_message(&value))
         .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
 }

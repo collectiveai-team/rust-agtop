@@ -12,6 +12,7 @@
 //! the server, but summing `last_token_usage` is equivalent and robust to
 //! missing/partial entries).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -67,6 +68,12 @@ impl Client for CodexClient {
             return Ok(vec![]);
         }
         let subscription = read_plan_name(&self.auth_path);
+        // Load session titles from the index file once, before scanning rollouts.
+        let codex_dir = self
+            .sessions_root
+            .parent()
+            .unwrap_or(self.sessions_root.as_path());
+        let titles = read_session_index(codex_dir);
         let mut out = Vec::new();
         for entry in WalkDir::new(&self.sessions_root)
             .into_iter()
@@ -86,6 +93,10 @@ impl Client for CodexClient {
             match cached {
                 Ok(mut s) => {
                     s.subscription = subscription.clone();
+                    // Populate session title from the index if not already set.
+                    if s.session_title.is_none() {
+                        s.session_title = titles.get(&s.session_id).cloned();
+                    }
                     out.push(s)
                 }
                 Err(e) => {
@@ -157,6 +168,39 @@ fn collect_plan_usage(auth_path: &Path, sessions_root: &Path) -> Vec<PlanUsage> 
         last_limit_hit: None,
         note,
     }]
+}
+
+/// Read `~/.codex/session_index.jsonl` and return a map of session id →
+/// most-recent thread name.
+///
+/// The index is an append-only JSONL file where each line is:
+/// `{"id": "<session-uuid>", "thread_name": "<title>", "updated_at": "..."}`.
+/// We scan all lines and keep the entry with the latest `updated_at` per id.
+fn read_session_index(codex_dir: &Path) -> HashMap<String, String> {
+    let path = codex_dir.join("session_index.jsonl");
+    let mut map: HashMap<String, (String, String)> = HashMap::new(); // id → (updated_at, thread_name)
+    let _ = for_each_jsonl(&path, |v| {
+        let Some(id) = v.get("id").and_then(|x| x.as_str()) else {
+            return;
+        };
+        let Some(thread_name) = v.get("thread_name").and_then(|x| x.as_str()) else {
+            return;
+        };
+        let updated_at = v
+            .get("updated_at")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        // Keep whichever entry has the latest updated_at (lexicographic compare
+        // works for ISO 8601 timestamps).
+        match map.get(id) {
+            Some((cur_ts, _)) if cur_ts.as_str() >= updated_at.as_str() => {}
+            _ => {
+                map.insert(id.to_string(), (updated_at, thread_name.to_string()));
+            }
+        }
+    });
+    map.into_iter().map(|(id, (_, name))| (id, name)).collect()
 }
 
 /// Read `~/.codex/auth.json`, pull `tokens.id_token`, and decode the JWT
@@ -412,14 +456,12 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut model_effort_detail: Option<String> = None;
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
-    let mut seen = 0usize;
 
-    // We only need the first ~50 records for metadata.
+    // Scan the full file: metadata records appear near the start, but
+    // state (response_item) must be read from the end to get the final
+    // status of the session — truncating early causes stale "waiting"
+    // states to persist even when the session has long since finished.
     for_each_jsonl(path, |v| {
-        if seen > 50 {
-            return;
-        }
-        seen += 1;
         let ty = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
         let payload = v.get("payload");
         match ty {
@@ -460,6 +502,11 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                     if let Some((next_state, detail)) = state_from_response_item(p) {
                         state = Some(next_state);
                         state_detail = Some(detail);
+                    } else {
+                        // A non-waiting response_item (e.g. a text output message)
+                        // clears any prior "waiting" state — the tool call completed.
+                        state = Some("stopped".to_string());
+                        state_detail = Some("response_item:done".to_string());
                     }
                 }
             }
