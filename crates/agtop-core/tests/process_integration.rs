@@ -3,8 +3,6 @@
 
 #![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use std::path::PathBuf;
-
 use agtop_core::process::ProcessCorrelator;
 use agtop_core::session::{ClientKind, SessionSummary};
 

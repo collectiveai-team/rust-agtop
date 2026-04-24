@@ -26,11 +26,11 @@ pub(crate) fn paths_for(session: &SessionSummary) -> Vec<PathBuf> {
         // it's created the moment a write begins.
         ClientKind::OpenCode | ClientKind::Antigravity => {
             let base = session.data_path.clone();
-            let mut out = Vec::with_capacity(3);
-            out.push(base.clone());
-            out.push(append_suffix(&base, "-wal"));
-            out.push(append_suffix(&base, "-shm"));
-            out
+            vec![
+                base.clone(),
+                append_suffix(&base, "-wal"),
+                append_suffix(&base, "-shm"),
+            ]
         }
     }
 }

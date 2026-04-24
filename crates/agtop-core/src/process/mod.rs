@@ -192,7 +192,7 @@ mod lifecycle_tests {
         // Cycle 3: dropped.
         let third = c.snapshot(&sessions);
         assert!(
-            third.get("s1").is_none(),
+            !third.contains_key("s1"),
             "stopped entry should drop on next tick"
         );
     }
