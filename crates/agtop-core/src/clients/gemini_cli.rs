@@ -130,6 +130,52 @@ impl Client for GeminiCliClient {
         Ok(out)
     }
 
+    fn children(&self, parent: &SessionSummary) -> Result<Vec<SessionSummary>> {
+        // Gemini CLI stores subagent sessions in a subdirectory named after
+        // the parent session ID, alongside the parent's own chat file:
+        //   ~/.gemini/tmp/<slug>/chats/<parent_session_id>/<subagent_id>.jsonl
+        let chats_dir = match parent.data_path.parent() {
+            Some(p) => p.to_path_buf(),
+            None => return Ok(vec![]),
+        };
+        let subagent_dir = chats_dir.join(&parent.session_id);
+        if !subagent_dir.is_dir() {
+            return Ok(vec![]);
+        }
+
+        let cwd = parent.cwd.clone();
+        let global_model = read_global_model(&self.gemini_dir);
+        let subscription = parent.subscription.clone();
+        let mut out = Vec::new();
+
+        let entries = match fs::read_dir(&subagent_dir) {
+            Ok(d) => d,
+            Err(_) => return Ok(out),
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str());
+            if !matches!(ext, Some("json") | Some("jsonl")) {
+                continue;
+            }
+            let cwd2 = cwd.clone();
+            let gm = global_model.clone();
+            let sub = subscription.clone();
+            let cached = {
+                let mut guard = self.discover_cache.lock().unwrap();
+                guard.get_or_insert_with(&path, || parse_gemini_session(&path, cwd2, gm, sub))
+            };
+            match cached {
+                Ok(s) => out.push(s),
+                Err(e) => {
+                    tracing::debug!(path = %path.display(), error = %e, "skip gemini subagent session");
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn analyze(&self, summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {
         let telemetry = extract_analysis_from_telemetry(
             &self.gemini_dir,
@@ -1066,5 +1112,74 @@ mod tests {
         assert_eq!(analysis.tokens.input, 100);
         assert_eq!(analysis.tokens.output, 50);
         assert_eq!(analysis.agent_turns, Some(2));
+    }
+
+    #[test]
+    fn children_found_in_subagent_subdirectory() {
+        let td = TestDir::new("subagents");
+        let chats_dir = td.path.join("tmp").join("myproject").join("chats");
+        let parent_session_id = "d535618c-bd13-4e0d-96bc-ff061b181c8c";
+        let subagent_dir = chats_dir.join(parent_session_id);
+        fs::create_dir_all(&subagent_dir).unwrap();
+
+        fs::write(
+            td.path.join("projects.json"),
+            r#"{"projects":{"/home/user/myproject":"myproject"}}"#,
+        )
+        .unwrap();
+
+        // Parent session file
+        let parent_file = chats_dir.join(format!(
+            "session-2026-04-24T02-38-{}.jsonl",
+            &parent_session_id[..8]
+        ));
+        fs::write(
+            &parent_file,
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "sessionId": parent_session_id,
+                    "startTime": "2026-04-24T02:38:42Z",
+                    "lastUpdated": "2026-04-24T02:39:00Z",
+                    "kind": "main"
+                })
+            ),
+        )
+        .unwrap();
+
+        // Child subagent session
+        let child_session_id = "apwtx0";
+        fs::write(
+            subagent_dir.join(format!("{child_session_id}.jsonl")),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "sessionId": child_session_id,
+                    "startTime": "2026-04-24T02:39:13Z",
+                    "lastUpdated": "2026-04-24T02:39:48Z",
+                    "kind": "subagent"
+                })
+            ),
+        )
+        .unwrap();
+
+        let client = GeminiCliClient {
+            gemini_dir: td.path.clone(),
+            discover_cache: Mutex::default(),
+        };
+
+        let sessions = client.list_sessions().unwrap();
+        // Only the parent should appear at the top level (not the subagent in the subdirectory)
+        assert_eq!(
+            sessions.len(),
+            1,
+            "expected only parent at top level, got {:?}",
+            sessions.iter().map(|s| &s.session_id).collect::<Vec<_>>()
+        );
+        assert_eq!(sessions[0].session_id, parent_session_id);
+
+        let children = client.children(&sessions[0]).unwrap();
+        assert_eq!(children.len(), 1, "expected one child subagent");
+        assert_eq!(children[0].session_id, child_session_id);
     }
 }

@@ -34,6 +34,10 @@ const QUOTA_CACHE_SECS: u64 = 300;
 struct CopilotParsed {
     tool_call_count: Option<u64>,
     duration_secs: Option<u64>,
+    /// Number of user messages (requests) in the session.
+    user_turns: Option<u64>,
+    /// Number of agent responses (one per request).
+    agent_turns: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -161,27 +165,37 @@ impl Client for CopilotClient {
 
         // Fast path: use data cached by the preceding `list_sessions` call.
         // One file read per session per refresh instead of two.
-        let (tool_call_count, duration_secs) = self
+        let parsed = self
             .cache
             .read()
             .ok()
             .and_then(|guard| guard.get(path).cloned())
-            .map(|p| (p.tool_call_count, p.duration_secs))
             // Fallback: re-read the file (tests or list_sessions was skipped).
-            .unwrap_or_else(|| parse_session_metadata(path));
+            .unwrap_or_else(|| {
+                let (tool_call_count, duration_secs) = parse_session_metadata(path);
+                CopilotParsed {
+                    tool_call_count,
+                    duration_secs,
+                    user_turns: None,
+                    agent_turns: None,
+                }
+            });
 
-        Ok(SessionAnalysis::new(
+        let mut analysis = SessionAnalysis::new(
             summary.clone(),
             TokenTotals::default(),
             CostBreakdown::default(),
             summary.model.clone(),
             0,
-            tool_call_count,
-            duration_secs,
+            parsed.tool_call_count,
+            parsed.duration_secs,
             None,
             None,
             None,
-        ))
+        );
+        analysis.agent_turns = parsed.agent_turns;
+        analysis.user_turns = parsed.user_turns;
+        Ok(analysis)
     }
 
     fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
@@ -221,9 +235,11 @@ fn parse_session_all(
     let mut model: Option<String> = None;
     let mut tool_calls: u64 = 0;
     let mut total_elapsed_ms: u64 = 0;
+    let mut request_count: u64 = 0;
 
     if let Some(requests) = v.get("requests").and_then(|r| r.as_array()) {
         for req in requests {
+            request_count += 1;
             if model.is_none() {
                 model = req
                     .get("modelId")
@@ -277,6 +293,16 @@ fn parse_session_all(
         } else {
             None
         },
+        user_turns: if request_count > 0 {
+            Some(request_count)
+        } else {
+            None
+        },
+        agent_turns: if request_count > 0 {
+            Some(request_count)
+        } else {
+            None
+        },
     };
 
     Ok((summary, parsed))
@@ -293,6 +319,7 @@ fn parse_session_jsonl_all(
     let mut last_active = mtime(path);
     let mut tool_calls = 0u64;
     let mut waiting = false;
+    let mut request_count: u64 = 0;
 
     for_each_jsonl(path, |record| {
         let Some(kind) = record.get("kind").and_then(|x| x.as_i64()) else {
@@ -351,6 +378,7 @@ fn parse_session_jsonl_all(
                     return;
                 };
                 for req in requests {
+                    request_count += 1;
                     if model.is_none() {
                         model = req
                             .get("modelId")
@@ -405,6 +433,16 @@ fn parse_session_jsonl_all(
             None
         },
         duration_secs: None,
+        user_turns: if request_count > 0 {
+            Some(request_count)
+        } else {
+            None
+        },
+        agent_turns: if request_count > 0 {
+            Some(request_count)
+        } else {
+            None
+        },
     };
     Ok((summary, parsed))
 }

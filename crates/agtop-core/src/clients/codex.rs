@@ -124,6 +124,54 @@ impl Client for CodexClient {
     fn plan_usage(&self) -> Result<Vec<PlanUsage>> {
         Ok(collect_plan_usage(&self.auth_path, &self.sessions_root))
     }
+
+    fn children(&self, parent: &SessionSummary) -> Result<Vec<SessionSummary>> {
+        if !dir_exists(&self.sessions_root) {
+            return Ok(vec![]);
+        }
+        let subscription = read_plan_name(&self.auth_path);
+        let codex_dir = self
+            .sessions_root
+            .parent()
+            .unwrap_or(self.sessions_root.as_path());
+        let titles = read_session_index(codex_dir);
+
+        let mut out = Vec::new();
+        for entry in WalkDir::new(&self.sessions_root)
+            .into_iter()
+            .filter_map(|r| r.ok())
+        {
+            let p = entry.path().to_path_buf();
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if p.extension().map(|e| e != "jsonl").unwrap_or(true) {
+                continue;
+            }
+            // Read parent_thread_id from the session_meta of each candidate file.
+            if let Some(child_parent_id) = read_parent_thread_id(&p) {
+                if child_parent_id == parent.session_id {
+                    let cached = {
+                        let mut guard = self.discover_cache.lock().unwrap();
+                        guard.get_or_insert_with(&p, || summarize_codex_file(&p))
+                    };
+                    match cached {
+                        Ok(mut s) => {
+                            s.subscription = subscription.clone();
+                            if s.session_title.is_none() {
+                                s.session_title = titles.get(&s.session_id).cloned();
+                            }
+                            out.push(s);
+                        }
+                        Err(e) => {
+                            tracing::debug!(path = %p.display(), error = %e, "skip codex child file");
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +559,30 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// Read the first `session_meta` record from a Codex rollout file and return
+/// the `parent_thread_id` if the session was spawned as a subagent.
+///
+/// The field lives at:
+/// `session_meta.payload.source.subagent.thread_spawn.parent_thread_id`
+fn read_parent_thread_id(path: &Path) -> Option<String> {
+    let mut parent_id: Option<String> = None;
+    let _ = for_each_jsonl(path, |v| {
+        if parent_id.is_some() {
+            return; // already found; stop scanning
+        }
+        if v.get("type").and_then(|x| x.as_str()) != Some("session_meta") {
+            return;
+        }
+        if let Some(pid) = v
+            .pointer("/payload/source/subagent/thread_spawn/parent_thread_id")
+            .and_then(|x| x.as_str())
+        {
+            parent_id = Some(pid.to_string());
+        }
+    });
+    parent_id
+}
+
 fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut session_id: Option<String> = None;
     let mut started_at: Option<DateTime<Utc>> = None;
@@ -521,6 +593,9 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
+    // `thread_name_updated` is the authoritative AI-generated title; once set
+    // it takes precedence over any title derived from raw message content.
+    let mut authoritative_title: Option<String> = None;
 
     // Scan the full file: metadata records appear near the start, but
     // state (response_item) must be read from the end to get the final
@@ -564,10 +639,17 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
             }
             "response_item" => {
                 if let Some(p) = payload {
+                    // Only extract a title from genuine user messages — skip
+                    // system-injected XML blocks (environment context, permissions
+                    // instructions, subagent notifications) which always start with '<'.
                     if session_title.is_none()
                         && p.get("role").and_then(|x| x.as_str()) == Some("user")
                     {
-                        session_title = message_text_from_payload(p).map(|s| summarize_title(&s));
+                        if let Some(text) = message_text_from_payload(p) {
+                            if !text.trim_start().starts_with('<') {
+                                session_title = Some(summarize_title(&text));
+                            }
+                        }
                     }
                     if let Some((next_state, detail)) = state_from_response_item(p) {
                         state = Some(next_state);
@@ -587,12 +669,17 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                 }
             }
             "event_msg" => {
-                if session_title.is_none() {
-                    if let Some(message) = payload
-                        .and_then(|p| p.get("message"))
-                        .and_then(|x| x.as_str())
-                    {
-                        session_title = Some(summarize_title(message));
+                if let Some(p) = payload {
+                    // Prefer the AI-generated thread name over raw message text.
+                    if p.get("type").and_then(|x| x.as_str()) == Some("thread_name_updated") {
+                        if let Some(name) = p.get("thread_name").and_then(|x| x.as_str()) {
+                            authoritative_title = Some(name.to_string());
+                        }
+                    }
+                    if session_title.is_none() {
+                        if let Some(message) = p.get("message").and_then(|x| x.as_str()) {
+                            session_title = Some(summarize_title(message));
+                        }
                     }
                 }
             }
@@ -632,7 +719,8 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         state_detail,
         model_effort,
         model_effort_detail,
-        session_title,
+        // Prefer AI-generated thread name over raw message content.
+        session_title: authoritative_title.or(session_title),
         data_path: path.to_path_buf(),
     })
 }
@@ -1030,5 +1118,205 @@ mod tests {
         };
         let usages = client.plan_usage().expect("plan_usage");
         assert!(usages.is_empty(), "expected empty, got {usages:?}");
+    }
+
+    // --- Session title extraction tests ---
+
+    fn write_rollout(path: &std::path::Path, lines: &[&str]) {
+        fs::write(path, lines.join("\n")).expect("write rollout");
+    }
+
+    #[test]
+    fn session_title_skips_environment_context() {
+        let tmp = TmpDir::new("title-env");
+        let session_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("04")
+            .join("01");
+        fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir
+            .join("rollout-2026-04-01T00-00-00-aabbccdd-0000-0000-0000-000000000001.jsonl");
+
+        let env_user = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<environment_context>\n<cwd>/home/user</cwd>\n</environment_context>"}]
+            }
+        });
+        let real_user = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:02Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "Fix the bug in session parsing"
+            }
+        });
+
+        write_rollout(&path, &[
+            &serde_json::json!({"timestamp":"2026-04-01T00:00:00Z","type":"session_meta","payload":{"id":"aabbccdd-0000-0000-0000-000000000001","timestamp":"2026-04-01T00:00:00Z","cwd":"/home/user"}}).to_string(),
+            &env_user.to_string(),
+            &real_user.to_string(),
+        ]);
+
+        let summary = summarize_codex_file(&path).expect("summarize");
+        assert_eq!(
+            summary.session_title.as_deref(),
+            Some("Fix the bug in session parsing"),
+            "expected real user message, got: {:?}",
+            summary.session_title
+        );
+    }
+
+    #[test]
+    fn children_grouped_by_parent_thread_id() {
+        let tmp = TmpDir::new("children");
+        let session_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("04")
+            .join("01");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let parent_id = "ccddee00-1111-1111-1111-111111111111";
+        let child_id = "ccddee00-2222-2222-2222-222222222222";
+
+        let parent_path =
+            session_dir.join(format!("rollout-2026-04-01T00-00-00-{parent_id}.jsonl"));
+        let child_path = session_dir.join(format!("rollout-2026-04-01T00-01-00-{child_id}.jsonl"));
+
+        // Write parent rollout (no source.subagent field — it IS the parent)
+        let parent_meta = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": parent_id,
+                "timestamp": "2026-04-01T00:00:00Z",
+                "cwd": "/home/user"
+            }
+        });
+        // Need at least one token_count to pass analyze (add a fake event_msg)
+        let fake_token = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:10Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 100,
+                        "output_tokens": 50
+                    },
+                    "model_context_window": 100000
+                }
+            }
+        });
+        let parent_turn = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:05Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-4o"}
+        });
+        write_rollout(
+            &parent_path,
+            &[
+                &parent_meta.to_string(),
+                &parent_turn.to_string(),
+                &fake_token.to_string(),
+            ],
+        );
+
+        // Write child rollout with parent_thread_id
+        let child_meta = serde_json::json!({
+            "timestamp": "2026-04-01T00:01:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": child_id,
+                "timestamp": "2026-04-01T00:01:00Z",
+                "cwd": "/home/user",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": parent_id,
+                            "depth": 1
+                        }
+                    }
+                }
+            }
+        });
+        write_rollout(&child_path, &[
+            &child_meta.to_string(),
+            &serde_json::json!({"timestamp":"2026-04-01T00:01:05Z","type":"turn_context","payload":{"model":"gpt-4o"}}).to_string(),
+            &serde_json::json!({"timestamp":"2026-04-01T00:01:10Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":20,"output_tokens":10},"model_context_window":100000}}}).to_string(),
+        ]);
+
+        let client = CodexClient {
+            sessions_root: tmp.path().join("sessions"),
+            auth_path: tmp.path().join("auth.json"),
+            discover_cache: Mutex::default(),
+        };
+
+        let sessions = client.list_sessions().unwrap();
+        // Both sessions should be discovered
+        assert_eq!(
+            sessions.len(),
+            2,
+            "expected 2 sessions, got {:?}",
+            sessions.iter().map(|s| &s.session_id).collect::<Vec<_>>()
+        );
+
+        let parent_summary = sessions.iter().find(|s| s.session_id == parent_id).unwrap();
+        let children = client.children(parent_summary).unwrap();
+        assert_eq!(children.len(), 1, "expected 1 child");
+        assert_eq!(children[0].session_id, child_id);
+    }
+
+    #[test]
+    fn session_title_prefers_thread_name_updated() {
+        let tmp = TmpDir::new("title-thread");
+        let session_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("04")
+            .join("01");
+        fs::create_dir_all(&session_dir).unwrap();
+        let path = session_dir
+            .join("rollout-2026-04-01T00-00-00-aabbccdd-0000-0000-0000-000000000002.jsonl");
+
+        let real_user = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:01Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "Fix the bug"
+            }
+        });
+        let thread_name = serde_json::json!({
+            "timestamp": "2026-04-01T00:00:05Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "thread_name_updated",
+                "thread_id": "aabbccdd-0000-0000-0000-000000000002",
+                "thread_name": "Fix Session Parsing Bug"
+            }
+        });
+
+        write_rollout(&path, &[
+            &serde_json::json!({"timestamp":"2026-04-01T00:00:00Z","type":"session_meta","payload":{"id":"aabbccdd-0000-0000-0000-000000000002","timestamp":"2026-04-01T00:00:00Z","cwd":"/home/user"}}).to_string(),
+            &real_user.to_string(),
+            &thread_name.to_string(),
+        ]);
+
+        let summary = summarize_codex_file(&path).expect("summarize");
+        assert_eq!(
+            summary.session_title.as_deref(),
+            Some("Fix Session Parsing Bug"),
+            "expected thread_name_updated title, got: {:?}",
+            summary.session_title
+        );
     }
 }
