@@ -14,6 +14,8 @@ use ratatui::{
 use crate::tui::app::{App, QuotaState};
 use crate::tui::theme as th;
 use crate::tui::widgets::quota_bar::provider_short_name;
+use agtop_core::quota::UsageWindow;
+use indexmap::IndexMap;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let outer_block = Block::default().borders(Borders::ALL).title(" Quota ");
@@ -199,6 +201,8 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
         &slot.current
     };
 
+    let mut any_preview = false;
+
     if error_only {
         let err = slot.current.error.as_ref();
         let kind = err
@@ -220,15 +224,11 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 lines.push(window_line(label, w, BAR_WIDTH, stale));
             }
 
-            // Google per-model windows.
             if !usage.models.is_empty() {
                 lines.push(Line::from(""));
-                for (model, windows) in &usage.models {
-                    for (wlabel, w) in windows {
-                        let label = format!("{model}  {wlabel}");
-                        lines.push(window_line(&label, w, BAR_WIDTH, stale));
-                    }
-                }
+                let (model_lines, preview) = google_model_lines(&usage.models, BAR_WIDTH, stale);
+                any_preview = preview;
+                lines.extend(model_lines);
             }
 
             // Extras.
@@ -243,11 +243,12 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
         frame.render_widget(p, content_area);
     }
 
-    // "Fetched at" footer — pinned to the last row of the pane.
     if let Some(footer_rect) = footer_area {
-        let footer = format!("fetched at {}", format_epoch_ms(effective.fetched_at));
-        let footer_p = Paragraph::new(Line::from(Span::styled(footer, th::PLAN_NOTE)))
-            .alignment(Alignment::Right);
+        let fetched = format!("fetched at {}", format_epoch_ms(effective.fetched_at));
+        let footnote = if any_preview { "* preview" } else { "" };
+        let footer_text = format!("{footnote:<20}{fetched:>}");
+        let footer_p = Paragraph::new(Line::from(Span::styled(footer_text, th::PLAN_NOTE)))
+            .alignment(Alignment::Left);
         frame.render_widget(footer_p, footer_rect);
     }
 }
@@ -415,6 +416,51 @@ fn reset_time_str(w: &agtop_core::quota::UsageWindow) -> String {
             }
         }
     }
+}
+
+fn google_model_lines<'a>(
+    models: &IndexMap<String, IndexMap<String, UsageWindow>>,
+    bar_width: usize,
+    stale: bool,
+) -> (Vec<Line<'a>>, bool) {
+    use crate::tui::widgets::quota_bar::bar_spans;
+    const GOOGLE_BAR_WIDTH: usize = 20;
+    const NAME_COL: usize = 20;
+    let mut any_preview = false;
+    let mut rows = Vec::new();
+
+    rows.push(Line::from(Span::styled(
+        format!("{:<NAME_COL$}Usage                Resets", "Model"),
+        th::QUOTA_TITLE,
+    )));
+
+    for (model_key, windows) in models {
+        for (_wlabel, w) in windows {
+            let (short, is_preview) = short_model_name(model_key);
+            if is_preview {
+                any_preview = true;
+            }
+            let display = if is_preview {
+                format!("{short} *")
+            } else {
+                short
+            };
+            let [filled, empty] = bar_spans(w.used_percent, GOOGLE_BAR_WIDTH, stale);
+            let pct_str = w
+                .used_percent
+                .map(|p| format!("{p:>5.1}%"))
+                .unwrap_or_else(|| "     —".into());
+            let reset = reset_time_str(w);
+            rows.push(Line::from(vec![
+                Span::raw(format!("{display:<NAME_COL$}")),
+                filled,
+                empty,
+                Span::raw(format!(" {pct_str}  {reset}")),
+            ]));
+        }
+    }
+
+    (rows, any_preview)
 }
 
 #[cfg(test)]
@@ -748,10 +794,156 @@ mod tests {
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
         assert!(
-            contents.contains("gemini-2.5-pro"),
-            "model name missing:\n{contents}"
+            contents.contains("Gemini 2.5 Pro"),
+            "short model name missing:\n{contents}"
         );
         assert!(contents.contains("31"), "percentage missing:\n{contents}");
+    }
+
+    #[test]
+    fn google_table_has_column_header() {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Model"),
+            "column header 'Model' missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Usage"),
+            "column header 'Usage' missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Resets"),
+            "column header 'Resets' missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn google_table_shows_short_names() {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Gemini 2.5 Flash"),
+            "short name missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Gemini 2.5 Pro"),
+            "short name missing:\n{contents}"
+        );
+        assert!(
+            !contents.contains("gemini/gemini-"),
+            "raw scoped keys should not appear:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn google_table_shows_preview_asterisk() {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("Gemini 3 Flash *"),
+            "preview asterisk missing:\n{contents}"
+        );
+        assert!(
+            contents.contains("Gemini 3 Pro *"),
+            "preview asterisk missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn google_table_shows_preview_footnote() {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains("preview"),
+            "footnote missing:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn google_table_no_footnote_when_no_previews() {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+
+        let mut m1: IndexMap<String, UsageWindow> = IndexMap::new();
+        m1.insert(
+            "daily".into(),
+            UsageWindow {
+                used_percent: Some(50.0),
+                window_seconds: Some(86400),
+                reset_at: None,
+                value_label: None,
+            },
+        );
+        let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
+        models.insert("gemini/gemini-2.5-flash".into(), m1);
+
+        let usage = Usage {
+            windows: Default::default(),
+            models,
+            extras: Default::default(),
+        };
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            !contents.contains("* preview"),
+            "footnote should not appear without preview models:\n{contents}"
+        );
+    }
+
+    fn make_google_table_usage() -> Usage {
+        let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
+        let entries = vec![
+            ("gemini/gemini-2.5-flash", 7.0),
+            ("gemini/gemini-2.5-pro", 100.0),
+            ("gemini/gemini-3-flash-preview", 7.0),
+            ("gemini/gemini-3-pro-preview", 100.0),
+        ];
+        for (key, pct) in entries {
+            let mut wins: IndexMap<String, UsageWindow> = IndexMap::new();
+            wins.insert(
+                "daily".into(),
+                UsageWindow {
+                    used_percent: Some(pct),
+                    window_seconds: Some(86400),
+                    reset_at: None,
+                    value_label: None,
+                },
+            );
+            models.insert(key.into(), wins);
+        }
+        Usage {
+            windows: Default::default(),
+            models,
+            extras: Default::default(),
+        }
     }
 
     #[test]
