@@ -53,6 +53,7 @@ impl ColumnId {
             ColumnId::Model,
             ColumnId::Effort,
             ColumnId::State,
+            ColumnId::Pid,
             ColumnId::Tokens,
             ColumnId::OutputTokens,
             ColumnId::CacheTokens,
@@ -64,7 +65,6 @@ impl ColumnId {
             ColumnId::Project,
             ColumnId::SessionName,
             ColumnId::Cwd,
-            ColumnId::Pid,
         ]
     }
 
