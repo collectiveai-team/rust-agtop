@@ -14,8 +14,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 
+use chrono::{TimeZone, Utc};
+
 use crate::client::Client;
-use crate::clients::util::{mtime, DiscoverCache};
+use crate::clients::util::{for_each_jsonl, mtime, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
 use crate::session::{
@@ -108,7 +110,10 @@ impl Client for CopilotClient {
             };
             for file_entry in files.flatten() {
                 let path = file_entry.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                if !matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("json" | "jsonl")
+                ) {
                     continue;
                 }
                 let stem = match path.file_stem().and_then(|s| s.to_str()) {
@@ -206,6 +211,10 @@ fn parse_session_all(
     path: &std::path::Path,
     session_id: String,
 ) -> Result<(SessionSummary, CopilotParsed)> {
+    if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+        return parse_session_jsonl_all(path, session_id);
+    }
+
     let bytes = fs::read(path)?;
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
 
@@ -271,6 +280,142 @@ fn parse_session_all(
     };
 
     Ok((summary, parsed))
+}
+
+fn parse_session_jsonl_all(
+    path: &std::path::Path,
+    fallback_session_id: String,
+) -> Result<(SessionSummary, CopilotParsed)> {
+    let mut session_id = fallback_session_id;
+    let mut model: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut started_at = None;
+    let mut last_active = mtime(path);
+    let mut tool_calls = 0u64;
+    let mut waiting = false;
+
+    for_each_jsonl(path, |record| {
+        let Some(kind) = record.get("kind").and_then(|x| x.as_i64()) else {
+            return;
+        };
+        match kind {
+            0 => {
+                let Some(v) = record.get("v") else {
+                    return;
+                };
+                if let Some(id) = v.get("sessionId").and_then(|x| x.as_str()) {
+                    session_id = id.to_string();
+                }
+                if let Some(created_ms) = v.get("creationDate").and_then(|x| x.as_i64()) {
+                    started_at = Utc.timestamp_millis_opt(created_ms).single();
+                }
+                if title.is_none() {
+                    title = v
+                        .get("inputState")
+                        .and_then(|s| s.get("inputText"))
+                        .and_then(|x| x.as_str())
+                        .filter(|s| !s.trim().is_empty())
+                        .map(summarize_title);
+                }
+                if model.is_none() {
+                    model = v
+                        .get("inputState")
+                        .and_then(|s| s.get("selectedModel"))
+                        .and_then(|m| m.get("identifier"))
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string);
+                }
+            }
+            1 => {
+                let key_is_title = record
+                    .get("k")
+                    .and_then(|x| x.as_array())
+                    .and_then(|keys| keys.last())
+                    .and_then(|x| x.as_str())
+                    == Some("customTitle");
+                if key_is_title {
+                    title = record.get("v").and_then(|x| x.as_str()).map(str::to_string);
+                }
+            }
+            2 => {
+                let key_is_requests = record
+                    .get("k")
+                    .and_then(|x| x.as_array())
+                    .and_then(|keys| keys.first())
+                    .and_then(|x| x.as_str())
+                    == Some("requests");
+                if !key_is_requests {
+                    return;
+                }
+                let Some(requests) = record.get("v").and_then(|x| x.as_array()) else {
+                    return;
+                };
+                for req in requests {
+                    if model.is_none() {
+                        model = req
+                            .get("modelId")
+                            .and_then(|x| x.as_str())
+                            .map(str::to_string);
+                    }
+                    if let Some(ts) = req.get("timestamp").and_then(|x| x.as_i64()) {
+                        last_active = Utc.timestamp_millis_opt(ts).single().or(last_active);
+                    }
+                    if let Some(response) = req.get("response").and_then(|x| x.as_array()) {
+                        for item in response {
+                            match item.get("kind").and_then(|x| x.as_str()) {
+                                Some("toolInvocationSerialized") => tool_calls += 1,
+                                Some("questionCarousel") => waiting = true,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    })?;
+
+    let mut summary = SessionSummary::new(
+        ClientKind::Copilot,
+        None,
+        session_id,
+        started_at.or(last_active),
+        last_active,
+        model,
+        None,
+        path.to_path_buf(),
+        if waiting {
+            Some("waiting".into())
+        } else {
+            None
+        },
+        if waiting {
+            Some("copilot.questionCarousel".into())
+        } else {
+            None
+        },
+        None,
+        None,
+    );
+    summary.session_title = title;
+    let parsed = CopilotParsed {
+        tool_call_count: if tool_calls > 0 {
+            Some(tool_calls)
+        } else {
+            None
+        },
+        duration_secs: None,
+    };
+    Ok((summary, parsed))
+}
+
+fn summarize_title(text: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 80;
+    let mut title = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_TITLE_CHARS {
+        title = title.chars().take(MAX_TITLE_CHARS - 1).collect::<String>() + "...";
+    }
+    title
 }
 
 fn parse_session_metadata(path: &std::path::Path) -> (Option<u64>, Option<u64>) {

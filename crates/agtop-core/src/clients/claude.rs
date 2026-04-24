@@ -70,6 +70,7 @@ impl Client for ClaudeClient {
             .parent()
             .unwrap_or(self.projects_root.as_path());
         let subscription = read_credentials_plan(claude_dir).1;
+        let history_titles = read_history_titles(claude_dir);
         let mut out = Vec::new();
         let projects = match fs::read_dir(&self.projects_root) {
             Ok(r) => r,
@@ -103,6 +104,9 @@ impl Client for ClaudeClient {
                 match cached {
                     Ok(mut s) if s.model.is_some() => {
                         s.subscription = subscription.clone();
+                        if s.session_title.is_none() {
+                            s.session_title = history_titles.get(&s.session_id).cloned();
+                        }
                         out.push(s)
                     }
                     Ok(_) => continue, // skip empty/abandoned sessions
@@ -202,6 +206,23 @@ fn read_credentials_plan(claude_dir: &Path) -> (bool, Option<String>) {
         Ok(v) => (true, plan_name_from_credentials(&v)),
         Err(_) => (true, None),
     }
+}
+
+fn read_history_titles(claude_dir: &Path) -> HashMap<String, String> {
+    let path = claude_dir.join("history.jsonl");
+    let mut out = HashMap::new();
+    let _ = for_each_jsonl(&path, |v| {
+        let Some(session_id) = v.get("sessionId").and_then(|x| x.as_str()) else {
+            return;
+        };
+        let Some(display) = v.get("display").and_then(|x| x.as_str()) else {
+            return;
+        };
+        if !display.trim().is_empty() {
+            out.insert(session_id.to_string(), display.trim().to_string());
+        }
+    });
+    out
 }
 
 /// Extract a flat text body from a Claude assistant message record.

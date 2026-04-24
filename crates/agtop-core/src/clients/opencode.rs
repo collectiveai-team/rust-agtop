@@ -174,6 +174,41 @@ fn state_from_opencode_message(v: &serde_json::Value) -> Option<(String, String)
     }
 }
 
+fn is_opencode_pending_placeholder(v: &serde_json::Value) -> bool {
+    if v.get("finish").is_some() {
+        return false;
+    }
+    let tokens = v.get("tokens");
+    let token_total = tokens
+        .and_then(|t| t.get("total"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let input = tokens
+        .and_then(|t| t.get("input"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let output = tokens
+        .and_then(|t| t.get("output"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let reasoning = tokens
+        .and_then(|t| t.get("reasoning"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_read = tokens
+        .and_then(|t| t.get("cache"))
+        .and_then(|c| c.get("read"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    let cache_write = tokens
+        .and_then(|t| t.get("cache"))
+        .and_then(|c| c.get("write"))
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+
+    token_total + input + output + reasoning + cache_read + cache_write == 0
+}
+
 fn read_json(path: &Path) -> Result<serde_json::Value> {
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
@@ -1142,20 +1177,37 @@ fn latest_message_state_sqlite(
     // Only inspect the most recent *assistant* message for state.
     // User messages (tool results, question responses) do not carry a
     // `finish` field and would otherwise mask the actual assistant state.
-    conn.query_row(
-        "SELECT data FROM message \
-         WHERE session_id = ?1 \
-           AND json_extract(data, '$.role') = 'assistant' \
-         ORDER BY time_created DESC LIMIT 1",
-        rusqlite::params![session_id],
-        |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-    .and_then(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
-    .and_then(|value| state_from_opencode_message(&value))
-    .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
+    let rows: Vec<String> = match conn
+        .prepare(
+            "SELECT data FROM message \
+             WHERE session_id = ?1 \
+               AND json_extract(data, '$.role') = 'assistant' \
+             ORDER BY time_created DESC LIMIT 2",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        }) {
+        Ok(rows) => rows,
+        Err(_) => return (None, None),
+    };
+
+    let mut parsed = rows
+        .iter()
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok());
+
+    let Some(latest) = parsed.next() else {
+        return (None, None);
+    };
+    if is_opencode_pending_placeholder(&latest) {
+        return parsed
+            .next()
+            .and_then(|value| state_from_opencode_message(&value))
+            .map_or((None, None), |(state, detail)| (Some(state), Some(detail)));
+    }
+
+    state_from_opencode_message(&latest)
+        .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
 }
 
 fn first_message_identity_sqlite(
@@ -1163,16 +1215,25 @@ fn first_message_identity_sqlite(
     session_id: &str,
 ) -> (Option<String>, Option<String>) {
     conn.query_row(
-        "SELECT json_extract(data, '$.modelID'), json_extract(data, '$.providerID') FROM message \
+        "SELECT data FROM message \
          WHERE session_id = ?1 \
            AND json_extract(data, '$.role') = 'assistant' \
          ORDER BY time_created ASC \
          LIMIT 1",
         rusqlite::params![session_id],
         |row| {
-            let model: Option<String> = row.get(0)?;
-            let provider_id: Option<String> = row.get(1)?;
-            Ok((model, provider_id))
+            let data: String = row.get(0)?;
+            let value: serde_json::Value = serde_json::from_str(&data).unwrap_or_default();
+            Ok((
+                value
+                    .get("modelID")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+                value
+                    .get("providerID")
+                    .and_then(|x| x.as_str())
+                    .map(str::to_string),
+            ))
         },
     )
     .unwrap_or((None, None))
@@ -1518,7 +1579,7 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
     // Collect all messages with their modification time, then pick the most
     // recent *assistant* message for state — user messages do not carry a
     // `finish` field and would otherwise mask the actual assistant state.
-    let mut latest_assistant: Option<(std::time::SystemTime, serde_json::Value)> = None;
+    let mut assistants: Vec<(std::time::SystemTime, serde_json::Value)> = Vec::new();
     let entries = match fs::read_dir(msg_dir) {
         Ok(entries) => entries,
         Err(_) => return (None, None),
@@ -1541,14 +1602,21 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
         if value.get("role").and_then(|x| x.as_str()) != Some("assistant") {
             continue;
         }
-        match &latest_assistant {
-            Some((cur_modified, _)) if *cur_modified >= modified => {}
-            _ => latest_assistant = Some((modified, value)),
-        }
+        assistants.push((modified, value));
     }
 
-    latest_assistant
-        .and_then(|(_, value)| state_from_opencode_message(&value))
+    assistants.sort_by(|a, b| b.0.cmp(&a.0));
+    let Some((_, latest)) = assistants.first() else {
+        return (None, None);
+    };
+    if is_opencode_pending_placeholder(latest) {
+        return assistants
+            .get(1)
+            .and_then(|(_, value)| state_from_opencode_message(value))
+            .map_or((None, None), |(state, detail)| (Some(state), Some(detail)));
+    }
+
+    state_from_opencode_message(latest)
         .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
 }
 

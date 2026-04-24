@@ -263,11 +263,75 @@ fn effort_from_turn_context(payload: &serde_json::Value) -> Option<(String, Stri
 
 fn state_from_response_item(payload: &serde_json::Value) -> Option<(String, String)> {
     match payload.get("type").and_then(|x| x.as_str()) {
-        Some("function_call") => Some((
+        Some("function_call") | Some("custom_tool_call") => Some((
             "waiting".to_string(),
-            "response_item:function_call".to_string(),
+            format!(
+                "response_item:{}",
+                payload
+                    .get("type")
+                    .and_then(|x| x.as_str())
+                    .unwrap_or("call")
+            ),
         )),
         _ => None,
+    }
+}
+
+fn text_from_codex_content(content: &serde_json::Value) -> Option<String> {
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    let arr = content.as_array()?;
+    let mut out = String::new();
+    for part in arr {
+        let text = part
+            .get("text")
+            .or_else(|| part.get("content"))
+            .and_then(|x| x.as_str());
+        if let Some(text) = text {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(text);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn message_text_from_payload(payload: &serde_json::Value) -> Option<String> {
+    payload
+        .get("content")
+        .and_then(text_from_codex_content)
+        .or_else(|| {
+            payload
+                .get("message")
+                .and_then(|m| m.get("content"))
+                .and_then(text_from_codex_content)
+        })
+}
+
+fn state_from_codex_message(payload: &serde_json::Value) -> Option<(String, String)> {
+    if payload.get("role").and_then(|x| x.as_str()) != Some("assistant") {
+        return None;
+    }
+    let phase = payload.get("phase").and_then(|x| x.as_str());
+    let text = message_text_from_payload(payload).unwrap_or_default();
+    if phase == Some("final_answer") && text.contains('?') {
+        Some((
+            "waiting".to_string(),
+            "response_item:assistant-question".to_string(),
+        ))
+    } else if phase == Some("final_answer") {
+        Some((
+            "stopped".to_string(),
+            "response_item:assistant-final".to_string(),
+        ))
+    } else {
+        None
     }
 }
 
@@ -456,6 +520,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut model_effort_detail: Option<String> = None;
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
+    let mut session_title: Option<String> = None;
 
     // Scan the full file: metadata records appear near the start, but
     // state (response_item) must be read from the end to get the final
@@ -499,14 +564,35 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
             }
             "response_item" => {
                 if let Some(p) = payload {
+                    if session_title.is_none()
+                        && p.get("role").and_then(|x| x.as_str()) == Some("user")
+                    {
+                        session_title = message_text_from_payload(p).map(|s| summarize_title(&s));
+                    }
                     if let Some((next_state, detail)) = state_from_response_item(p) {
+                        state = Some(next_state);
+                        state_detail = Some(detail);
+                    } else if let Some((next_state, detail)) = state_from_codex_message(p) {
                         state = Some(next_state);
                         state_detail = Some(detail);
                     } else {
                         // A non-waiting response_item (e.g. a text output message)
                         // clears any prior "waiting" state — the tool call completed.
-                        state = Some("stopped".to_string());
-                        state_detail = Some("response_item:done".to_string());
+                        let ty = p.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                        if matches!(ty, "function_call_output" | "custom_tool_call_output") {
+                            state = Some("stopped".to_string());
+                            state_detail = Some("response_item:tool-output".to_string());
+                        }
+                    }
+                }
+            }
+            "event_msg" => {
+                if session_title.is_none() {
+                    if let Some(message) = payload
+                        .and_then(|p| p.get("message"))
+                        .and_then(|x| x.as_str())
+                    {
+                        session_title = Some(summarize_title(message));
                     }
                 }
             }
@@ -546,9 +632,18 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         state_detail,
         model_effort,
         model_effort_detail,
-        session_title: None,
+        session_title,
         data_path: path.to_path_buf(),
     })
+}
+
+fn summarize_title(text: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 80;
+    let mut title = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_TITLE_CHARS {
+        title = title.chars().take(MAX_TITLE_CHARS - 1).collect::<String>() + "...";
+    }
+    title
 }
 
 fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAnalysis> {

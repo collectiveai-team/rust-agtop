@@ -136,6 +136,11 @@ impl Client for GeminiCliClient {
             summary.started_at,
             summary.last_active,
         );
+        let tokens = if tokens.grand_total() == 0 {
+            extract_tokens_from_session_file(&summary.data_path)
+        } else {
+            tokens
+        };
 
         let effective_model = summary.model.clone();
         let included = matches!(plan.mode_for(ClientKind::GeminiCli), PlanMode::Included);
@@ -219,7 +224,7 @@ fn read_global_model(gemini_dir: &std::path::Path) -> Option<String> {
         })
 }
 
-/// Parse first JSONL record of a Gemini session file.
+/// Parse a Gemini session file.
 fn parse_gemini_session(
     path: &std::path::Path,
     cwd: Option<String>,
@@ -233,12 +238,13 @@ fn parse_gemini_session(
     let mut session_id: Option<String> = None;
     let mut started_at: Option<DateTime<Utc>> = None;
     let mut last_updated: Option<DateTime<Utc>> = None;
+    let mut model = global_model;
+    let mut session_title: Option<String> = None;
+    let mut state: Option<String> = None;
+    let mut state_detail: Option<String> = None;
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
-        if seen > 0 {
-            return; // Only care about the first record (ConversationRecord metadata).
-        }
         seen += 1;
 
         if let Some(id) = v.get("sessionId").and_then(|x| x.as_str()) {
@@ -258,6 +264,40 @@ fn parse_gemini_session(
         {
             last_updated = Some(ts);
         }
+        if let Some(ts) = v
+            .get("$set")
+            .and_then(|set| set.get("lastUpdated"))
+            .and_then(|x| x.as_str())
+            .and_then(parse_ts)
+        {
+            last_updated = Some(ts);
+        }
+        if session_title.is_none() && v.get("type").and_then(|x| x.as_str()) == Some("user") {
+            session_title = v
+                .get("content")
+                .and_then(gemini_content_text)
+                .map(|text| summarize_title(&text));
+        }
+        if let Some(m) = v.get("model").and_then(|x| x.as_str()) {
+            model = Some(m.to_string());
+        }
+        if v.get("type").and_then(|x| x.as_str()) == Some("gemini") {
+            if let Some(tool_calls) = v.get("toolCalls").and_then(|x| x.as_array()) {
+                if tool_calls
+                    .iter()
+                    .any(|call| call.get("status").and_then(|x| x.as_str()) != Some("success"))
+                {
+                    state = Some("waiting".to_string());
+                    state_detail = Some("gemini.toolCalls.pending_or_error".to_string());
+                } else if !tool_calls.is_empty() {
+                    state = Some("stopped".to_string());
+                    state_detail = Some("gemini.toolCalls.success".to_string());
+                }
+            } else {
+                state = Some("stopped".to_string());
+                state_detail = Some("gemini.message".to_string());
+            }
+        }
     })?;
 
     let session_id = session_id.unwrap_or_else(|| {
@@ -269,20 +309,22 @@ fn parse_gemini_session(
 
     let last_active = last_updated.or_else(|| mtime(path));
 
-    Ok(SessionSummary::new(
+    let mut summary = SessionSummary::new(
         ClientKind::GeminiCli,
         subscription,
         session_id,
         started_at,
         last_active,
-        global_model,
+        model,
         cwd,
         path.to_path_buf(),
+        state,
+        state_detail,
         None,
         None,
-        None,
-        None,
-    ))
+    );
+    summary.session_title = session_title;
+    Ok(summary)
 }
 
 fn parse_gemini_session_json(
@@ -328,7 +370,7 @@ fn parse_gemini_session_json(
         })
         .or(global_model);
 
-    Ok(SessionSummary::new(
+    let mut summary = SessionSummary::new(
         ClientKind::GeminiCli,
         subscription,
         session_id,
@@ -341,7 +383,57 @@ fn parse_gemini_session_json(
         None,
         None,
         None,
-    ))
+    );
+    summary.session_title = v
+        .get("messages")
+        .and_then(|messages| messages.as_array())
+        .and_then(|messages| {
+            messages.iter().find_map(|message| {
+                if message.get("type").and_then(|x| x.as_str()) == Some("user") {
+                    message
+                        .get("content")
+                        .and_then(gemini_content_text)
+                        .map(|text| summarize_title(&text))
+                } else {
+                    None
+                }
+            })
+        });
+    Ok(summary)
+}
+
+fn gemini_content_text(content: &serde_json::Value) -> Option<String> {
+    if let Some(s) = content.as_str() {
+        return Some(s.to_string());
+    }
+    let arr = content.as_array()?;
+    let mut out = String::new();
+    for part in arr {
+        let text = part
+            .get("text")
+            .or_else(|| part.get("content"))
+            .and_then(|x| x.as_str());
+        if let Some(text) = text {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(text);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn summarize_title(text: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 80;
+    let mut title = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_TITLE_CHARS {
+        title = title.chars().take(MAX_TITLE_CHARS - 1).collect::<String>() + "...";
+    }
+    title
 }
 
 /// Parse `~/.gemini/telemetry.log` (JSONL) for `gemini_cli.api_response`
@@ -400,6 +492,40 @@ fn extract_tokens_from_telemetry(
     totals.cached_input = totals.cache_read;
 
     totals
+}
+
+fn extract_tokens_from_session_file(path: &std::path::Path) -> TokenTotals {
+    let mut totals = TokenTotals::default();
+    if path.extension().and_then(|e| e.to_str()) == Some("json") {
+        let Ok(bytes) = fs::read(path) else {
+            return totals;
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return totals;
+        };
+        if let Some(messages) = v.get("messages").and_then(|x| x.as_array()) {
+            for message in messages {
+                add_gemini_tokens(&mut totals, message.get("tokens"));
+            }
+        }
+    } else {
+        let _ = for_each_jsonl(path, |v| {
+            add_gemini_tokens(&mut totals, v.get("tokens"));
+        });
+    }
+    totals.cached_input = totals.cache_read;
+    totals
+}
+
+fn add_gemini_tokens(totals: &mut TokenTotals, raw: Option<&serde_json::Value>) {
+    let Some(tokens) = raw else {
+        return;
+    };
+    let g = |k: &str| tokens.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    totals.input += g("input");
+    totals.output += g("output");
+    totals.cache_read += g("cached");
+    totals.reasoning_output += g("thoughts");
 }
 
 #[cfg(test)]
