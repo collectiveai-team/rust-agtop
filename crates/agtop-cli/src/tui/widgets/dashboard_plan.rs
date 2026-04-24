@@ -128,6 +128,7 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
     const BAR_WIDTH: usize = 10;
+    const LABEL_WIDTH: usize = 16;
 
     let slots = app.quota_slots();
     let sel = app.selected_provider();
@@ -221,12 +222,13 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         if let Some(usage) = effective.usage.as_ref() {
             for (label, w) in &usage.windows {
-                lines.push(window_line(label, w, BAR_WIDTH, stale));
+                lines.push(window_line(label, w, BAR_WIDTH, LABEL_WIDTH, stale));
             }
 
             if !usage.models.is_empty() {
                 lines.push(Line::from(""));
-                let (model_lines, preview) = google_model_lines(&usage.models, BAR_WIDTH, stale);
+                let (model_lines, preview) =
+                    google_model_lines(&usage.models, BAR_WIDTH, LABEL_WIDTH, stale);
                 any_preview = preview;
                 lines.extend(model_lines);
             }
@@ -281,6 +283,7 @@ fn window_line<'a>(
     label: &str,
     w: &'a agtop_core::quota::UsageWindow,
     bar_width: usize,
+    label_width: usize,
     stale: bool,
 ) -> Line<'a> {
     use crate::tui::widgets::quota_bar::bar_spans;
@@ -288,7 +291,7 @@ fn window_line<'a>(
         Some(p) => {
             let [filled, empty] = bar_spans(Some(p), bar_width, stale);
             Line::from(vec![
-                Span::raw(format!("{label:<14}")),
+                Span::raw(format!("{label:<label_width$}")),
                 filled,
                 empty,
                 Span::raw(format!("  {p:>3.0}%  {}", reset_suffix(w))),
@@ -297,7 +300,7 @@ fn window_line<'a>(
         None => {
             let text = w.value_label.clone().unwrap_or_else(|| "—".into());
             Line::from(Span::raw(format!(
-                "{label:<14}  {text}  {}",
+                "{label:<label_width$}  {text}  {}",
                 reset_suffix(w)
             )))
         }
@@ -377,110 +380,76 @@ fn format_epoch_ms(ms: i64) -> String {
 }
 
 fn short_model_name(key: &str) -> (String, bool) {
+    // Strip scope prefix  ("gemini/gemini-2.5-flash" → "gemini-2.5-flash")
     let s = key.strip_prefix("gemini/").unwrap_or(key);
     let is_preview = s.ends_with("-preview");
     let s = s.strip_suffix("-preview").unwrap_or(s);
-    let name = s
-        .split('-')
-        .map(|seg| {
+    // Strip redundant model-family prefix ("gemini-2.5-flash" → "2.5-flash")
+    let s = s.strip_prefix("gemini-").unwrap_or(s);
+    // Split into segments and classify: leading numeric/dot segments are the
+    // version, the rest are the variant name (Flash, Pro, Lite, ...).
+    let segments: Vec<&str> = s.split('-').collect();
+    let mut version_parts: Vec<&str> = Vec::new();
+    let mut name_parts: Vec<String> = Vec::new();
+    let mut past_version = false;
+    for seg in &segments {
+        if !past_version && seg.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            version_parts.push(seg);
+        } else {
+            past_version = true;
+            // Title-case the segment.
             let mut chars = seg.chars();
-            match chars.next() {
+            let titled = match chars.next() {
                 None => String::new(),
                 Some(first) => {
                     let upper: String = first.to_uppercase().collect();
                     upper + &chars.as_str().to_lowercase()
                 }
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+            };
+            name_parts.push(titled);
+        }
+    }
+    // Reorder: variant first, then version  ("Flash 2.5 Lite" not "2.5 Flash Lite")
+    let version = version_parts.join(".");
+    let name = if name_parts.is_empty() {
+        version.clone()
+    } else if version.is_empty() {
+        name_parts.join(" ")
+    } else {
+        // Insert version after the first variant word.
+        let first = &name_parts[0];
+        let rest = &name_parts[1..];
+        let mut out = format!("{first} {version}");
+        for r in rest {
+            out.push(' ');
+            out.push_str(r);
+        }
+        out
+    };
     (name, is_preview)
 }
 
-fn reset_time_str(w: &agtop_core::quota::UsageWindow) -> String {
-    use chrono::{Local, TimeZone, Utc};
-    match w.reset_at {
-        None => String::new(),
-        Some(0) | Some(1) => "—".into(),
-        Some(ms) => {
-            let utc = Utc.timestamp_millis_opt(ms).single();
-            match utc {
-                None => "—".into(),
-                Some(dt) => {
-                    let local = dt.with_timezone(&Local);
-                    let time = local.format("%-I:%M %p").to_string();
-                    let now_ms = Utc::now().timestamp_millis();
-                    let delta_secs = (ms - now_ms) / 1000;
-                    let countdown = if delta_secs <= 0 {
-                        "any moment".to_string()
-                    } else {
-                        let h = delta_secs / 3600;
-                        let m = (delta_secs % 3600) / 60;
-                        if h == 0 {
-                            format!("{m}m")
-                        } else {
-                            format!("{h}h {m}m")
-                        }
-                    };
-                    let day_note = {
-                        let now_local = Local::now();
-                        let local_date = local.date_naive();
-                        let today = now_local.date_naive();
-                        let diff = (local_date - today).num_days();
-                        if diff == 0 {
-                            String::new()
-                        } else if diff == 1 {
-                            " tomorrow".to_string()
-                        } else {
-                            format!(" {}d", diff)
-                        }
-                    };
-                    format!("{time} ({countdown}{})", day_note.trim_start())
-                }
-            }
-        }
-    }
-}
-
 fn google_model_lines<'a>(
-    models: &IndexMap<String, IndexMap<String, UsageWindow>>,
-    _bar_width: usize,
+    models: &'a IndexMap<String, IndexMap<String, UsageWindow>>,
+    bar_width: usize,
+    label_width: usize,
     stale: bool,
 ) -> (Vec<Line<'a>>, bool) {
-    use crate::tui::widgets::quota_bar::bar_spans;
-    const GOOGLE_BAR_WIDTH: usize = 20;
-    const NAME_COL: usize = 20;
     let mut any_preview = false;
     let mut rows = Vec::new();
 
-    rows.push(Line::from(Span::styled(
-        format!("{:<NAME_COL$}Usage                Resets", "Model"),
-        th::QUOTA_TITLE,
-    )));
-
     for (model_key, windows) in models {
+        let (short, is_preview) = short_model_name(model_key);
+        if is_preview {
+            any_preview = true;
+        }
+        let display = if is_preview {
+            format!("{short} *")
+        } else {
+            short
+        };
         for (_wlabel, w) in windows {
-            let (short, is_preview) = short_model_name(model_key);
-            if is_preview {
-                any_preview = true;
-            }
-            let display = if is_preview {
-                format!("{short} *")
-            } else {
-                short
-            };
-            let [filled, empty] = bar_spans(w.used_percent, GOOGLE_BAR_WIDTH, stale);
-            let pct_str = w
-                .used_percent
-                .map(|p| format!("{p:>5.1}%"))
-                .unwrap_or_else(|| "     —".into());
-            let reset = reset_time_str(w);
-            rows.push(Line::from(vec![
-                Span::raw(format!("{display:<NAME_COL$}")),
-                filled,
-                empty,
-                Span::raw(format!(" {pct_str}  {reset}")),
-            ]));
+            rows.push(window_line(&display, w, bar_width, label_width, stale));
         }
     }
 
@@ -494,6 +463,51 @@ mod tests {
     use indexmap::IndexMap;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+
+    fn reset_time_str(w: &agtop_core::quota::UsageWindow) -> String {
+        use chrono::{Local, TimeZone, Utc};
+        match w.reset_at {
+            None => String::new(),
+            Some(0) | Some(1) => "\u{2014}".into(),
+            Some(ms) => {
+                let utc = Utc.timestamp_millis_opt(ms).single();
+                match utc {
+                    None => "\u{2014}".into(),
+                    Some(dt) => {
+                        let local = dt.with_timezone(&Local);
+                        let time = local.format("%-I:%M %p").to_string();
+                        let now_ms = Utc::now().timestamp_millis();
+                        let delta_secs = (ms - now_ms) / 1000;
+                        let countdown = if delta_secs <= 0 {
+                            "any moment".to_string()
+                        } else {
+                            let h = delta_secs / 3600;
+                            let m = (delta_secs % 3600) / 60;
+                            if h == 0 {
+                                format!("{m}m")
+                            } else {
+                                format!("{h}h {m}m")
+                            }
+                        };
+                        let day_note = {
+                            let now_local = Local::now();
+                            let local_date = local.date_naive();
+                            let today = now_local.date_naive();
+                            let diff = (local_date - today).num_days();
+                            if diff == 0 {
+                                String::new()
+                            } else if diff == 1 {
+                                " tomorrow".to_string()
+                            } else {
+                                format!(" {}d", diff)
+                            }
+                        };
+                        format!("{time} ({countdown}{})", day_note.trim_start())
+                    }
+                }
+            }
+        }
+    }
 
     pub(super) fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
         let mut out = String::new();
@@ -544,21 +558,17 @@ mod tests {
     #[test]
     fn short_model_name_known_keys() {
         let cases = vec![
-            ("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", false),
-            (
-                "gemini/gemini-2.5-flash-lite",
-                "Gemini 2.5 Flash Lite",
-                false,
-            ),
-            ("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", false),
-            ("gemini/gemini-3-flash-preview", "Gemini 3 Flash", true),
-            ("gemini/gemini-3-pro-preview", "Gemini 3 Pro", true),
+            ("gemini/gemini-2.5-flash", "Flash 2.5", false),
+            ("gemini/gemini-2.5-flash-lite", "Flash 2.5 Lite", false),
+            ("gemini/gemini-2.5-pro", "Pro 2.5", false),
+            ("gemini/gemini-3-flash-preview", "Flash 3", true),
+            ("gemini/gemini-3-pro-preview", "Pro 3", true),
             (
                 "gemini/gemini-3.1-flash-lite-preview",
-                "Gemini 3.1 Flash Lite",
+                "Flash 3.1 Lite",
                 true,
             ),
-            ("gemini/gemini-3.1-pro-preview", "Gemini 3.1 Pro", true),
+            ("gemini/gemini-3.1-pro-preview", "Pro 3.1", true),
         ];
         for (input, expected_name, expected_preview) in cases {
             let (name, is_preview) = short_model_name(input);
@@ -570,14 +580,14 @@ mod tests {
     #[test]
     fn short_model_name_unknown_fallback() {
         let (name, is_preview) = short_model_name("gemini/gemini-4-nano-finetune");
-        assert_eq!(name, "Gemini 4 Nano Finetune");
+        assert_eq!(name, "Nano 4 Finetune");
         assert!(!is_preview);
     }
 
     #[test]
     fn short_model_name_unprefixed() {
         let (name, _) = short_model_name("gemini-2.5-flash");
-        assert_eq!(name, "Gemini 2.5 Flash");
+        assert_eq!(name, "Flash 2.5");
     }
 
     #[test]
@@ -818,14 +828,16 @@ mod tests {
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
         assert!(
-            contents.contains("Gemini 2.5 Pro"),
+            contents.contains("Pro 2.5"),
             "short model name missing:\n{contents}"
         );
         assert!(contents.contains("31"), "percentage missing:\n{contents}");
     }
 
     #[test]
-    fn google_table_has_column_header() {
+    fn google_table_has_no_column_header() {
+        // Google detail pane should use the same window_line format as all
+        // other providers -- no separate column headers.
         let backend = TestBackend::new(120, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut app = App::new();
@@ -834,17 +846,12 @@ mod tests {
         app.apply_quota_results(vec![r]);
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
+        // The old column-header row ("Model  Usage  Resets") should not appear.
+        // Note: "Resets" could only have come from the old header since
+        // window_line uses "resets in ..." (lowercase) for the countdown.
         assert!(
-            contents.contains("Model"),
-            "column header 'Model' missing:\n{contents}"
-        );
-        assert!(
-            contents.contains("Usage"),
-            "column header 'Usage' missing:\n{contents}"
-        );
-        assert!(
-            contents.contains("Resets"),
-            "column header 'Resets' missing:\n{contents}"
+            !contents.contains("Resets"),
+            "column header row should not appear:\n{contents}"
         );
     }
 
@@ -859,11 +866,11 @@ mod tests {
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
         assert!(
-            contents.contains("Gemini 2.5 Flash"),
+            contents.contains("Flash 2.5"),
             "short name missing:\n{contents}"
         );
         assert!(
-            contents.contains("Gemini 2.5 Pro"),
+            contents.contains("Pro 2.5"),
             "short name missing:\n{contents}"
         );
         assert!(
@@ -883,11 +890,11 @@ mod tests {
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
         assert!(
-            contents.contains("Gemini 3 Flash *"),
+            contents.contains("Flash 3 *"),
             "preview asterisk missing:\n{contents}"
         );
         assert!(
-            contents.contains("Gemini 3 Pro *"),
+            contents.contains("Pro 3 *"),
             "preview asterisk missing:\n{contents}"
         );
     }
@@ -982,11 +989,8 @@ mod tests {
         terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
         let contents = buffer_to_string(terminal.backend().buffer());
         assert!(
-            !contents.contains("Gemini 2.5 Flash")
-                || contents
-                    .lines()
-                    .take(4)
-                    .any(|l| !l.contains("Gemini 2.5 Flash")),
+            !contents.contains("Flash 2.5")
+                || contents.lines().take(4).any(|l| !l.contains("Flash 2.5")),
             "scrolled rows should not be visible at top:\n{contents}"
         );
     }

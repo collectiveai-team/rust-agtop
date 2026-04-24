@@ -24,6 +24,14 @@ pub const USER_AGENT: &str = "antigravity/1.11.5 windows/amd64";
 pub const X_GOOG_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
 pub const CLIENT_METADATA: &str = "{\"ideType\":\"IDE_UNSPECIFIED\",\"platform\":\"PLATFORM_UNSPECIFIED\",\"pluginType\":\"GEMINI\"}";
 
+/// User-Agent sent for `:retrieveUserQuota`. Gemini CLI 0.36.0 uses a
+/// `code-assist/<version>` string without the `X-Goog-Api-Client` header.
+/// Google's backend gates `retrieveUserQuota` on the caller identity encoded
+/// in `X-Goog-Api-Client`; the VSCode/Antigravity value produces 403 for
+/// personal free-tier accounts. Omitting the header (or using a neutral UA)
+/// allows the call to succeed.
+pub const RETRIEVE_QUOTA_USER_AGENT: &str = "code-assist/0.36.0";
+
 pub const GOOGLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Call `:loadCodeAssist` in `HEALTH_CHECK` mode. Used to discover the
@@ -52,6 +60,12 @@ pub fn load_code_assist(http: &dyn HttpClient, access_token: &str) -> Result<Vec
 
 /// Fetch quota buckets. Only meaningful for the Gemini source.
 /// Returns Ok(response bytes) or Err(QuotaError). 2xx only.
+///
+/// Note: this call intentionally omits `X-Goog-Api-Client`. The VSCode /
+/// Antigravity value (`google-cloud-sdk vscode_cloudshelleditor/0.1`) causes
+/// Google's backend to return 403 PERMISSION_DENIED for personal free-tier
+/// accounts, even when `:loadCodeAssist` succeeds. Gemini CLI 0.36.0 sends
+/// its own `code-assist/<version>` User-Agent without that header.
 pub fn fetch_quota_buckets(
     http: &dyn HttpClient,
     access_token: &str,
@@ -59,7 +73,7 @@ pub fn fetch_quota_buckets(
 ) -> Result<Vec<u8>, QuotaError> {
     let url = format!("{PRIMARY_HOST}{RETRIEVE_QUOTA_PATH}");
     let body = build_project_body(project_id);
-    request_once(http, &url, access_token, body)
+    request_quota(http, &url, access_token, body)
 }
 
 /// Fetch models + per-model quota info. Tries the fallback URL chain;
@@ -91,6 +105,34 @@ fn build_project_body(project_id: Option<&str>) -> Vec<u8> {
         Some(p) => serde_json::to_vec(&serde_json::json!({ "project": p })).unwrap(),
         None => b"{}".to_vec(),
     }
+}
+
+/// Build and send a request for `:retrieveUserQuota`. Omits the
+/// `X-Goog-Api-Client` header that causes 403 for personal free-tier accounts.
+fn request_quota(
+    http: &dyn HttpClient,
+    url: &str,
+    access_token: &str,
+    body: Vec<u8>,
+) -> Result<Vec<u8>, QuotaError> {
+    let req = HttpRequest::post(url, body)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .header("Content-Type", "application/json")
+        .header("User-Agent", RETRIEVE_QUOTA_USER_AGENT)
+        .with_timeout(GOOGLE_TIMEOUT);
+
+    let mut logged = req.clone();
+    redact_auth_headers(&mut logged.headers);
+    tracing::debug!(provider = "google", url = %logged.url, "quota.fetch started");
+
+    let resp = http.request(req).map_err(|e| QuotaError {
+        kind: crate::quota::types::ErrorKind::Transport,
+        detail: e.to_string(),
+    })?;
+    if let Some(err) = classify_response(&resp) {
+        return Err(err);
+    }
+    Ok(resp.body)
 }
 
 fn request_once(
@@ -144,13 +186,15 @@ mod tests {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("user-agent"))
             .unwrap();
-        assert_eq!(ua.1, USER_AGENT);
-        let goog = req
-            .headers
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("x-goog-api-client"))
-            .unwrap();
-        assert_eq!(goog.1, X_GOOG_API_CLIENT);
+        assert_eq!(ua.1, RETRIEVE_QUOTA_USER_AGENT);
+        // X-Goog-Api-Client must NOT be present: the VSCode/Antigravity value
+        // causes 403 PERMISSION_DENIED for personal free-tier accounts.
+        assert!(
+            req.headers
+                .iter()
+                .all(|(k, _)| !k.eq_ignore_ascii_case("x-goog-api-client")),
+            "X-Goog-Api-Client must be absent from retrieveUserQuota requests"
+        );
     }
 
     #[test]
