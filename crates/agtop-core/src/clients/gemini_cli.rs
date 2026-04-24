@@ -230,6 +230,8 @@ impl Client for GeminiCliClient {
             agent_turns: analysis.agent_turns,
             user_turns: analysis.user_turns,
             project_name: None,
+            pid: None,
+            liveness: None,
         })
     }
 }

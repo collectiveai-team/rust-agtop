@@ -1415,6 +1415,8 @@ impl TurnAccumulator {
                 None
             },
             project_name: None,
+            pid: None,
+            liveness: None,
         })
     }
 }
