@@ -1,0 +1,28 @@
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "cargo fmt"
+language = "system"
+entry = "cargo fmt --check"
+files = '\\.rs$'
+pass_filenames = false
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "cargo clippy"
+language = "system"
+entry = "cargo clippy --all-targets --all-features"
+files = '\\.rs$'
+pass_filenames = false
+env = { RUSTFLAGS = "-D warnings" }
+
+[[repos.hooks]]
+id = "cargo-doc"
+name = "cargo doc"
+language = "system"
+entry = "cargo doc --no-deps --all-features --quiet"
+files = '\\.rs$'
+pass_filenames = false
+env = { RUSTDOCFLAGS = "-D warnings" }

@@ -10,7 +10,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
 
 jobs:
   ci:
@@ -22,10 +21,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: fmt
-        run: cargo fmt --check
-      - name: clippy
-        run: cargo clippy --all-targets --all-features
+      - uses: j178/prek-action@v2
       - name: test
         run: cargo test --all
 

@@ -1,7 +1,7 @@
 //! z.ai Coding Plan quota provider.
 //!
-//! Endpoint: GET https://api.z.ai/api/monitor/usage/quota/limit
-//! Auth:     Bearer <api key>
+//! Endpoint: `GET https://api.z.ai/api/monitor/usage/quota/limit`
+//! Auth:     `Bearer <api key>`
 //!
 //! Response has `data.limits[]` containing one or more entries with
 //! `type: "TOKENS_LIMIT"` (token-window quotas) and optionally one with

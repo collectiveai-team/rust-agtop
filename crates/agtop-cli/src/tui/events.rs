@@ -669,7 +669,7 @@ mod tests {
     fn ok_google_result(count: usize) -> agtop_core::quota::ProviderResult {
         agtop_core::quota::ProviderResult {
             provider_id: agtop_core::quota::ProviderId::Google,
-            provider_name: "Google".into(),
+            provider_name: "Google",
             configured: true,
             ok: true,
             usage: Some(ok_google_usage(count)),

@@ -1,8 +1,8 @@
 //! Claude (Anthropic Pro/Max) quota provider.
 //!
-//! Endpoint: GET https://api.anthropic.com/api/oauth/usage
-//! Header:  anthropic-beta: oauth-2025-04-20
-//! Auth:    Bearer <oauth access token>
+//! Endpoint: `GET https://api.anthropic.com/api/oauth/usage`
+//! Header:  `anthropic-beta: oauth-2025-04-20`
+//! Auth:    `Bearer <oauth access token>`
 //!
 //! See spec section 3.1 for the full parsing contract.
 

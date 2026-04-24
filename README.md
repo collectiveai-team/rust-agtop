@@ -150,6 +150,17 @@ agtop --list --no-pricing-refresh   # stay fully offline (built-in tables only)
   sessions as `<id>+N` where N is the number of sidechain files merged.
   The JSON output surfaces the same count as `subagent_file_count`.
 
+## Development
+
+After cloning, install the git hooks with [prek](https://github.com/j178/prek) to catch CI failures locally before pushing:
+
+```sh
+cargo install prek   # or: cargo binstall prek
+prek install
+```
+
+The hooks run `cargo fmt --check`, `cargo clippy` (warnings as errors), and `cargo doc` (warnings as errors) — matching the CI pipeline exactly.
+
 ## License
 
 GPL-2.0-only, matching the upstream project.

@@ -1,7 +1,7 @@
 //! GitHub Copilot quota provider.
 //!
-//! Endpoint: GET https://api.github.com/copilot_internal/user
-//! Auth:     token <oauth_token>  (NOT Bearer — the `token ` scheme is required)
+//! Endpoint: `GET https://api.github.com/copilot_internal/user`
+//! Auth:     `token <oauth_token>`  (NOT Bearer — the `token ` scheme is required)
 //! Headers:  Accept, Editor-Version, X-Github-Api-Version
 //!
 //! Honors `unlimited: true` snapshots (openchamber does not). Prefers

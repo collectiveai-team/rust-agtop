@@ -393,7 +393,7 @@ fn short_model_name(key: &str) -> (String, bool) {
     let mut name_parts: Vec<String> = Vec::new();
     let mut past_version = false;
     for seg in &segments {
-        if !past_version && seg.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+        if !past_version && seg.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             version_parts.push(seg);
         } else {
             past_version = true;

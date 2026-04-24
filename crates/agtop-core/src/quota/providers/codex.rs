@@ -1,8 +1,8 @@
 //! Codex / ChatGPT Plus quota provider.
 //!
-//! Endpoint: GET https://chatgpt.com/backend-api/wham/usage
-//! Auth:     Bearer <ChatGPT session access token>
-//! Header:   ChatGPT-Account-Id: <uuid>  (optional, added if entry has accountId)
+//! Endpoint: `GET https://chatgpt.com/backend-api/wham/usage`
+//! Auth:     `Bearer <ChatGPT session access token>`
+//! Header:   `ChatGPT-Account-Id: <uuid>`  (optional, added if entry has accountId)
 //!
 //! Note: 401 means the session access token expired. We do NOT refresh it —
 //! that would mutate state in opencode's auth.json. User must re-auth via

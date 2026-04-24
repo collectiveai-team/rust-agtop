@@ -1566,7 +1566,7 @@ mod quota_state_tests {
         }
         ProviderResult {
             provider_id: ProviderId::Google,
-            provider_name: "Google".into(),
+            provider_name: "Google",
             configured: true,
             ok: true,
             usage: Some(Usage {
