@@ -293,6 +293,7 @@ pub fn spawn(
                         if let Some(info) = info_map.get(&a.summary.session_id) {
                             a.pid = Some(info.pid);
                             a.liveness = Some(info.liveness);
+                            a.match_confidence = Some(info.match_confidence);
                         }
                     }
 

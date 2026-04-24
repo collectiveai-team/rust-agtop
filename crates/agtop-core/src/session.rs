@@ -236,6 +236,9 @@ pub struct SessionAnalysis {
     /// `None` when no match was established.
     #[serde(default)]
     pub liveness: Option<crate::process::Liveness>,
+    /// How we matched the PID. `None` when no match.
+    #[serde(default)]
+    pub match_confidence: Option<crate::process::Confidence>,
 }
 
 impl SessionAnalysis {
@@ -273,6 +276,7 @@ impl SessionAnalysis {
             project_name: None,
             pid: None,
             liveness: None,
+            match_confidence: None,
         }
     }
 }

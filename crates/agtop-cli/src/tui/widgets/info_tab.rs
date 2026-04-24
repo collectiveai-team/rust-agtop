@@ -54,12 +54,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
             // Match confidence — only shown when we have a pid.
             if a.pid.is_some() {
-                let match_note = match a.liveness {
-                    Some(agtop_core::Liveness::Live) => "process live",
-                    Some(agtop_core::Liveness::Stopped) => "process exited",
+                let label = match a.match_confidence {
+                    Some(agtop_core::Confidence::High) => "fd",
+                    Some(agtop_core::Confidence::Medium) => "cwd+argv",
                     None => "-",
                 };
-                lines.push(kv_line("match", match_note.into()));
+                lines.push(kv_line("match", label.into()));
             }
 
             lines.push(kv_line(

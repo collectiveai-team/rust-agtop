@@ -232,6 +232,7 @@ impl Client for GeminiCliClient {
             project_name: None,
             pid: None,
             liveness: None,
+            match_confidence: None,
         })
     }
 }
