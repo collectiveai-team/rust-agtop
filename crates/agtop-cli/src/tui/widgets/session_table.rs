@@ -100,6 +100,7 @@ pub fn render(
     let columns_width = inner_width.saturating_sub(selection_width);
 
     // Split exactly as Table does: Layout::horizontal(widths).spacing(1).
+    // clone: widths ownership is needed by Table::new below.
     let col_rects = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(widths.clone())
@@ -167,13 +168,18 @@ pub fn render(
 
     if let Some(logo_idx) = logo_col_idx {
         // Reuse col_rects (already computed above for header_cols).
+        // Only x and width are used from col_rects (y is the header row;
+        // we replace it with screen_row below).
         let logo_col_rect = col_rects[logo_idx];
 
         // Data rows start at area.y + 2 (border row + header row).
         let data_start_y = area.y + 2;
 
-        for (row_idx, (analysis, _is_child)) in view.iter().enumerate() {
-            let screen_row = data_start_y + row_idx as u16;
+        // Skip rows that are scrolled off the top; screen_row is relative
+        // to the first *visible* row, not the start of the view slice.
+        let scroll_offset = state.offset();
+        for (row_idx, (analysis, _is_child)) in view.iter().enumerate().skip(scroll_offset) {
+            let screen_row = data_start_y + (row_idx - scroll_offset) as u16;
             if screen_row >= area.y + area.height.saturating_sub(1) {
                 break; // outside the visible area (bottom border)
             }
