@@ -1041,7 +1041,7 @@ mod tests {
             &session_file,
             Some("/repo".to_string()),
             None,
-            Some("OAuth".to_string()),
+            Some("Google · Gemini".to_string()),
         )
         .unwrap();
         let client = GeminiCliClient {
