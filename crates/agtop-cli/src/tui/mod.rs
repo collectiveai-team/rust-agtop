@@ -90,6 +90,9 @@ struct UiLayout {
     /// Left panel of the Dashboard quota pane (provider list).
     /// Used for scroll-wheel and click hit-testing.
     quota_list_area: Rect,
+    /// Rect + ClientKind for each visible session row's SubscriptionLogo cell.
+    /// Used for the post-table logo render pass.
+    logo_rects: Vec<(Rect, agtop_core::ClientKind)>,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -464,7 +467,14 @@ fn render(
     layout.table_area = outer[1];
 
     render_status(frame, outer[0], app);
-    widgets::session_table::render(frame, outer[1], app, table_state, &mut layout.header_cols);
+    widgets::session_table::render(
+        frame,
+        outer[1],
+        app,
+        table_state,
+        &mut layout.header_cols,
+        &mut layout.logo_rects,
+    );
     render_bottom_panel(frame, outer[2], app, layout);
     render_footer(frame, outer[3], app);
 }
@@ -526,7 +536,14 @@ fn render_dashboard(
 
     layout.table_area = outer[3];
     layout.tab_bar_area = Rect::default();
-    widgets::session_table::render(frame, outer[3], app, table_state, &mut layout.header_cols);
+    widgets::session_table::render(
+        frame,
+        outer[3],
+        app,
+        table_state,
+        &mut layout.header_cols,
+        &mut layout.logo_rects,
+    );
     render_footer(frame, outer[4], app);
 }
 

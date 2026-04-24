@@ -23,12 +23,17 @@ use crate::tui::widgets::state_display::display_state;
 ///
 /// `header_cols` is overwritten with the absolute terminal x-ranges of
 /// every sortable header cell so the mouse handler can hit-test clicks.
+///
+/// `logo_rects` is overwritten with one entry per visible data row: the
+/// `Rect` of the `SubscriptionLogo` cell for that row, paired with the
+/// `ClientKind` of that session.
 pub fn render(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &App,
     state: &mut TableState,
     header_cols: &mut Vec<(u16, u16, SortColumn)>,
+    logo_rects: &mut Vec<(Rect, agtop_core::ClientKind)>,
 ) {
     // Sync the widget's idea of selection with the app's.
     state.select(app.selected_idx());
@@ -141,13 +146,42 @@ pub fn render(
         })
         .collect();
 
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, widths.clone())
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title))
         .row_highlight_style(th::SELECTED)
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(table, area, state);
+
+    // ── Compute SubscriptionLogo column rects for the post-table overlay ──
+    //
+    // Find the index of SubscriptionLogo in the visible column list, then
+    // re-use the same layout split that was already computed for header_cols
+    // to determine where that column lands on screen for each data row.
+    let logo_col_idx = visible
+        .iter()
+        .position(|&c| c == ColumnId::SubscriptionLogo);
+
+    logo_rects.clear();
+
+    if let Some(logo_idx) = logo_col_idx {
+        // Reuse col_rects (already computed above for header_cols).
+        let logo_col_rect = col_rects[logo_idx];
+
+        // Data rows start at area.y + 2 (border row + header row).
+        let data_start_y = area.y + 2;
+
+        for (row_idx, (analysis, _is_child)) in view.iter().enumerate() {
+            let screen_row = data_start_y + row_idx as u16;
+            if screen_row >= area.y + area.height.saturating_sub(1) {
+                break; // outside the visible area (bottom border)
+            }
+            let rect = Rect::new(logo_col_rect.x, screen_row, logo_col_rect.width, 1);
+            logo_rects.push((rect, analysis.summary.client));
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────
 }
 
 fn header_cell(s: &'static str) -> Cell<'static> {
