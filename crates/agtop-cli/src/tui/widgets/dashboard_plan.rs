@@ -239,7 +239,31 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 }
             }
         }
-        let p = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
+        let visible_height = content_area.height as usize;
+        let total = lines.len();
+        let scroll = app.model_scroll().min(total.saturating_sub(visible_height));
+        let has_overflow = total > visible_height;
+
+        let visible: Vec<Line<'_>> = if has_overflow {
+            lines
+                .into_iter()
+                .skip(scroll)
+                .take(visible_height.saturating_sub(1))
+                .collect()
+        } else {
+            lines
+        };
+
+        let mut render_lines = visible;
+        if has_overflow {
+            let can_up = scroll > 0;
+            let can_down = scroll + visible_height.saturating_sub(1) < total;
+            let up = if can_up { "\u{25b2}" } else { " " };
+            let down = if can_down { "\u{25bc}" } else { " " };
+            render_lines.push(Line::from(Span::raw(format!("{up} {down}"))));
+        }
+
+        let p = Paragraph::new(render_lines).wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(p, content_area);
     }
 
@@ -944,6 +968,43 @@ mod tests {
             models,
             extras: Default::default(),
         }
+    }
+
+    #[test]
+    fn google_table_scroll_hides_overflow_rows() {
+        let backend = TestBackend::new(120, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        app.set_model_scroll_for_test(2);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            !contents.contains("Gemini 2.5 Flash")
+                || contents
+                    .lines()
+                    .take(4)
+                    .any(|l| !l.contains("Gemini 2.5 Flash")),
+            "scrolled rows should not be visible at top:\n{contents}"
+        );
+    }
+
+    #[test]
+    fn google_table_scroll_shows_indicators() {
+        let backend = TestBackend::new(120, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        let usage = make_google_table_usage();
+        let r = ok_result(ProviderId::Google, usage);
+        app.apply_quota_results(vec![r]);
+        terminal.draw(|f| render(f, f.area(), &app)).expect("draw");
+        let contents = buffer_to_string(terminal.backend().buffer());
+        assert!(
+            contents.contains('\u{25bc}') || contents.contains('\u{25b2}'),
+            "scroll indicators missing when models overflow:\n{contents}"
+        );
     }
 
     #[test]
