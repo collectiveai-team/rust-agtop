@@ -17,6 +17,7 @@ pub enum ColumnId {
     #[serde(alias = "provider")]
     Client,
     Subscription,
+    SubscriptionLogo, // internal — never persisted, always derived from Subscription
     Session,
     Started,
     Age,
@@ -70,6 +71,7 @@ impl ColumnId {
         match self {
             ColumnId::Client => "CLIENT",
             ColumnId::Subscription => "SUB",
+            ColumnId::SubscriptionLogo => "", // no header label
             ColumnId::Session => "SESSION",
             ColumnId::Started => "STARTED",
             ColumnId::Age => "AGE",
@@ -96,6 +98,7 @@ impl ColumnId {
         match self {
             ColumnId::Client => "Agentic client (claude/codex/opencode)",
             ColumnId::Subscription => "Billing subscription label",
+            ColumnId::SubscriptionLogo => "Subscription provider logo",
             ColumnId::Session => "Short session ID",
             ColumnId::Started => "Session start timestamp",
             ColumnId::Age => "Time since last activity",
@@ -123,6 +126,7 @@ impl ColumnId {
         match self {
             ColumnId::Client => Some(10),
             ColumnId::Subscription => Some(16),
+            ColumnId::SubscriptionLogo => Some(3),
             ColumnId::Session => Some(12),
             ColumnId::Started => Some(16),
             ColumnId::Age => Some(5),
@@ -150,6 +154,7 @@ impl ColumnId {
         match self {
             ColumnId::Client => Some(SortColumn::Client),
             ColumnId::Subscription => None,
+            ColumnId::SubscriptionLogo => None,
             ColumnId::Session => None,
             ColumnId::Started => Some(SortColumn::Started),
             ColumnId::Age => Some(SortColumn::LastActive),
@@ -267,12 +272,22 @@ impl ColumnConfig {
     }
 
     /// Returns ordered list of visible column IDs.
+    ///
+    /// `SubscriptionLogo` is injected immediately before `Subscription` whenever
+    /// Subscription is visible. It is never stored in `self.columns`.
     pub fn visible(&self) -> Vec<ColumnId> {
-        self.columns
-            .iter()
-            .filter(|e| e.visible)
-            .map(|e| e.id)
-            .collect()
+        let mut result = Vec::new();
+        for entry in &self.columns {
+            if !entry.visible {
+                continue;
+            }
+            // Inject the logo slot immediately before Subscription.
+            if entry.id == ColumnId::Subscription {
+                result.push(ColumnId::SubscriptionLogo);
+            }
+            result.push(entry.id);
+        }
+        result
     }
 
     /// Toggle visibility of a column by index into `self.columns`.
@@ -398,6 +413,70 @@ impl<'de> Deserialize<'de> for ColumnConfig {
             clients,
         }
         .normalize())
+    }
+}
+
+#[cfg(test)]
+mod subscription_logo_tests {
+    use super::*;
+
+    #[test]
+    fn subscription_logo_not_in_config_tab_columns() {
+        // SubscriptionLogo must never appear in the full column list visible
+        // to the config tab (i.e., ColumnId::all() must not include it).
+        assert!(
+            !ColumnId::all().contains(&ColumnId::SubscriptionLogo),
+            "SubscriptionLogo should not appear in ColumnId::all()"
+        );
+    }
+
+    #[test]
+    fn subscription_logo_always_before_subscription_in_visible() {
+        let cfg = ColumnConfig::default();
+        let visible = cfg.visible();
+        let sub_pos = visible
+            .iter()
+            .position(|&c| c == ColumnId::Subscription)
+            .expect("Subscription should be visible by default");
+        assert!(sub_pos > 0, "SubscriptionLogo should precede Subscription");
+        assert_eq!(
+            visible[sub_pos - 1],
+            ColumnId::SubscriptionLogo,
+            "SubscriptionLogo must immediately precede Subscription"
+        );
+    }
+
+    #[test]
+    fn toggling_subscription_also_toggles_logo() {
+        let mut cfg = ColumnConfig::default();
+        // Find Subscription index in internal columns list.
+        let sub_idx = cfg
+            .columns
+            .iter()
+            .position(|e| e.id == ColumnId::Subscription)
+            .expect("Subscription must be in columns");
+        let was_visible = cfg.columns[sub_idx].visible;
+        cfg.toggle(sub_idx);
+        // Subscription itself must have flipped.
+        assert_eq!(
+            cfg.columns[sub_idx].visible, !was_visible,
+            "Subscription visibility should flip"
+        );
+        // After toggle, visible() should no longer include SubscriptionLogo
+        // (because Subscription is now hidden).
+        let new_visible = cfg.visible();
+        assert!(
+            !new_visible.contains(&ColumnId::SubscriptionLogo),
+            "SubscriptionLogo should not be visible when Subscription is hidden"
+        );
+
+        // Toggle back on — logo must reappear.
+        cfg.toggle(sub_idx);
+        let re_visible = cfg.visible();
+        assert!(
+            re_visible.contains(&ColumnId::SubscriptionLogo),
+            "logo reappears when Subscription is re-enabled"
+        );
     }
 }
 

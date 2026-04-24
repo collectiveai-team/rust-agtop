@@ -323,6 +323,8 @@ fn row_for<'a>(
             ColumnId::SessionName => {
                 Cell::from(s.session_title.clone().unwrap_or_else(|| "-".into()))
             }
+            // SubscriptionLogo is injected by visible() — rendered as empty for now.
+            ColumnId::SubscriptionLogo => Cell::from(""),
         })
         .collect();
 

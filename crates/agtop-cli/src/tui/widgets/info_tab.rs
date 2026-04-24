@@ -251,6 +251,8 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
             s.session_title.clone().unwrap_or_else(|| "-".into()),
         ),
         ColumnId::Cwd => kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
+        // SubscriptionLogo is injected by visible() — not displayed in info tab.
+        ColumnId::SubscriptionLogo => Line::default(),
     }
 }
 
