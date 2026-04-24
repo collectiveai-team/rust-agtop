@@ -121,7 +121,7 @@ impl ColumnId {
     /// Fixed display width in terminal columns. `None` for flexible columns.
     pub fn fixed_width(self) -> Option<u16> {
         match self {
-            ColumnId::Client => Some(8),
+            ColumnId::Client => Some(10),
             ColumnId::Subscription => Some(16),
             ColumnId::Session => Some(12),
             ColumnId::Started => Some(16),
