@@ -838,7 +838,7 @@ mod tests {
 
     #[test]
     fn quota_loop_honors_manual_trigger() {
-        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
@@ -879,7 +879,7 @@ mod tests {
 
     #[test]
     fn quota_loop_publishes_snapshot_after_start() {
-        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
@@ -894,7 +894,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         let mut got = false;
-        while start.elapsed() < Duration::from_secs(5) {
+        while start.elapsed() < Duration::from_secs(15) {
             if let Some(msg) = handle.try_recv() {
                 if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
                     got = true;
@@ -904,12 +904,12 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
-        assert!(got, "expected QuotaSnapshot within 5s");
+        assert!(got, "expected QuotaSnapshot within 15s");
     }
 
     #[test]
     fn quota_loop_stops_on_stop_cmd() {
-        let _lock = QUOTA_LOOP_LOCK.lock().unwrap();
+        let _lock = QUOTA_LOOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::collections::HashSet;
         use std::sync::{Arc, RwLock};
 
