@@ -372,6 +372,51 @@ fn short_model_name(key: &str) -> (String, bool) {
     (name, is_preview)
 }
 
+fn reset_time_str(w: &agtop_core::quota::UsageWindow) -> String {
+    use chrono::{Local, TimeZone, Utc};
+    match w.reset_at {
+        None => String::new(),
+        Some(0) | Some(1) => "—".into(),
+        Some(ms) => {
+            let utc = Utc.timestamp_millis_opt(ms).single();
+            match utc {
+                None => "—".into(),
+                Some(dt) => {
+                    let local = dt.with_timezone(&Local);
+                    let time = local.format("%-I:%M %p").to_string();
+                    let now_ms = Utc::now().timestamp_millis();
+                    let delta_secs = (ms - now_ms) / 1000;
+                    let countdown = if delta_secs <= 0 {
+                        "any moment".to_string()
+                    } else {
+                        let h = delta_secs / 3600;
+                        let m = (delta_secs % 3600) / 60;
+                        if h == 0 {
+                            format!("{m}m")
+                        } else {
+                            format!("{h}h {m}m")
+                        }
+                    };
+                    let day_note = {
+                        let now_local = Local::now();
+                        let local_date = local.date_naive();
+                        let today = now_local.date_naive();
+                        let diff = (local_date - today).num_days();
+                        if diff == 0 {
+                            String::new()
+                        } else if diff == 1 {
+                            " tomorrow".to_string()
+                        } else {
+                            format!(" {}d", diff)
+                        }
+                    };
+                    format!("{time} ({countdown}{})", day_note.trim_start())
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -469,6 +514,46 @@ mod tests {
     fn short_model_name_already_bare() {
         let (name, _) = short_model_name("custom-model");
         assert_eq!(name, "Custom Model");
+    }
+
+    #[test]
+    fn reset_time_str_epoch_zero_is_dash() {
+        let w = UsageWindow {
+            used_percent: Some(0.0),
+            window_seconds: None,
+            reset_at: Some(0),
+            value_label: None,
+        };
+        assert_eq!(reset_time_str(&w), "—");
+    }
+
+    #[test]
+    fn reset_time_str_none_is_empty() {
+        let w = UsageWindow {
+            used_percent: None,
+            window_seconds: None,
+            reset_at: None,
+            value_label: None,
+        };
+        assert_eq!(reset_time_str(&w), "");
+    }
+
+    #[test]
+    fn reset_time_str_future_shows_time_and_countdown() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let in_2h = now + 2 * 3600 * 1000 + 45 * 60 * 1000;
+        let w = UsageWindow {
+            used_percent: Some(50.0),
+            window_seconds: None,
+            reset_at: Some(in_2h),
+            value_label: None,
+        };
+        let s = reset_time_str(&w);
+        assert!(
+            s.contains('(') && s.contains(')'),
+            "expected time + countdown in parens, got: {s}"
+        );
+        assert!(s.contains("2h"), "expected '2h' in countdown, got: {s}");
     }
 
     #[test]
