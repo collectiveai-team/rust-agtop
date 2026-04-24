@@ -11,6 +11,8 @@
 //! a best-effort observability feature layered on top of the core
 //! session display. All errors are logged at `debug!` and degraded away.
 
+pub(crate) mod scanner;
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
