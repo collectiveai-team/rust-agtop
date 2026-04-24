@@ -323,6 +323,7 @@ fn row_for<'a>(
             ColumnId::SessionName => {
                 Cell::from(s.session_title.clone().unwrap_or_else(|| "-".into()))
             }
+            ColumnId::Pid => Cell::from(a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into())),
         })
         .collect();
 

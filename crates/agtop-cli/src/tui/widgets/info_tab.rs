@@ -251,6 +251,10 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
             s.session_title.clone().unwrap_or_else(|| "-".into()),
         ),
         ColumnId::Cwd => kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
+        ColumnId::Pid => kv_line(
+            "pid",
+            a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+        ),
     }
 }
 
