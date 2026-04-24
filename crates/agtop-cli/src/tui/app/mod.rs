@@ -1012,6 +1012,27 @@ impl App {
         self.model_scroll = v;
     }
 
+    pub fn model_scroll_down(&mut self, visible_rows: usize) {
+        let max = self.model_scroll_max(visible_rows);
+        if self.model_scroll < max {
+            self.model_scroll += 1;
+        }
+    }
+
+    pub fn model_scroll_up(&mut self) {
+        self.model_scroll = self.model_scroll.saturating_sub(1);
+    }
+
+    fn model_scroll_max(&self, visible_rows: usize) -> usize {
+        let slot = self.quota_slots.get(self.selected_provider);
+        let total = slot
+            .and_then(|s| s.current.usage.as_ref())
+            .map(|u| u.models.len())
+            .unwrap_or(0)
+            .max(1);
+        total.saturating_sub(visible_rows)
+    }
+
     // ---- internal helpers --------------------------------------------------
 
     fn update_sticky(&mut self) {
@@ -1526,6 +1547,39 @@ mod quota_state_tests {
         }
     }
 
+    fn make_google_usage(count: usize) -> ProviderResult {
+        use agtop_core::quota::{Usage, UsageWindow};
+        use indexmap::IndexMap;
+        let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
+        for i in 0..count {
+            let mut wins: IndexMap<String, UsageWindow> = IndexMap::new();
+            wins.insert(
+                "daily".into(),
+                UsageWindow {
+                    used_percent: Some(50.0),
+                    window_seconds: Some(86400),
+                    reset_at: None,
+                    value_label: None,
+                },
+            );
+            models.insert(format!("gemini/gemini-2.5-flash-{i}"), wins);
+        }
+        ProviderResult {
+            provider_id: ProviderId::Google,
+            provider_name: "Google".into(),
+            configured: true,
+            ok: true,
+            usage: Some(Usage {
+                windows: Default::default(),
+                models,
+                extras: Default::default(),
+            }),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
     #[test]
     fn provider_slot_new_sets_last_good_only_if_ok() {
         let slot_ok = ProviderSlot::new(ok_result(ProviderId::Claude));
@@ -1704,6 +1758,41 @@ mod quota_state_tests {
         // 1 slot, 5 visible → no scroll possible.
         app.quota_card_scroll_right(5);
         assert_eq!(app.card_scroll(), 0);
+    }
+
+    #[test]
+    fn model_scroll_down_increments() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![make_google_usage(5)]);
+        assert_eq!(app.model_scroll(), 0);
+        app.model_scroll_down(3);
+        assert_eq!(app.model_scroll(), 1);
+        app.model_scroll_down(3);
+        assert_eq!(app.model_scroll(), 2);
+    }
+
+    #[test]
+    fn model_scroll_down_clamps_at_max() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![make_google_usage(5)]);
+        for _ in 0..10 {
+            app.model_scroll_down(3);
+        }
+        assert!(
+            app.model_scroll() <= 2,
+            "scroll should clamp so last item is visible"
+        );
+    }
+
+    #[test]
+    fn model_scroll_up_clamps_at_zero() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![make_google_usage(5)]);
+        app.model_scroll_down(3);
+        app.model_scroll_up();
+        assert_eq!(app.model_scroll(), 0);
+        app.model_scroll_up();
+        assert_eq!(app.model_scroll(), 0);
     }
 }
 
