@@ -32,6 +32,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rayon = "1"
 indexmap = { version = "2", features = ["serde"] }
 figment = { version = "0.10", features = ["toml", "env"] }
+# Process enumeration for session<->OS correlation (issue #23).
+# sysinfo is cross-platform; procfs/libproc give platform-specific fd
+# listings that sysinfo does not expose.
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+procfs = "0.18"
+libproc = "0.14"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
