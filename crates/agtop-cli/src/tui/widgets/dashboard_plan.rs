@@ -315,7 +315,7 @@ fn reset_suffix(w: &agtop_core::quota::UsageWindow) -> String {
             let now_ms = Utc::now().timestamp_millis();
             let delta = ms - now_ms;
             if delta < 0 {
-                return "resets (any moment)".into();
+                return "resets in ??h ??m".into();
             }
             let secs = delta / 1000;
             if secs < 3600 {
