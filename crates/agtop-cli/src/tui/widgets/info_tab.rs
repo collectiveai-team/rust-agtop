@@ -52,6 +52,16 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // Standard columns via the shared helper.
             lines.extend(ColumnId::all().iter().map(|&col| column_line(col, a, now)));
 
+            // Match confidence — only shown when we have a pid.
+            if a.pid.is_some() {
+                let match_note = match a.liveness {
+                    Some(agtop_core::Liveness::Live) => "process live",
+                    Some(agtop_core::Liveness::Stopped) => "process exited",
+                    None => "-",
+                };
+                lines.push(kv_line("match", match_note.into()));
+            }
+
             lines.push(kv_line(
                 "effective_model",
                 a.effective_model.clone().unwrap_or_else(|| "-".into()),
@@ -253,7 +263,15 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
         ColumnId::Cwd => kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
         ColumnId::Pid => kv_line(
             "pid",
-            a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            match (a.pid, a.liveness) {
+                (Some(pid), Some(agtop_core::Liveness::Live)) => {
+                    format!("{pid} (live)")
+                }
+                (Some(pid), Some(agtop_core::Liveness::Stopped)) => {
+                    format!("{pid} (stopped)")
+                }
+                _ => "-".into(),
+            },
         ),
     }
 }
