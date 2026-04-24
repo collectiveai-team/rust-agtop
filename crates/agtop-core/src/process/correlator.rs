@@ -59,11 +59,72 @@ pub(crate) fn correlate(
                     parent_pid: c.parent_pid,
                 },
             );
+            continue;
         }
-        // Score tier added in task 8.
+
+        // Score tier: find the best candidate via cwd + binary + time.
+        let mut best: Option<(u32, u32, Option<u32>)> = None; // (score, pid, parent)
+        let mut tie = false;
+        for c in candidates {
+            let score = score_candidate(c, session);
+            if score < 2 {
+                continue;
+            }
+            match best {
+                None => best = Some((score, c.pid, c.parent_pid)),
+                Some((s, _, _)) if score > s => {
+                    best = Some((score, c.pid, c.parent_pid));
+                    tie = false;
+                }
+                Some((s, _, _)) if score == s => {
+                    tie = true;
+                }
+                _ => {}
+            }
+        }
+        if let (Some((_, pid, parent_pid)), false) = (best, tie) {
+            out.insert(
+                session.session_id.clone(),
+                ProcessInfo {
+                    pid,
+                    liveness: Liveness::Live,
+                    match_confidence: Confidence::Medium,
+                    parent_pid,
+                },
+            );
+        }
     }
 
     out
+}
+
+/// Score a candidate process against a session. Each criterion adds 1.
+/// Returns 0..=3.
+fn score_candidate(c: &Candidate, s: &SessionSummary) -> u32 {
+    let mut score = 0;
+
+    // Binary matches an expected name for this client.
+    if expected_binaries(s.client).iter().any(|&b| c.binary == b) {
+        score += 1;
+    }
+
+    // cwd exact match.
+    if let (Some(cc), Some(sc)) = (&c.cwd, &s.cwd) {
+        if cc.as_os_str() == std::ffi::OsStr::new(sc) {
+            score += 1;
+        }
+    }
+
+    // Process start time falls inside the session's observed window.
+    if let (Some(started), Some(last_active)) = (s.started_at, s.last_active) {
+        let started = started.timestamp() as u64;
+        let last_active = last_active.timestamp() as u64;
+        if c.start_time >= started && c.start_time <= last_active {
+            score += 1;
+        }
+    }
+
+    score
 }
 
 #[cfg(test)]
@@ -72,7 +133,7 @@ mod tests {
     use crate::process::fd::tests::FakeFdScanner;
     use crate::process::scanner::tests::FakeScanner;
     use crate::session::ClientKind;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use std::path::PathBuf;
 
     fn claude_session(id: &str, path: &str) -> SessionSummary {
@@ -146,8 +207,8 @@ mod tests {
     }
 
     #[test]
-    fn no_fd_match_yields_no_entry_yet() {
-        // Score tier not wired yet; without fd match, no entry.
+    fn no_fd_match_falls_back_to_score_tier() {
+        // No fd match; binary + cwd match => score 2 => Medium confidence.
         let scanner = FakeScanner {
             processes: vec![candidate(42, "claude", "/home/user/proj")],
         };
@@ -156,6 +217,87 @@ mod tests {
         };
         let sessions = vec![claude_session("s1", "/tmp/s1.jsonl")];
         let result = correlate(&scanner, &fd, &sessions);
+        let info = result.get("s1").expect("s1 must be matched by score tier");
+        assert_eq!(info.pid, 42);
+        assert_eq!(info.match_confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn score_tier_matches_medium_confidence_when_unique() {
+        // No fd info. Candidate cwd + binary + start_time all line up.
+        let now = Utc::now();
+        let s = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "s1".into(),
+            Some(now - Duration::minutes(10)),
+            Some(now),
+            None,
+            Some("/home/user/proj".into()),
+            PathBuf::from("/tmp/s1.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let mut c = candidate(42, "claude", "/home/user/proj");
+        c.start_time = (now - Duration::minutes(5)).timestamp() as u64;
+
+        let scanner = FakeScanner { processes: vec![c] };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+
+        let result = correlate(&scanner, &fd, &[s]);
+        let info = result.get("s1").expect("s1 must be matched");
+        assert_eq!(info.pid, 42);
+        assert_eq!(info.match_confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn score_tier_refuses_ambiguous_tie() {
+        // Two candidates that score identically => no match.
+        let now = Utc::now();
+        let s = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "s1".into(),
+            Some(now - Duration::minutes(10)),
+            Some(now),
+            None,
+            Some("/home/user/proj".into()),
+            PathBuf::from("/tmp/s1.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let mut c1 = candidate(42, "claude", "/home/user/proj");
+        let mut c2 = candidate(43, "claude", "/home/user/proj");
+        c1.start_time = (now - Duration::minutes(5)).timestamp() as u64;
+        c2.start_time = (now - Duration::minutes(3)).timestamp() as u64;
+
+        let scanner = FakeScanner {
+            processes: vec![c1, c2],
+        };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+
+        let result = correlate(&scanner, &fd, &[s]);
+        assert!(result.is_empty(), "ambiguous match should not be emitted");
+    }
+
+    #[test]
+    fn score_tier_rejects_low_score() {
+        // Only binary matches; cwd mismatch, no time overlap => score 1 => reject.
+        let s = claude_session("s1", "/tmp/s1.jsonl");
+        let c = candidate(42, "claude", "/elsewhere");
+        let scanner = FakeScanner { processes: vec![c] };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+        let result = correlate(&scanner, &fd, &[s]);
         assert!(result.is_empty());
     }
 }
