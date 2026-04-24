@@ -119,22 +119,31 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     ]));
                 }
             }
+            // Logo width in terminal cells: must stay in sync with the number of
+            // spaces prepended to the subscription value span below.
+            const LOGO_WIDTH: u16 = 3;
+
             // Determine which line index corresponds to the Subscription row.
-            // ColumnId::all() order determines line index (0-based after optional parent line).
+            // sub_line_idx is correct because extra lines (effective_model,
+            // data_path, billing, state_detail, effort_detail, subagent rows)
+            // are all appended AFTER the ColumnId::all() block — the only line
+            // inserted BEFORE it is the optional parent backlink.
+            let parent_line_offset: usize = if parent_id.is_some() { 1 } else { 0 };
             let sub_col_pos = ColumnId::all()
                 .iter()
-                .position(|&c| c == ColumnId::Subscription)
-                .unwrap_or(0);
-            let parent_line_offset: usize = if parent_id.is_some() { 1 } else { 0 };
-            let sub_line_idx = parent_line_offset + sub_col_pos;
+                .position(|&c| c == ColumnId::Subscription);
+            let sub_line_idx = sub_col_pos.map(|pos| parent_line_offset + pos);
 
-            // Prepend 3 spaces to the subscription value span so the logo can
-            // overlay that blank area later.
-            if let Some(line) = lines.get_mut(sub_line_idx) {
-                // kv_line format: [key_span(idx 0)][gap_span(idx 1)][value_span(idx 2)]
-                if let Some(value_span) = line.spans.get_mut(2) {
-                    let original = value_span.content.to_string();
-                    value_span.content = format!("   {original}").into();
+            // Prepend LOGO_WIDTH spaces to the subscription value span so the
+            // logo image can overlay that blank area after paragraph rendering.
+            if let Some(idx) = sub_line_idx {
+                if let Some(line) = lines.get_mut(idx) {
+                    // kv_line format: [key_span(idx 0)][gap_span(idx 1)][value_span(idx 2)]
+                    if let Some(value_span) = line.spans.get_mut(2) {
+                        let original = value_span.content.to_string();
+                        let padding = " ".repeat(LOGO_WIDTH as usize);
+                        value_span.content = format!("{padding}{original}").into();
+                    }
                 }
             }
 
@@ -164,31 +173,33 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             );
 
             // Overlay the provider logo on the subscription line.
-            // Key is right-aligned in 16 chars, then 2-char gap → value starts at col x+18.
-            // The 3 prepended spaces give us a 3-wide cell for the logo image.
-            let logo_col_rect;
-            let logo_line_in_col;
-            if sub_line_idx < split {
-                // Subscription is in the left column.
-                logo_col_rect = cols[0];
-                logo_line_in_col = sub_line_idx;
-            } else {
-                // Subscription is in the right column.
-                logo_col_rect = cols[1];
-                logo_line_in_col = sub_line_idx - split;
-            }
+            // Key is right-aligned in 16 chars, then 2-char gap → value starts
+            // at col x+18. The LOGO_WIDTH prepended spaces are the logo cell.
+            if let Some(idx) = sub_line_idx {
+                let logo_col_rect;
+                let logo_line_in_col;
+                if idx < split {
+                    // Subscription is in the left column.
+                    logo_col_rect = cols[0];
+                    logo_line_in_col = idx;
+                } else {
+                    // Subscription is in the right column.
+                    logo_col_rect = cols[1];
+                    logo_line_in_col = idx - split;
+                }
 
-            let logo_y = logo_col_rect.y + logo_line_in_col as u16;
-            // key (16) + gap (2) = 18 chars before the value starts
-            let logo_x = logo_col_rect.x + 18;
+                let logo_y = logo_col_rect.y + logo_line_in_col as u16;
+                // key (16 chars) + gap (2 chars) = 18 chars before value starts
+                let logo_x = logo_col_rect.x + 18;
 
-            if logo_y < logo_col_rect.y + logo_col_rect.height
-                && logo_x + 3 <= logo_col_rect.x + logo_col_rect.width
-            {
-                let logo_rect = Rect::new(logo_x, logo_y, 3, 1);
-                let client = a.summary.client;
-                if let Some(proto) = app.logo(client) {
-                    frame.render_widget(Image::new(proto), logo_rect);
+                if logo_y < logo_col_rect.y + logo_col_rect.height
+                    && logo_x + LOGO_WIDTH <= logo_col_rect.x + logo_col_rect.width
+                {
+                    let logo_rect = Rect::new(logo_x, logo_y, LOGO_WIDTH, 1);
+                    let client = a.summary.client;
+                    if let Some(proto) = app.logo(client) {
+                        frame.render_widget(Image::new(proto), logo_rect);
+                    }
                 }
             }
 
