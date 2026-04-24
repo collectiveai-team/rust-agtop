@@ -351,6 +351,27 @@ fn format_epoch_ms(ms: i64) -> String {
     local.format("%H:%M").to_string()
 }
 
+fn short_model_name(key: &str) -> (String, bool) {
+    let s = key.strip_prefix("gemini/").unwrap_or(key);
+    let is_preview = s.ends_with("-preview");
+    let s = s.strip_suffix("-preview").unwrap_or(s);
+    let name = s
+        .split('-')
+        .map(|seg| {
+            let mut chars = seg.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    let upper: String = first.to_uppercase().collect();
+                    upper + &chars.as_str().to_lowercase()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (name, is_preview)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,6 +424,51 @@ mod tests {
             models: Default::default(),
             extras: Default::default(),
         }
+    }
+
+    #[test]
+    fn short_model_name_known_keys() {
+        let cases = vec![
+            ("gemini/gemini-2.5-flash", "Gemini 2.5 Flash", false),
+            (
+                "gemini/gemini-2.5-flash-lite",
+                "Gemini 2.5 Flash Lite",
+                false,
+            ),
+            ("gemini/gemini-2.5-pro", "Gemini 2.5 Pro", false),
+            ("gemini/gemini-3-flash-preview", "Gemini 3 Flash", true),
+            ("gemini/gemini-3-pro-preview", "Gemini 3 Pro", true),
+            (
+                "gemini/gemini-3.1-flash-lite-preview",
+                "Gemini 3.1 Flash Lite",
+                true,
+            ),
+            ("gemini/gemini-3.1-pro-preview", "Gemini 3.1 Pro", true),
+        ];
+        for (input, expected_name, expected_preview) in cases {
+            let (name, is_preview) = short_model_name(input);
+            assert_eq!(name, expected_name, "name for {input}");
+            assert_eq!(is_preview, expected_preview, "preview for {input}");
+        }
+    }
+
+    #[test]
+    fn short_model_name_unknown_fallback() {
+        let (name, is_preview) = short_model_name("gemini/gemini-4-nano-finetune");
+        assert_eq!(name, "Gemini 4 Nano Finetune");
+        assert!(!is_preview);
+    }
+
+    #[test]
+    fn short_model_name_unprefixed() {
+        let (name, _) = short_model_name("gemini-2.5-flash");
+        assert_eq!(name, "Gemini 2.5 Flash");
+    }
+
+    #[test]
+    fn short_model_name_already_bare() {
+        let (name, _) = short_model_name("custom-model");
+        assert_eq!(name, "Custom Model");
     }
 
     #[test]
