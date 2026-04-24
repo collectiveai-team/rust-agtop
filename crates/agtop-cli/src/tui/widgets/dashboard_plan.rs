@@ -444,7 +444,7 @@ fn reset_time_str(w: &agtop_core::quota::UsageWindow) -> String {
 
 fn google_model_lines<'a>(
     models: &IndexMap<String, IndexMap<String, UsageWindow>>,
-    bar_width: usize,
+    _bar_width: usize,
     stale: bool,
 ) -> (Vec<Line<'a>>, bool) {
     use crate::tui::widgets::quota_bar::bar_spans;
