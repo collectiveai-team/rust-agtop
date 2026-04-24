@@ -25,8 +25,91 @@ pub(crate) trait Scanner {
     fn candidates(&self) -> &[Candidate];
 }
 
+/// Default `Scanner` backed by the `sysinfo` crate.
+///
+/// Only candidates whose executable name is in the known-CLIs set are
+/// returned, keeping per-snapshot cost proportional to running agents
+/// rather than total system processes.
+pub(crate) struct SysinfoScanner {
+    system: sysinfo::System,
+    candidates: Vec<Candidate>,
+}
+
+impl SysinfoScanner {
+    pub(crate) fn new() -> Self {
+        // `new_with_specifics(ProcessRefreshKind::everything())` is heavier
+        // than we need — we don't want disk IO / network stats. Start
+        // minimal and refresh just the process list on each call.
+        let system = sysinfo::System::new();
+        Self {
+            system,
+            candidates: Vec::new(),
+        }
+    }
+
+    fn is_known_cli(binary: &str, argv: &[String]) -> bool {
+        const DIRECT: &[&str] = &[
+            "claude",
+            "codex",
+            "gemini",
+            "opencode",
+            "copilot",
+            "gh-copilot",
+            "cursor",
+            "cursor-agent",
+            "antigravity",
+        ];
+        if DIRECT.iter().any(|&known| binary == known) {
+            return true;
+        }
+        // Gemini CLI runs under node; disambiguate via argv.
+        if binary == "node" && argv.iter().any(|a| a.contains("gemini")) {
+            return true;
+        }
+        false
+    }
+}
+
+impl Scanner for SysinfoScanner {
+    fn refresh(&mut self) {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate};
+        // Tell sysinfo to refresh the process list. We don't need disk IO.
+        self.system.refresh_processes_specifics(
+            ProcessesToUpdate::All,
+            true,
+            ProcessRefreshKind::everything(),
+        );
+
+        self.candidates.clear();
+        for (pid, proc) in self.system.processes() {
+            let binary = proc.name().to_string_lossy().into_owned();
+            let argv: Vec<String> = proc
+                .cmd()
+                .iter()
+                .map(|s| s.to_string_lossy().into_owned())
+                .collect();
+            if !Self::is_known_cli(&binary, &argv) {
+                continue;
+            }
+            self.candidates.push(Candidate {
+                pid: pid.as_u32(),
+                parent_pid: proc.parent().map(|p| p.as_u32()),
+                binary,
+                argv,
+                cwd: proc.cwd().map(|p| p.to_path_buf()),
+                start_time: proc.start_time(),
+            });
+        }
+    }
+
+    fn candidates(&self) -> &[Candidate] {
+        &self.candidates
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::SysinfoScanner;
     use super::*;
 
     /// A manually-populated Scanner used by higher-level correlator tests.
@@ -56,5 +139,29 @@ pub(crate) mod tests {
         s.refresh();
         assert_eq!(s.candidates().len(), 1);
         assert_eq!(s.candidates()[0].pid, 42);
+    }
+
+    #[test]
+    fn is_known_cli_accepts_direct_binaries() {
+        for binary in &["claude", "codex", "opencode", "cursor", "gemini"] {
+            assert!(SysinfoScanner::is_known_cli(binary, &[]));
+        }
+    }
+
+    #[test]
+    fn is_known_cli_accepts_node_only_when_running_gemini() {
+        assert!(SysinfoScanner::is_known_cli(
+            "node",
+            &["node".into(), "/opt/gemini/bin/gemini".into()]
+        ));
+        assert!(!SysinfoScanner::is_known_cli(
+            "node",
+            &["node".into(), "/home/app/server.js".into()]
+        ));
+    }
+
+    #[test]
+    fn is_known_cli_rejects_random_binary() {
+        assert!(!SysinfoScanner::is_known_cli("bash", &[]));
     }
 }
