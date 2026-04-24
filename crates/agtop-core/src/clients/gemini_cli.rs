@@ -57,9 +57,9 @@ impl Client for GeminiCliClient {
 
         // Determine subscription from presence of oauth_creds.json.
         let subscription = if self.gemini_dir.join("oauth_creds.json").exists() {
-            Some("OAuth".to_string())
+            Some("Google · Gemini".to_string())
         } else {
-            Some("API key".to_string())
+            Some("Gemini API key".to_string())
         };
 
         let tmp_dir = self.gemini_dir.join("tmp");
@@ -1041,7 +1041,7 @@ mod tests {
             &session_file,
             Some("/repo".to_string()),
             None,
-            Some("OAuth".to_string()),
+            Some("Google · Gemini".to_string()),
         )
         .unwrap();
         let client = GeminiCliClient {

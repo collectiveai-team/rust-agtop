@@ -16,11 +16,11 @@ use crate::quota::auth::OpencodeAuth;
 /// Resolve the Claude subscription name.
 ///
 /// Primary: `$CLAUDE_CONFIG_DIR/.credentials.json`
-///   → `claudeAiOauth.rateLimitTier` → "Max 5x" / "Max 20x" / "Pro"
+///   → `claudeAiOauth.rateLimitTier` → "Claude Max 5x" / "Claude Max 20x" / "Pro"
 ///   → fallback to `subscriptionType` (title-cased)
 ///
 /// Fallback (file absent/unreadable): opencode auth.json entry for
-///   "anthropic"/"claude" → if oauth → "Max 5x", if API key → "Anthropic API key".
+///   "anthropic"/"claude" → if oauth → "Claude Max 5x", if API key → "Anthropic API key".
 pub fn claude_plan(auth: &OpencodeAuth) -> Option<String> {
     // Primary: Claude Code's own credentials file.
     if let Some(name) = read_claude_credentials() {
@@ -32,7 +32,7 @@ pub fn claude_plan(auth: &OpencodeAuth) -> Option<String> {
     if entry.access.is_some() || entry.token.is_some() {
         // OAuth credential → assume Max (we can't know the exact tier without
         // the credentials file, but this is the same fallback opencode.rs uses).
-        Some("Max 5x".to_string())
+        Some("Claude Max 5x".to_string())
     } else if entry.key.is_some() {
         Some("Anthropic API key".to_string())
     } else {
@@ -54,8 +54,8 @@ fn read_claude_credentials() -> Option<String> {
     if let Some(tier) = oauth.get("rateLimitTier").and_then(|x| x.as_str()) {
         let mapped = match tier {
             "default_claude_pro" => Some("Pro".to_string()),
-            "default_claude_max_5x" => Some("Max 5x".to_string()),
-            "default_claude_max_20x" => Some("Max 20x".to_string()),
+            "default_claude_max_5x" => Some("Claude Max 5x".to_string()),
+            "default_claude_max_20x" => Some("Claude Max 20x".to_string()),
             _ => None,
         };
         if mapped.is_some() {

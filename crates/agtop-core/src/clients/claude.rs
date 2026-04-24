@@ -162,8 +162,8 @@ impl Client for ClaudeClient {
 pub fn rate_limit_tier_to_plan_name(tier: &str) -> Option<String> {
     match tier {
         "default_claude_pro" => Some("Pro".to_string()),
-        "default_claude_max_5x" => Some("Max 5x".to_string()),
-        "default_claude_max_20x" => Some("Max 20x".to_string()),
+        "default_claude_max_5x" => Some("Claude Max 5x".to_string()),
+        "default_claude_max_20x" => Some("Claude Max 20x".to_string()),
         _ => None,
     }
 }
@@ -911,11 +911,11 @@ mod tests {
         );
         assert_eq!(
             rate_limit_tier_to_plan_name("default_claude_max_5x"),
-            Some("Max 5x".to_string())
+            Some("Claude Max 5x".to_string())
         );
         assert_eq!(
             rate_limit_tier_to_plan_name("default_claude_max_20x"),
-            Some("Max 20x".to_string())
+            Some("Claude Max 20x".to_string())
         );
         assert_eq!(rate_limit_tier_to_plan_name("something_else"), None);
         assert_eq!(rate_limit_tier_to_plan_name(""), None);
@@ -939,8 +939,8 @@ mod tests {
         assert_eq!(out.len(), 1);
         let pu = &out[0];
         assert_eq!(pu.client, ClientKind::Claude);
-        assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
-        assert_eq!(pu.label, "Claude Code · Max 5x");
+        assert_eq!(pu.plan_name.as_deref(), Some("Claude Max 5x"));
+        assert_eq!(pu.label, "Claude Code · Claude Max 5x");
         let expected_ts = parse_ts(expected_ts_str).unwrap();
         assert_eq!(pu.last_limit_hit, Some(expected_ts));
         assert_eq!(pu.windows.len(), 1);
@@ -1053,7 +1053,7 @@ mod tests {
         );
         let parent = SessionSummary::new(
             ClientKind::Claude,
-            Some("Max 5x".to_string()),
+            Some("Claude Max 5x".to_string()),
             "02742fb3-d98e-4fa2-8184-2fddd7ee544d".to_string(),
             None,
             None,
@@ -1101,7 +1101,7 @@ mod tests {
         );
         let parent = SessionSummary::new(
             ClientKind::Claude,
-            Some("Max 5x".to_string()),
+            Some("Claude Max 5x".to_string()),
             session_id.to_string(),
             None,
             None,
@@ -1118,7 +1118,7 @@ mod tests {
 
         assert_eq!(children.len(), 1);
         let child = &children[0];
-        assert_eq!(child.subscription.as_deref(), Some("Max 5x"));
+        assert_eq!(child.subscription.as_deref(), Some("Claude Max 5x"));
         assert_eq!(child.session_id, "subagent-child");
         assert_eq!(child.model.as_deref(), Some("claude-3-5-haiku-20241022"));
         assert_eq!(child.cwd.as_deref(), Some("/tmp/subagent"));

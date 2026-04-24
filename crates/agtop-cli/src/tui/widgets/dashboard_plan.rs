@@ -156,7 +156,7 @@ fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     // Header: subscription name (meta["plan"]) + login if available.
     // meta["plan"] is the full human-readable subscription label produced
-    // by subscription.rs (e.g. "Max 5x", "GitHub Copilot · Individual").
+    // by subscription.rs (e.g. "Claude Max 5x", "GitHub Copilot · Individual").
     // Fall back to the short provider name when no plan is known yet.
     let plan_label = slot
         .current

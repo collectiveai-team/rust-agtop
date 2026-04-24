@@ -742,7 +742,7 @@ mod tests {
 
         let s1_summary = SessionSummary::new(
             ClientKind::Claude,
-            Some("Max 5x".into()),
+            Some("Claude Max 5x".into()),
             "deadbeef-aaaa-bbbb-cccc-1234".into(),
             Some(ts_started),
             Some(s1_last),

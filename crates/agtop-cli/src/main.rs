@@ -652,7 +652,7 @@ mod json_output_tests {
         let now = Utc::now();
         let summary = SessionSummary::new(
             ClientKind::Claude,
-            Some("Max 5x".into()),
+            Some("Claude Max 5x".into()),
             "ses_123".into(),
             Some(now),
             Some(now),
