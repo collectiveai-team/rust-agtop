@@ -320,8 +320,8 @@ fn collect_plan_usage(storage_root: &Path, sessions: &[SessionSummary]) -> Vec<P
 
             out.push(PlanUsage {
                 client: ClientKind::OpenCode,
-                label: "OpenCode · Max 5x".to_string(),
-                plan_name: Some("Max 5x".to_string()),
+                label: "OpenCode · Claude Max 5x".to_string(),
+                plan_name: Some("Claude Max 5x".to_string()),
                 windows: anthropic_windows.clone(),
                 last_limit_hit: anthropic_last_limit_hit,
                 note: anthropic_note.clone(),
@@ -633,7 +633,7 @@ fn parse_anthropic_live_plan_usage(payload: &serde_json::Value) -> LivePlanUsage
     push_live_window(&mut windows, payload.get("seven_day_opus"), "7d opus");
 
     LivePlanUsage {
-        plan_name: "Max 5x".to_string(),
+        plan_name: "Claude Max 5x".to_string(),
         windows,
     }
 }
@@ -814,7 +814,7 @@ fn subscription_label_for_provider(
     };
 
     match (provider_id, auth_kind) {
-        ("anthropic", AuthKind::Oauth) => Some("Max 5x".to_string()),
+        ("anthropic", AuthKind::Oauth) => Some("Claude Max 5x".to_string()),
         ("anthropic", AuthKind::Api) => Some("Anthropic API key".to_string()),
         ("openai", AuthKind::Oauth) => {
             read_openai_plan_name(auth_entry).or_else(|| Some("ChatGPT (OAuth)".to_string()))
@@ -2084,7 +2084,7 @@ mod tests {
         let out = client.plan_usage().expect("plan_usage");
         assert_eq!(out.len(), 1);
         let pu = &out[0];
-        assert_eq!(pu.plan_name.as_deref(), Some("Max 5x"));
+        assert_eq!(pu.plan_name.as_deref(), Some("Claude Max 5x"));
         assert_eq!(pu.windows.len(), 2);
 
         let w5 = pu.windows.iter().find(|w| w.label == "5h").expect("5h");
@@ -2160,9 +2160,9 @@ mod tests {
         assert_eq!(out.len(), 3);
         let anthropic = out
             .iter()
-            .find(|pu| pu.label == "OpenCode · Max 5x")
+            .find(|pu| pu.label == "OpenCode · Claude Max 5x")
             .expect("anthropic card");
-        assert_eq!(anthropic.plan_name.as_deref(), Some("Max 5x"));
+        assert_eq!(anthropic.plan_name.as_deref(), Some("Claude Max 5x"));
         assert_eq!(
             anthropic.note.as_deref(),
             Some("no recent rate-limit snapshot")
@@ -2236,7 +2236,7 @@ mod tests {
         .expect("live usage")
         .expect("anthropic usage present");
 
-        assert_eq!(live.plan_name, "Max 5x");
+        assert_eq!(live.plan_name, "Claude Max 5x");
         assert_eq!(live.windows.len(), 4);
         assert_eq!(
             live.windows
@@ -2388,7 +2388,7 @@ mod tests {
     fn cached_live_usage_skips_refetch_without_new_relevant_activity() {
         let now = Utc.with_ymd_and_hms(2026, 4, 18, 5, 10, 0).unwrap();
         let cache = LivePlanUsageCache {
-            plan_name: "Max 5x".to_string(),
+            plan_name: "Claude Max 5x".to_string(),
             windows: Vec::new(),
             last_fetch_attempt_at: Some(now - chrono::TimeDelta::minutes(10)),
             last_fetch_success_at: Some(now - chrono::TimeDelta::minutes(10)),
@@ -2407,7 +2407,7 @@ mod tests {
     fn cached_live_usage_refetches_after_cooldown_and_new_activity() {
         let now = Utc.with_ymd_and_hms(2026, 4, 18, 5, 10, 0).unwrap();
         let cache = LivePlanUsageCache {
-            plan_name: "Max 5x".to_string(),
+            plan_name: "Claude Max 5x".to_string(),
             windows: Vec::new(),
             last_fetch_attempt_at: Some(now - chrono::TimeDelta::minutes(10)),
             last_fetch_success_at: Some(now - chrono::TimeDelta::minutes(10)),
@@ -2426,7 +2426,7 @@ mod tests {
     fn anthropic_activity_matches_claude_and_opencode_sessions() {
         let claude = SessionSummary::new(
             ClientKind::Claude,
-            Some("Max 5x".to_string()),
+            Some("Claude Max 5x".to_string()),
             "c1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 0, 0).unwrap()),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 10, 0).unwrap()),
@@ -2440,7 +2440,7 @@ mod tests {
         );
         let opencode = SessionSummary::new(
             ClientKind::OpenCode,
-            Some("Max 5x".to_string()),
+            Some("Claude Max 5x".to_string()),
             "o1".to_string(),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 20, 0).unwrap()),
             Some(Utc.with_ymd_and_hms(2026, 4, 18, 4, 30, 0).unwrap()),
@@ -2525,7 +2525,7 @@ mod tests {
         let subscriptions = read_subscriptions(&tmp.path);
         assert_eq!(
             subscriptions.get("anthropic").map(String::as_str),
-            Some("Max 5x")
+            Some("Claude Max 5x")
         );
         assert_eq!(
             subscriptions.get("openai").map(String::as_str),
@@ -2544,7 +2544,7 @@ mod tests {
     #[test]
     fn resolve_subscription_prefers_provider_id_over_model_name() {
         let mut subscriptions = HashMap::new();
-        subscriptions.insert("anthropic".to_string(), "Max 5x".to_string());
+        subscriptions.insert("anthropic".to_string(), "Claude Max 5x".to_string());
         subscriptions.insert("openai".to_string(), "ChatGPT Plus".to_string());
 
         let got = resolve_subscription(

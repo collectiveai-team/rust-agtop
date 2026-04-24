@@ -60,7 +60,7 @@ impl std::fmt::Display for ClientKind {
 pub struct SessionSummary {
     #[serde(alias = "provider")]
     pub client: ClientKind,
-    /// Billing/auth bucket for this session when known, e.g. "Max 5x",
+    /// Billing/auth bucket for this session when known, e.g. "Claude Max 5x",
     /// "ChatGPT Plus", or "API key".
     #[serde(default)]
     pub subscription: Option<String>,
@@ -348,7 +348,7 @@ pub struct PlanUsage {
     #[serde(alias = "provider")]
     pub client: ClientKind,
     /// Client-qualified label for the card header, e.g. "Claude Code ·
-    /// Max 5x" or "OpenCode · anthropic (Max)". Free-form; renderers
+    /// Claude Max 5x" or "OpenCode · anthropic (Max)". Free-form; renderers
     /// display verbatim.
     pub label: String,
     /// Plan name when known (e.g. "max", "max_5x", "plus", "pro").
@@ -385,7 +385,7 @@ mod tests {
     fn session_summary_deserializes_legacy_provider_field() {
         let raw = json!({
             "provider": "claude",
-            "subscription": "Max 5x",
+            "subscription": "Claude Max 5x",
             "session_id": "abc",
             "started_at": null,
             "last_active": null,
@@ -402,7 +402,7 @@ mod tests {
         let summary: SessionSummary =
             serde_json::from_value(raw).expect("deserialize legacy summary");
         assert_eq!(summary.client, ClientKind::Claude);
-        assert_eq!(summary.subscription.as_deref(), Some("Max 5x"));
+        assert_eq!(summary.subscription.as_deref(), Some("Claude Max 5x"));
     }
 
     #[test]
