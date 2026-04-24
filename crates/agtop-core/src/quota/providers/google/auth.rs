@@ -32,12 +32,51 @@ impl SourceId {
 
 pub const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
 
+// ---------------------------------------------------------------------------
+// NOTE ON "SECRETS" BELOW
+// ---------------------------------------------------------------------------
+// The four constants below are public OAuth **installed-application** client
+// credentials that ship inside the official Gemini CLI and Antigravity
+// clients. They are NOT private secrets — Google explicitly documents that
+// installed-app client secrets embedded in distributed source code are not
+// treated as secrets:
+//   https://developers.google.com/identity/protocols/oauth2#installed
+//
+// Upstream references (Apache-2.0):
+//   - google-gemini/gemini-cli
+//       packages/core/src/code_assist/oauth2.ts
+//       (OAUTH_CLIENT_ID / OAUTH_CLIENT_SECRET — matches GEMINI_* below,
+//        with an explicit upstream comment: "It's ok to save this in git
+//        because this is an installed application ... the client secret is
+//        obviously not treated as a secret.")
+//   - Antigravity client (extracted from the distributed application, same
+//     installed-app flow).
+//
+// We reproduce them here so this crate can speak the same OAuth protocol as
+// Gemini CLI / Antigravity when refreshing user-owned tokens that those
+// clients obtained. Each end user authenticates with their own Google
+// account — these constants only identify *which application* is asking.
+//
+// GitHub's push-protection secret scanner pattern-matches the `GOCSPX-`
+// prefix regardless of context. If a push is blocked, use the one-click
+// "allow secret" bypass URL in the error output; do not rotate these
+// values or treat them as leaked credentials.
+// ---------------------------------------------------------------------------
+
+/// Gemini CLI OAuth client ID. Public installed-app credential.
+/// Source: google-gemini/gemini-cli (Apache-2.0).
 pub const GEMINI_CLIENT_ID: &str =
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+/// Gemini CLI OAuth client "secret". Public installed-app credential — not
+/// actually secret. Source: google-gemini/gemini-cli (Apache-2.0).
 pub const GEMINI_CLIENT_SECRET: &str = "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";
 
+/// Antigravity OAuth client ID. Public installed-app credential extracted
+/// from the distributed Antigravity application.
 pub const ANTIGRAVITY_CLIENT_ID: &str =
     "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+/// Antigravity OAuth client "secret". Public installed-app credential — not
+/// actually secret. Extracted from the distributed Antigravity application.
 pub const ANTIGRAVITY_CLIENT_SECRET: &str = "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";
 
 #[derive(Debug, Clone)]
