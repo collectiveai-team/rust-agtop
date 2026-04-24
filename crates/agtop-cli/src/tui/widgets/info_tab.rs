@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Local, Utc};
 use ratatui::{
-    layout::Alignment,
+    layout::{Alignment, Constraint, Direction, Layout},
     prelude::*,
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -118,9 +118,31 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     ]));
                 }
             }
-            Paragraph::new(lines)
-                .wrap(Wrap { trim: false })
-                .block(block)
+            // Split lines across two columns for better space utilisation.
+            // The first column gets the metadata fields; the second gets any
+            // child/subagent rows so they stay together.
+            let split = lines.len() / 2;
+            let left_lines: Vec<Line<'static>> = lines[..split].to_vec();
+            let right_lines: Vec<Line<'static>> = lines[split..].to_vec();
+
+            let outer_block = block;
+            let inner = outer_block.inner(area);
+            frame.render_widget(outer_block, area);
+
+            let cols = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(inner);
+
+            frame.render_widget(
+                Paragraph::new(left_lines).wrap(Wrap { trim: false }),
+                cols[0],
+            );
+            frame.render_widget(
+                Paragraph::new(right_lines).wrap(Wrap { trim: false }),
+                cols[1],
+            );
+            return;
         }
     };
 
@@ -139,7 +161,7 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
             "subscription",
             s.subscription.clone().unwrap_or_else(|| "-".into()),
         ),
-        ColumnId::Session => kv_line("session_id", fmt::short_id(&s.session_id)),
+        ColumnId::Session => kv_line("session_id", s.session_id.clone()),
         ColumnId::Started => kv_line("started", fmt_dt(s.started_at)),
         ColumnId::Age => kv_line(
             "age",
