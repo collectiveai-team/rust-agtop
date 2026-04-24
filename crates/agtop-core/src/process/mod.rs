@@ -13,6 +13,7 @@
 
 pub(crate) mod fd;
 pub(crate) mod scanner;
+pub(crate) mod transcript_paths;
 
 use std::collections::HashMap;
 
