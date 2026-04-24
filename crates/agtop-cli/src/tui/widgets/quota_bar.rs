@@ -78,6 +78,19 @@ pub fn error_token(err: &QuotaError) -> String {
     }
 }
 
+/// Returns the ratatui `Style` for the status glyph (● / ✗ / ▲ / ○).
+pub fn status_style(ok: bool, has_last_good: bool, loading: bool) -> Style {
+    if ok && !loading {
+        th::QUOTA_BAR_OK
+    } else if !ok && has_last_good {
+        th::QUOTA_BAR_STALE
+    } else if loading {
+        th::QUOTA_BAR_STALE
+    } else {
+        th::QUOTA_BAR_CRIT
+    }
+}
+
 /// Status glyph for the Dashboard list column.
 #[allow(dead_code)]
 pub fn status_glyph(current_ok: bool, last_good_some: bool, loading: bool) -> char {

@@ -66,13 +66,21 @@ fn render_centered(frame: &mut Frame<'_>, area: Rect, msg: &str) {
 }
 
 fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    use crate::tui::widgets::quota_bar::{error_token, provider_short_name, status_glyph};
+    use crate::tui::widgets::quota_bar::{
+        error_token, provider_short_name, status_glyph, status_style,
+    };
+    use agtop_core::logo::provider_id_to_client_kind;
+    use ratatui_image::Image;
 
     let slots = app.quota_slots();
     let selected = app.selected_provider();
 
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(slots.len());
     for (i, slot) in slots.iter().enumerate() {
+        let row_y = area.y + i as u16;
+        if row_y >= area.y + area.height {
+            break;
+        }
+
         let is_selected = i == selected;
         let stale = !slot.current.ok && slot.last_good.is_some();
         let errored = !slot.current.ok && slot.last_good.is_none();
@@ -103,27 +111,64 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
             None
         };
 
-        let line_text = format!(
-            "{glyph} {name}{name_suffix}{}",
+        let plan_text = format!(
+            "{name}{name_suffix}{}",
             status_text.as_deref().unwrap_or("")
         );
-        let line = Line::from(Span::raw(line_text));
 
-        let line = if is_selected {
-            Line::from(
-                line.spans
-                    .into_iter()
-                    .map(|s| Span::styled(s.content.to_string(), s.style.patch(th::QUOTA_SELECTED)))
-                    .collect::<Vec<_>>(),
-            )
+        // Too narrow — fall back to text-only rendering.
+        if area.width < 5 {
+            let line = Line::from(format!("{glyph} {plan_text}"));
+            let p = if is_selected {
+                Paragraph::new(line).style(th::QUOTA_SELECTED)
+            } else {
+                Paragraph::new(line)
+            };
+            frame.render_widget(p, Rect::new(area.x, row_y, area.width, 1));
+            continue;
+        }
+
+        // Split the row rect: [glyph:1][gap:1][logo:3][gap:1][text:rest]
+        let row_rect = Rect::new(area.x, row_y, area.width, 1);
+        let parts = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(1), // glyph
+                Constraint::Length(1), // gap
+                Constraint::Length(3), // logo
+                Constraint::Length(1), // gap
+                Constraint::Min(1),    // plan text
+            ])
+            .split(row_rect);
+
+        let glyph_rect = parts[0];
+        let logo_rect = parts[2];
+        let text_rect = parts[4];
+
+        // Glyph
+        let glyph_style = status_style(slot.current.ok, slot.last_good.is_some(), loading);
+        let glyph_p = Paragraph::new(Line::from(Span::styled(glyph.to_string(), glyph_style)));
+        frame.render_widget(glyph_p, glyph_rect);
+
+        // Plan text
+        let text_line = Line::from(Span::raw(plan_text));
+        let text_p = if is_selected {
+            Paragraph::new(text_line).style(th::QUOTA_SELECTED)
         } else {
-            line
+            Paragraph::new(text_line)
         };
-        lines.push(line);
-    }
+        frame.render_widget(text_p, text_rect);
 
-    let p = Paragraph::new(lines);
-    frame.render_widget(p, area);
+        // Logo (if available)
+        let provider_id = slot.current.provider_id;
+        if let Some(client_kind) = provider_id_to_client_kind(provider_id) {
+            if let Some(proto) = app.logo(client_kind) {
+                let img = Image::new(proto);
+                frame.render_widget(img, logo_rect);
+            }
+        }
+        // No logo → logo_rect stays blank (already cleared by ratatui).
+    }
 }
 
 fn render_details(frame: &mut Frame<'_>, area: Rect, app: &App) {
