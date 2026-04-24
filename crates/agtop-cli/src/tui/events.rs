@@ -162,6 +162,16 @@ fn apply_normal_key(app: &mut App, key: KeyEvent) -> Action {
         KeyCode::Right if app.tab() == Tab::Quota && app.ui_mode() == UiMode::Classic => {
             app.quota_card_scroll_right(1);
         }
+        KeyCode::Char('J') => {
+            if app.ui_mode() == UiMode::Dashboard {
+                app.model_scroll_down(10);
+            }
+        }
+        KeyCode::Char('K') => {
+            if app.ui_mode() == UiMode::Dashboard {
+                app.model_scroll_up();
+            }
+        }
         _ => {}
     }
     Action::None
@@ -630,5 +640,65 @@ mod tests {
         );
         apply_key(&mut app, press(KeyCode::Left));
         assert_eq!(app.card_scroll(), 0);
+    }
+
+    fn ok_google_usage(count: usize) -> agtop_core::quota::Usage {
+        use agtop_core::quota::UsageWindow;
+        use indexmap::IndexMap;
+        let mut models: IndexMap<String, IndexMap<String, UsageWindow>> = IndexMap::new();
+        for i in 0..count {
+            let mut wins: IndexMap<String, UsageWindow> = IndexMap::new();
+            wins.insert(
+                "daily".into(),
+                UsageWindow {
+                    used_percent: Some(50.0),
+                    window_seconds: Some(86400),
+                    reset_at: None,
+                    value_label: None,
+                },
+            );
+            models.insert(format!("gemini/gemini-2.5-flash-{i}"), wins);
+        }
+        agtop_core::quota::Usage {
+            windows: Default::default(),
+            models,
+            extras: Default::default(),
+        }
+    }
+
+    fn ok_google_result(count: usize) -> agtop_core::quota::ProviderResult {
+        agtop_core::quota::ProviderResult {
+            provider_id: agtop_core::quota::ProviderId::Google,
+            provider_name: "Google".into(),
+            configured: true,
+            ok: true,
+            usage: Some(ok_google_usage(count)),
+            error: None,
+            fetched_at: 0,
+            meta: Default::default(),
+        }
+    }
+
+    #[test]
+    fn shift_j_scrolls_google_models_down() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_google_result(15)]);
+        app.set_ui_mode(UiMode::Dashboard);
+        assert_eq!(app.model_scroll(), 0);
+        let action = apply_key(&mut app, press(KeyCode::Char('J')));
+        assert_eq!(app.model_scroll(), 1);
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn shift_k_scrolls_google_models_up() {
+        let mut app = App::new();
+        app.apply_quota_results(vec![ok_google_result(15)]);
+        app.set_ui_mode(UiMode::Dashboard);
+        apply_key(&mut app, press(KeyCode::Char('J')));
+        assert_eq!(app.model_scroll(), 1);
+        let action = apply_key(&mut app, press(KeyCode::Char('K')));
+        assert_eq!(app.model_scroll(), 0);
+        assert_eq!(action, Action::None);
     }
 }
