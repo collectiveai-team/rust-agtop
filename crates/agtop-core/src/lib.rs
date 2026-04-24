@@ -18,6 +18,7 @@ pub mod litellm;
 pub mod logo;
 pub mod models_dev;
 pub mod pricing;
+pub mod process;
 pub mod project;
 pub mod quota;
 pub mod session;
@@ -27,6 +28,7 @@ pub mod session;
 pub use client::Client;
 pub use error::{Error, Result};
 pub use pricing::{Plan, PlanMode, Rates};
+pub use process::{Confidence, Liveness, ProcessCorrelator, ProcessInfo};
 pub use session::{
     ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
