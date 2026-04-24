@@ -475,6 +475,7 @@ fn render(
         &mut layout.header_cols,
         &mut layout.logo_rects,
     );
+    render_logo_pass(frame, &layout.logo_rects, app);
     render_bottom_panel(frame, outer[2], app, layout);
     render_footer(frame, outer[3], app);
 }
@@ -544,7 +545,29 @@ fn render_dashboard(
         &mut layout.header_cols,
         &mut layout.logo_rects,
     );
+    render_logo_pass(frame, &layout.logo_rects, app);
     render_footer(frame, outer[4], app);
+}
+
+/// Second-pass logo render: overlays provider logos onto the SubscriptionLogo
+/// column cells after the session table has been drawn.
+fn render_logo_pass(
+    frame: &mut Frame<'_>,
+    logo_rects: &[(Rect, agtop_core::ClientKind)],
+    app: &App,
+) {
+    use ratatui_image::Image;
+
+    for &(rect, client) in logo_rects {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        if let Some(proto) = app.logo(client) {
+            let img = Image::new(proto);
+            frame.render_widget(img, rect);
+        }
+        // When no logo: do nothing — the blank cell is already rendered by the table.
+    }
 }
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {

@@ -574,7 +574,6 @@ impl App {
         self.logos = LogoMap(logos);
     }
 
-    #[allow(dead_code)]
     pub fn logo(
         &self,
         client: agtop_core::ClientKind,
