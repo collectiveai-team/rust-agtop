@@ -88,6 +88,10 @@ impl ProcessCorrelator {
     }
 
     pub fn snapshot(&mut self, sessions: &[SessionSummary]) -> HashMap<String, ProcessInfo> {
+        // Fast path: nothing to correlate — skip the OS scan entirely.
+        if sessions.is_empty() && self.prior.is_empty() {
+            return HashMap::new();
+        }
         self.scanner.refresh();
         let mut fresh = correlate(self.scanner.as_ref(), self.fd_scanner.as_ref(), sessions);
 
