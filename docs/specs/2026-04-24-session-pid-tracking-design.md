@@ -3,6 +3,14 @@
 Spec for issue [#23](https://github.com/collectiveai-team/rust-agtop/issues/23).
 Feature branch: `feature/session-pid-tracking`.
 
+> **Implementation status:** see
+> [`docs/session-pid-tracking-status.md`](../session-pid-tracking-status.md)
+> for per-client integration details, decisions made during live
+> battle-testing, and the bug→fix history. The two-tier strategy
+> described below evolved into a three-tier algorithm with cwd hard
+> gating and several tie-breakers; that document is the source of
+> truth for current behavior.
+
 ## Goal
 
 For every session rust-agtop displays, determine whether the agent CLI that
