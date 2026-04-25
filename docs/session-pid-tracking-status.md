@@ -96,7 +96,7 @@ Status legend:
 |-------------|-----------------------------|---------------------------|--------------|-------------------------------------------------------------|
 | Claude      | live (`-r`/`--resume`/`--session-id`) | live (`*.jsonl`) | live | Subagents share parent PID (in-process Task tool).          |
 | Codex       | should work (`resume`/`fork` UUID) | should work (`*.jsonl`) | live (app-server) | Tested only against IDE `app-server`; no live `codex exec`. |
-| Gemini CLI  | should work (`-r`/`--resume`)      | should work (`*.jsonl`) | live | See [Gemini CLI](#gemini-cli) for caveats. **Do not edit gemini-cli parser as part of correlator work** — separate session owns that. |
+| Gemini CLI  | live (`-r`/`--resume` after `c7264ee`) | should work (`*.jsonl`) | live | Parser-side duplicate-id collapse landed in `c7264ee` (separate session); correlator side battle-tested in `6f075cc`. See [Gemini CLI](#gemini-cli) for the parser/correlator split. |
 | OpenCode    | live (`-s ses_…`)           | disabled (shared SQLite)   | live | argv-tier requires the new opencode-id validator; live-verified with `opencode run -s`. |
 | Copilot     | n/a (no resume flag)        | should work (`*.jsonl`)   | n/a          | Live CLI sessions stored at `~/.copilot/session-state/<uuid>/events.jsonl` are NOT yet picked up by the parser; correlator can't match what the parser doesn't surface. |
 | Cursor      | n/a                         | should work (`*.jsonl`)   | should work  | No live cursor-agent process available on the test machine. |
@@ -205,16 +205,30 @@ $ claude --session-id 0b8dbe7a-aa98-4ad9-86de-2ac02508a58d \
   1222329 with Medium confidence; the npm-loader pre-fork (parent of
   1222329) was correctly rejected by the descendant rule.
 
-**What this branch does NOT change:**
+**What the correlator-side commits (`6f075cc`, `60c1424`, `b448e06`) do
+NOT change:**
 
 * Gemini transcript parsing (the `clients::gemini_cli` module).
 * Subagent file discovery in `<parent>/<child>.jsonl` subdirectories.
 * Quota / pricing / model handling.
 
+**Parser-side dedup (separate commit, `c7264ee`).** A concurrent
+session landed `fix(gemini-cli): collapse duplicate-id sessions from
+--resume`, which addresses a Gemini-only quirk: each
+`gemini --resume <uuid>` writes a NEW `session-<datetime>-<shortid>.jsonl`
+file but every file's first record carries the SAME `sessionId`. Without
+collapsing, two `SessionSummary` entries share an id; the correlator's
+`HashMap<session_id, ProcessInfo>` can only hold one binding, so one
+row appears orphaned and the other PID can leak to an unrelated session
+in the same workspace. With the parser-side collapse in place, the
+correlator now sees one summary per logical session and the argv-tier
+(`-r/--resume <uuid>`) matches at High confidence cleanly. See that
+commit's message and `docs/gemini-cli.md` for the details.
+
 If a gemini session is correctly listed by `agtop --json` but no PID is
-attached, that's a correlator-side issue (this branch's responsibility).
-If the session itself is missing/wrong/duplicated/etc., that's a
-parser-side issue (the other session's responsibility).
+attached, that's a correlator-side issue (this doc's territory). If the
+session itself is missing/wrong/duplicated, that's a parser-side issue
+(see `docs/gemini-cli.md`).
 
 ---
 
@@ -333,8 +347,12 @@ unverified live.
 
 ## History (PR #28 commits)
 
-This branch evolved through five correlator commits. Each addresses
-distinct bugs surfaced by progressively-deeper testing:
+This branch evolved through six commits relevant to PID correlation.
+Each addresses distinct bugs surfaced by progressively-deeper testing.
+The first five are correlator-side (this doc's territory); the sixth
+is parser-side (owned by a parallel session) and listed for reader
+context because it removes a duplicate-id condition the correlator
+otherwise can't disambiguate.
 
 | Commit  | Theme                                               | Impact                                  |
 |---------|-----------------------------------------------------|-----------------------------------------|
@@ -343,6 +361,7 @@ distinct bugs surfaced by progressively-deeper testing:
 | `6f075cc` | Real Linux/VSCode setups: thread filter, daemon-exclusion narrowed, `--session-id` for Claude, `node-MainThread` normalization, descendant tie-breaker | Made it work on the user's actual machine; lifted matched-session count from 0 to 3. |
 | `60c1424` | Subagent PID propagation                            | Children inherit parent's PID/liveness/confidence via `attach_process_info`. |
 | `b448e06` | Multi-process OpenCode: cwd hard gate, OpenCode-id argv validator, closest-start-time tie-breaker | Made `opencode run -s` get HIGH confidence; fixed false matches and sibling ties. |
+| `c7264ee` | (parser-side, parallel session) Gemini-cli `--resume` duplicate-id collapse | Removes the duplicate `(session_id)` rows that would otherwise force the correlator to drop one of two valid PID matches. |
 
 Each commit message includes a "Bug → root cause → fix" trace; read
 those for the empirical data behind each decision.
