@@ -161,10 +161,16 @@ mod lifecycle_tests {
 
     #[test]
     fn stopped_is_emitted_once_then_drops() {
-        let sessions = vec![session("s1", "/tmp/s1.jsonl")];
-        let path = PathBuf::from("/tmp/s1.jsonl");
+        // Tier B (fd UUID-in-path) requires UUID-shaped session ids, so
+        // we use a canonical UUID here. The lifecycle behavior under
+        // test (Live -> Stopped once -> dropped) is independent of which
+        // tier produced the original match.
+        const SID: &str = "11111111-1111-4111-8111-111111111111";
+        let path_str = format!("/tmp/{SID}.jsonl");
+        let sessions = vec![session(SID, &path_str)];
+        let path = PathBuf::from(&path_str);
 
-        // Cycle 1: process 42 holds s1 open -> Live.
+        // Cycle 1: process 42 holds session transcript open -> Live.
         let scanner = Box::new(FakeScanner {
             processes: vec![Candidate {
                 pid: 42,
@@ -181,7 +187,7 @@ mod lifecycle_tests {
 
         let mut c = ProcessCorrelator::with_scanners(scanner, fd);
         let first = c.snapshot(&sessions);
-        assert_eq!(first.get("s1").map(|i| i.liveness), Some(Liveness::Live));
+        assert_eq!(first.get(SID).map(|i| i.liveness), Some(Liveness::Live));
 
         // Cycle 2: process 42 no longer in candidates -> Stopped once.
         c.scanner = Box::new(FakeScanner { processes: vec![] });
@@ -189,15 +195,12 @@ mod lifecycle_tests {
             map: std::collections::HashMap::new(),
         });
         let second = c.snapshot(&sessions);
-        assert_eq!(
-            second.get("s1").map(|i| i.liveness),
-            Some(Liveness::Stopped)
-        );
+        assert_eq!(second.get(SID).map(|i| i.liveness), Some(Liveness::Stopped));
 
         // Cycle 3: dropped.
         let third = c.snapshot(&sessions);
         assert!(
-            !third.contains_key("s1"),
+            !third.contains_key(SID),
             "stopped entry should drop on next tick"
         );
     }

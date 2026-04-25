@@ -18,7 +18,7 @@ use crate::session::ClientKind;
 /// We accept only canonical lowercase form. Both Codex and OpenCode emit
 /// lowercase UUIDs in their argv invocations; rejecting uppercase here
 /// surfaces upstream format changes loudly rather than silently.
-fn is_valid_uuid(s: &str) -> bool {
+pub(crate) fn is_valid_uuid(s: &str) -> bool {
     // 8 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 12 == 36
     if s.len() != 36 {
         return false;
