@@ -13,8 +13,13 @@ TODO
 docs/superpowers
 .codex
 .spec-workflow/
+.superpowers
 
 # implementation specs/plans are working artifacts; keep them out of commits.
 # end-user docs live directly under docs/
 docs/specs/
 docs/plans/
+
+# local guidelines and working notes
+ROADMAP.md
+asdasd.md
