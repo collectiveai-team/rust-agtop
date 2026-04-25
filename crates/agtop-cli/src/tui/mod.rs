@@ -90,6 +90,9 @@ struct UiLayout {
     /// Left panel of the Dashboard quota pane (provider list).
     /// Used for scroll-wheel and click hit-testing.
     quota_list_area: Rect,
+    /// Rect + ClientKind for each visible session row's SubscriptionLogo cell.
+    /// Used for the post-table logo render pass.
+    logo_rects: Vec<(Rect, agtop_core::ClientKind)>,
 }
 
 /// Run the interactive TUI. Blocks until the user quits or the terminal
@@ -146,23 +149,42 @@ pub fn run(
     if !raw_logos.is_empty() {
         let picker = ratatui_image::picker::Picker::from_query_stdio()
             .unwrap_or_else(|_| ratatui_image::picker::Picker::from_fontsize((1, 1)));
-        let mut logos = std::collections::HashMap::new();
-        for (client, svg_bytes) in raw_logos {
-            let img = match decode_svg(&svg_bytes) {
-                Some(img) => img,
-                None => continue,
-            };
-            let proto = match picker.new_protocol(
-                img,
-                ratatui::layout::Rect::new(0, 0, 1, 1),
-                ratatui_image::Resize::Fit(None),
-            ) {
-                Ok(p) => p,
-                Err(_) => continue,
-            };
-            logos.insert(client, proto);
+        // Halfblocks falls back to two-pixels-per-cell colored squares;
+        // a 24×24 logo squashed into LOGO_WIDTH×1 (≈3×2 px) is
+        // unrecognizable noise on terminals without a real graphics
+        // protocol (alacritty, vscode terminal, gnome-terminal, etc.).
+        // Skip logos entirely on those terminals; the table layout below
+        // also drops the logo column when no logos are loaded.
+        let supports_graphics =
+            picker.protocol_type() != ratatui_image::picker::ProtocolType::Halfblocks;
+        if supports_graphics {
+            let mut logos = std::collections::HashMap::new();
+            for (client, svg_bytes) in raw_logos {
+                let img = match decode_svg(&svg_bytes) {
+                    Some(img) => img,
+                    None => continue,
+                };
+                // Render the protocol once into an LOGO_WIDTH×1 scratch
+                // buffer at logo init time and cache the resulting cells.
+                // We then copy these cells directly into the target buffer
+                // on every frame instead of re-running `Image::render`,
+                // which on the Kitty graphics protocol rebuilds a
+                // kilobyte-sized placeholder escape sequence per cell per
+                // frame and was costing ~30 ms per frame across all
+                // visible session rows.
+                let proto = match picker.new_protocol(
+                    img,
+                    ratatui::layout::Rect::new(0, 0, LOGO_WIDTH, 1),
+                    ratatui_image::Resize::Fit(None),
+                ) {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
+                let cells = render_logo_to_cells(&proto);
+                logos.insert(client, cells);
+            }
+            app.set_logos(logos);
         }
-        app.set_logos(logos);
     }
 
     let result = event_loop(&mut terminal, &mut app, &mut handle);
@@ -464,7 +486,15 @@ fn render(
     layout.table_area = outer[1];
 
     render_status(frame, outer[0], app);
-    widgets::session_table::render(frame, outer[1], app, table_state, &mut layout.header_cols);
+    widgets::session_table::render(
+        frame,
+        outer[1],
+        app,
+        table_state,
+        &mut layout.header_cols,
+        &mut layout.logo_rects,
+    );
+    render_logo_pass(frame, &layout.logo_rects, app);
     render_bottom_panel(frame, outer[2], app, layout);
     render_footer(frame, outer[3], app);
 }
@@ -526,8 +556,83 @@ fn render_dashboard(
 
     layout.table_area = outer[3];
     layout.tab_bar_area = Rect::default();
-    widgets::session_table::render(frame, outer[3], app, table_state, &mut layout.header_cols);
+    widgets::session_table::render(
+        frame,
+        outer[3],
+        app,
+        table_state,
+        &mut layout.header_cols,
+        &mut layout.logo_rects,
+    );
+    render_logo_pass(frame, &layout.logo_rects, app);
     render_footer(frame, outer[4], app);
+}
+
+/// Width of a provider-logo cell, in terminal columns. Must match
+/// `ColumnId::SubscriptionLogo::fixed_width` and the logo column
+/// constraints in the dashboard provider list and the info-tab
+/// subscription line.
+pub const LOGO_WIDTH: u16 = 3;
+
+/// Render a `Protocol` into an `LOGO_WIDTH × 1` scratch buffer once and
+/// return the resulting cells. We use these as a stamp at draw time
+/// (see `render_logo_pass` and `paste_logo_cells`) so that we never
+/// re-run the protocol's `render` on every frame. Cells embed any
+/// transmit/escape data the protocol needs to emit; ratatui's diff
+/// suppresses repeats when the cells are stable.
+fn render_logo_to_cells(proto: &ratatui_image::protocol::Protocol) -> Vec<ratatui::buffer::Cell> {
+    use ratatui::widgets::Widget;
+    use ratatui_image::Image;
+
+    let area = Rect::new(0, 0, LOGO_WIDTH, 1);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    Image::new(proto).render(area, &mut buf);
+    let mut cells = Vec::with_capacity(LOGO_WIDTH as usize);
+    for x in 0..LOGO_WIDTH {
+        if let Some(cell) = buf.cell((x, 0)) {
+            cells.push(cell.clone());
+        }
+    }
+    cells
+}
+
+/// Stamp pre-rendered logo cells into the target buffer at `rect`.
+/// Used as the cheap inner loop of `render_logo_pass`.
+fn paste_logo_cells(
+    buf: &mut ratatui::buffer::Buffer,
+    rect: Rect,
+    cells: &[ratatui::buffer::Cell],
+) {
+    if rect.height == 0 {
+        return;
+    }
+    let max_x = rect.width.min(cells.len() as u16);
+    for x in 0..max_x {
+        if let Some(target) = buf.cell_mut((rect.x + x, rect.y)) {
+            *target = cells[x as usize].clone();
+        }
+    }
+}
+
+/// Second-pass logo render: overlays provider logos onto the SubscriptionLogo
+/// column cells after the session table has been drawn. Uses pre-rendered
+/// cell stamps cached in `App::logos` to avoid rebuilding the per-protocol
+/// escape sequences on every frame.
+fn render_logo_pass(
+    frame: &mut Frame<'_>,
+    logo_rects: &[(Rect, agtop_core::ClientKind)],
+    app: &App,
+) {
+    let buf = frame.buffer_mut();
+    for &(rect, client) in logo_rects {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        if let Some(cells) = app.logo(client) {
+            paste_logo_cells(buf, rect, cells);
+        }
+        // When no logo: do nothing — the blank cell is already rendered by the table.
+    }
 }
 
 fn render_status(frame: &mut Frame<'_>, area: Rect, app: &App) {

@@ -80,6 +80,12 @@ struct Cli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Write logs to the given file instead of stderr. Works in TUI mode
+    /// without corrupting the screen. Implies --verbose unless RUST_LOG
+    /// is set (in which case RUST_LOG wins).
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -102,7 +108,7 @@ fn main() -> Result<()> {
 
     // TUI mode = bare `agtop` with no --list / --json / --watch.
     let tui_mode = !cli.json && !cli.list && !cli.watch;
-    init_logging(cli.verbose, tui_mode);
+    init_logging(cli.verbose, tui_mode, cli.log_file.as_deref());
 
     let plan = Plan::parse(&cli.plan)
         .with_context(|| format!("unknown plan '{}'; try retail|max|included", cli.plan))?;
@@ -321,8 +327,34 @@ fn setup_pricing(refresh: bool, disable: bool) {
     }
 }
 
-fn init_logging(verbose: bool, tui_mode: bool) {
+fn init_logging(verbose: bool, tui_mode: bool, log_file: Option<&std::path::Path>) {
     use tracing_subscriber::{fmt, EnvFilter};
+
+    // Explicit --log-file: always honor it (works in TUI mode too because
+    // logs go to a file, not stderr). RUST_LOG still wins over default
+    // filter; --verbose still bumps default level.
+    if let Some(path) = log_file {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            Ok(file) => {
+                let default = if verbose { "info" } else { "info" };
+                let filter =
+                    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
+                let _ = fmt().with_env_filter(filter).with_writer(file).try_init();
+                return;
+            }
+            Err(e) => {
+                // Fall through to stderr / default behavior; warn once if
+                // not in TUI mode (in TUI mode this would corrupt the screen).
+                if !tui_mode {
+                    eprintln!("--log-file: failed to open {}: {e}", path.display());
+                }
+            }
+        }
+    }
 
     // In TUI mode the alternate screen occupies the whole terminal; any
     // log lines written to stderr corrupt the ratatui rendering and make

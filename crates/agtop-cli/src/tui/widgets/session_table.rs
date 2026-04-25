@@ -23,12 +23,17 @@ use crate::tui::widgets::state_display::display_state;
 ///
 /// `header_cols` is overwritten with the absolute terminal x-ranges of
 /// every sortable header cell so the mouse handler can hit-test clicks.
+///
+/// `logo_rects` is overwritten with one entry per visible data row: the
+/// `Rect` of the `SubscriptionLogo` cell for that row, paired with the
+/// `ClientKind` of that session.
 pub fn render(
     frame: &mut Frame<'_>,
     area: Rect,
     app: &App,
     state: &mut TableState,
     header_cols: &mut Vec<(u16, u16, SortColumn)>,
+    logo_rects: &mut Vec<(Rect, agtop_core::ClientKind)>,
 ) {
     // Sync the widget's idea of selection with the app's.
     state.select(app.selected_idx());
@@ -43,7 +48,10 @@ pub fn render(
     };
 
     let col_cfg = app.column_config();
-    let visible = col_cfg.visible();
+    // Hide the SubscriptionLogo slot when no logos are loaded
+    // (terminals without a graphics protocol). Otherwise the column
+    // reserves dead space.
+    let visible = col_cfg.visible_ext(app.has_logos());
 
     let header_cells: Vec<Cell<'static>> = visible
         .iter()
@@ -95,6 +103,7 @@ pub fn render(
     let columns_width = inner_width.saturating_sub(selection_width);
 
     // Split exactly as Table does: Layout::horizontal(widths).spacing(1).
+    // clone: widths ownership is needed by Table::new below.
     let col_rects = Layout::default()
         .direction(Direction::Horizontal)
         .constraints(widths.clone())
@@ -141,13 +150,47 @@ pub fn render(
         })
         .collect();
 
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, widths.clone())
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title))
         .row_highlight_style(th::SELECTED)
         .highlight_symbol("▶ ");
 
     frame.render_stateful_widget(table, area, state);
+
+    // ── Compute SubscriptionLogo column rects for the post-table overlay ──
+    //
+    // Find the index of SubscriptionLogo in the visible column list, then
+    // re-use the same layout split that was already computed for header_cols
+    // to determine where that column lands on screen for each data row.
+    let logo_col_idx = visible
+        .iter()
+        .position(|&c| c == ColumnId::SubscriptionLogo);
+
+    logo_rects.clear();
+
+    if let Some(logo_idx) = logo_col_idx {
+        // Reuse col_rects (already computed above for header_cols).
+        // Only x and width are used from col_rects (y is the header row;
+        // we replace it with screen_row below).
+        let logo_col_rect = col_rects[logo_idx];
+
+        // Data rows start at area.y + 2 (border row + header row).
+        let data_start_y = area.y + 2;
+
+        // Skip rows that are scrolled off the top; screen_row is relative
+        // to the first *visible* row, not the start of the view slice.
+        let scroll_offset = state.offset();
+        for (row_idx, (analysis, _is_child)) in view.iter().enumerate().skip(scroll_offset) {
+            let screen_row = data_start_y + (row_idx - scroll_offset) as u16;
+            if screen_row >= area.y + area.height.saturating_sub(1) {
+                break; // outside the visible area (bottom border)
+            }
+            let rect = Rect::new(logo_col_rect.x, screen_row, logo_col_rect.width, 1);
+            logo_rects.push((rect, analysis.summary.client));
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────
 }
 
 fn header_cell(s: &'static str) -> Cell<'static> {
@@ -330,6 +373,8 @@ fn row_for<'a>(
                 }
                 _ => "-".into(),
             }),
+            // SubscriptionLogo is injected by visible() — rendered as empty for now.
+            ColumnId::SubscriptionLogo => Cell::from(""),
         })
         .collect();
 

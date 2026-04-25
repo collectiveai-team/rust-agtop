@@ -4,6 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::quota::ProviderId;
 use crate::session::ClientKind;
 
 pub const LOGO_BASE_URL: &str = "https://models.dev/logos";
@@ -21,6 +22,20 @@ pub fn logo_provider_id(client: ClientKind) -> Option<&'static str> {
         ClientKind::GeminiCli => Some("google"),
         ClientKind::Cursor => None,
         ClientKind::Antigravity => None,
+    }
+}
+
+/// Reverse of the `logo_provider_id` mapping: given a `ProviderId` return
+/// the `ClientKind` whose logo file represents that provider, or `None` when
+/// no client maps to that provider.
+pub fn provider_id_to_client_kind(provider_id: ProviderId) -> Option<ClientKind> {
+    match provider_id {
+        ProviderId::Claude => Some(ClientKind::Claude),
+        ProviderId::Codex => Some(ClientKind::Codex),
+        ProviderId::Copilot => Some(ClientKind::Copilot),
+        ProviderId::CopilotAddon => Some(ClientKind::Copilot), // shares logo
+        ProviderId::Zai => None,                               // no logo yet
+        ProviderId::Google => Some(ClientKind::GeminiCli),
     }
 }
 
@@ -122,5 +137,33 @@ mod tests {
         assert_eq!(logo_provider_id(ClientKind::GeminiCli), Some("google"));
         assert_eq!(logo_provider_id(ClientKind::Cursor), None);
         assert_eq!(logo_provider_id(ClientKind::Antigravity), None);
+    }
+
+    #[test]
+    fn provider_id_to_client_kind_round_trips() {
+        // Every ClientKind that has a logo_provider_id must round-trip back.
+        for &kind in ClientKind::all() {
+            if let Some(pid_str) = logo_provider_id(kind) {
+                // Map the string back to a ProviderId then back to ClientKind.
+                let provider_id = match pid_str {
+                    "anthropic" => ProviderId::Claude,
+                    "openai" => ProviderId::Codex,
+                    "opencode" => continue, // opencode has no ProviderId
+                    "github-copilot" => ProviderId::Copilot,
+                    "google" => ProviderId::Google,
+                    _ => continue,
+                };
+                let got = provider_id_to_client_kind(provider_id);
+                assert_eq!(got, Some(kind), "round-trip failed for {kind:?}");
+            }
+        }
+        // Variants not reachable from logo_provider_id must also be tested directly.
+        // CopilotAddon shares Copilot's logo.
+        assert_eq!(
+            provider_id_to_client_kind(ProviderId::CopilotAddon),
+            Some(ClientKind::Copilot)
+        );
+        // Zai has no logo yet.
+        assert_eq!(provider_id_to_client_kind(ProviderId::Zai), None);
     }
 }
