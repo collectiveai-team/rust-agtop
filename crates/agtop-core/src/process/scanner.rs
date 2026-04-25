@@ -92,9 +92,14 @@ impl SysinfoScanner {
         let direct = DIRECT.contains(&binary);
         // Gemini CLI runs under node; disambiguate via argv. The Linux
         // kernel exposes the main thread's `comm` (which Node.js renames
-        // to "node-MainThread" via prctl on recent versions), and
-        // sysinfo surfaces that as `binary`. Accept both forms.
-        let is_node_host = binary == "node" || binary == "node-MainThread";
+        // via prctl on recent versions). Two distinct forms exist in the
+        // wild:
+        //   * Node v25.x:  "node-MainThread"
+        //   * Node v24.x:  bare "MainThread"  (no prefix)
+        // Accept all three. The argv-mentions-"gemini" gate keeps random
+        // node processes that renamed themselves to "MainThread" out.
+        let is_node_host =
+            binary == "node" || binary == "node-MainThread" || binary == "MainThread";
         let node_hosted_gemini = is_node_host && argv.iter().any(|a| a.contains("gemini"));
         if !direct && !node_hosted_gemini {
             return false;
@@ -188,12 +193,15 @@ impl Scanner for SysinfoScanner {
                 continue;
             }
             // Normalize the binary name. Recent Node.js renames its main
-            // thread comm to "node-MainThread"; sysinfo surfaces that as
-            // `name()`. The downstream score tier compares against
-            // `expected_binaries(client)` which lists "node" — so we
-            // collapse the rename here to keep the rest of the pipeline
-            // ignorant of kernel comm quirks.
-            let binary = if raw_binary == "node-MainThread" {
+            // thread comm via prctl, surfacing as `name()` in sysinfo.
+            // Two forms seen in the wild:
+            //   * Node v25.x emits "node-MainThread"
+            //   * Node v24.x emits bare "MainThread"
+            // The downstream score tier compares against
+            // `expected_binaries(client)` which lists "node", so we
+            // collapse both renames here to keep the rest of the pipeline
+            // ignorant of kernel/comm quirks.
+            let binary = if raw_binary == "node-MainThread" || raw_binary == "MainThread" {
                 "node".to_string()
             } else {
                 raw_binary
@@ -274,6 +282,39 @@ pub(crate) mod tests {
         ));
         assert!(!SysinfoScanner::is_known_cli(
             "node-MainThread",
+            &["node".into(), "/home/app/server.js".into()]
+        ));
+    }
+
+    /// Node.js v24.x (bundled with nvm and many distros) renames the main
+    /// thread to bare `"MainThread"` — without the `node-` prefix that
+    /// v25.x uses. Live evidence from a user's machine running gemini
+    /// under nvm Node v24.7.0:
+    ///
+    /// ```text
+    /// pid=1548521 ppid=618724 comm=MainThread cwd=/home/rbarriga
+    ///   cmd=node /home/rbarriga/.nvm/versions/node/v24.7.0/bin/gemini
+    /// ```
+    ///
+    /// Without this acceptance the scanner produces zero candidates for
+    /// gemini-under-nvm-node-24, breaking PID matching for every Gemini
+    /// session on those setups regardless of how perfect the correlator
+    /// is.
+    ///
+    /// We still gate on argv mentioning "gemini" to avoid matching
+    /// arbitrary node processes that happened to rename their main
+    /// thread to `"MainThread"`.
+    #[test]
+    fn is_known_cli_accepts_bare_mainthread_running_gemini() {
+        assert!(SysinfoScanner::is_known_cli(
+            "MainThread",
+            &[
+                "node".into(),
+                "/home/user/.nvm/versions/node/v24.7.0/bin/gemini".into()
+            ]
+        ));
+        assert!(!SysinfoScanner::is_known_cli(
+            "MainThread",
             &["node".into(), "/home/app/server.js".into()]
         ));
     }
