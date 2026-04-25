@@ -162,6 +162,61 @@ Some versions may also include `response_text`; agtop should not require it.
 The `gemini_cli.token.usage` metric is tagged by `model` and token `type`,
 where `type` can be `input`, `output`, `thought`, `cache`, or `tool`.
 
+### Resume semantics and duplicate-id collapsing
+
+Gemini CLI handles `gemini --resume <uuid>` differently from every other agent
+agtop integrates with: each invocation creates a NEW session file under
+`~/.gemini/tmp/<project_hash>/chats/`, but every file's first record carries
+the **same `sessionId`** as the original session. After three resumes of
+session `81b96307-…`, on disk you'll have:
+
+```text
+session-2026-04-25T09-00-81b96307.jsonl   sessionId: 81b96307-…
+session-2026-04-25T10-00-81b96307.jsonl   sessionId: 81b96307-…
+session-2026-04-25T11-00-81b96307.jsonl   sessionId: 81b96307-…
+```
+
+Compare this with peer clients: Claude renames per resume (each resume gets a
+fresh UUID); Codex appends to the existing file (one file per session_id);
+SQLite-backed clients (OpenCode, Cursor, Copilot, Antigravity) enforce primary
+key uniqueness. Only Gemini reuses the same id across multiple files.
+
+This collides with agtop's `(client, session_id)` uniqueness assumption used
+by the PID correlator (`process::correlator`): the binding map is keyed on
+`session_id`, so when two summaries share an id only one can hold a PID match
+and the other appears orphaned in the UI. Worse, the unmatched second PID
+becomes available to cwd-tier scoring and may be incorrectly assigned to an
+unrelated session in the same workspace.
+
+**Resolution.** `GeminiCliClient::list_sessions` collapses duplicates by
+`session_id` before returning. The merged summary preserves the union of the
+duplicates' time bounds:
+
+- `started_at` = earliest across the group (when the session was first created);
+- `last_active` = latest across the group (most recent activity);
+- everything else (model, title, state, `data_path`) comes from the
+  most-recently-active file.
+
+**Tradeoff.** Older transcript files for the same resumed session become
+invisible to the session list — agtop shows ONE row per logical session, not
+one row per on-disk file. The files remain on disk; only the list view is
+collapsed. This is the right UX (a user thinks of "session X" as one thing,
+not N), but it has these consequences:
+
+- The session-file fallback for token/turn/tool counts in `analyze()` only
+  reads the newest file. When local telemetry is enabled (`telemetry.log`),
+  this is harmless because telemetry events are filtered by `session.id` AND
+  the merged time window — so all events from every resume invocation are
+  attributed correctly. When telemetry is disabled, agtop's token totals
+  reflect only the most recent resume's transcript, not the historical sum.
+- Per-resume sub-conversations cannot be inspected individually through the
+  session list. If users need that, they read the JSONL files directly.
+
+The collision exists because Gemini CLI's choice predates this repo;
+mirroring it in agtop's data model would propagate the quirk into every
+correlator and renderer. Containing it in the parser keeps the rest of the
+pipeline ignorant of Gemini-specific behavior.
+
 ### Headless JSON and JSONL
 
 For runs launched by another process, Gemini CLI supports structured headless
@@ -215,6 +270,7 @@ estimated remaining quota.
 | Billing cost | Estimate | Public pricing | Subscription plans may not map to API prices. |
 | Headless run stats | Reliable for launched runs | `--output-format json` or `stream-json` | Separate from passive discovery. |
 | Provider billing truth | Unsupported | N/A | Use Google billing/quota systems outside agtop. |
+| `--resume` PID matching | Reliable | Argv-tier in correlator | One row per logical session; older transcript files are collapsed. See "Resume semantics" above. |
 
 ## Implementation status and next work
 
@@ -308,6 +364,7 @@ Current coverage includes:
 - common metric extraction for tokens, tool calls, turns, duration, model, and
   context usage;
 - session-file token fallback;
+- duplicate-`sessionId` collapse for `--resume` workflows;
 - free-tier Google quota response with no per-model buckets;
 - paid-tier Google quota response with per-model buckets;
 
