@@ -66,7 +66,23 @@ agtop --list --agentic-client claude --agentic-client codex
 
 # Non-interactive refresh loop (for headless monitoring). Not valid with --json.
 agtop --list --watch --delay 5
+
+# Write debug logs to a file while running the TUI (the TUI is unaffected)
+agtop --log-file /tmp/agtop.log
 ```
+
+### Provider logos
+
+When the host terminal supports a real graphics protocol (Kitty,
+iTerm2, Sixel), agtop renders small SVG logos from
+[models.dev](https://models.dev) next to the subscription name in the
+session table, dashboard provider list, and info pane. Logos are
+cached to `~/.cache/agtop/logos/` for 7 days.
+
+Terminals without a graphics protocol (alacritty, VSCode terminal,
+gnome-terminal, …) fall back to the standard text-only layout — the
+logo column is omitted entirely so the table looks identical to
+pre-logo builds. No configuration knob is needed.
 
 ### TUI keys
 
