@@ -18,6 +18,28 @@ Adding a new client is a single `impl Client` in `agtop-core::clients`.
 See [`docs/gemini-cli.md`](docs/gemini-cli.md) for Gemini CLI integration
 details, data sources, and implementation notes.
 
+## Process tracking
+
+When an agent CLI is running, agtop correlates its OS process to the
+session transcript it's writing. The session table's `PID` column shows
+the live PID; the info panel shows liveness state (`live` / `stopped`)
+and how the match was established.
+
+Correlation uses the transcript file held open by the CLI as the primary
+signal; when that's unavailable, agtop falls back to scoring on
+`cwd`, binary name, and start-time overlap.
+
+### Platform matrix
+
+| Platform | Process enum | Fd enum (definitive) | Score fallback |
+|----------|:-:|:-:|:-:|
+| Linux    | ✅ | ✅ (/proc)    | ✅ |
+| macOS    | ✅ | ✅ (libproc)  | ✅ |
+| Windows  | ✅ | ❌           | ✅ |
+
+On Windows the score-only fallback still works but may be ambiguous
+when multiple agents run in the same cwd.
+
 ## Status
 
 **v0.2** adds an interactive TUI (ratatui + crossterm) on top of the
