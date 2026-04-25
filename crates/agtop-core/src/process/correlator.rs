@@ -214,20 +214,44 @@ pub(crate) fn correlate(
                     tie = false;
                 }
                 Some((s, prev_c)) if score == s => {
-                    // Descendant wins (npm-loader → real CLI).
+                    // Tie-breaker 1: descendant wins (npm-loader → real CLI).
                     let cur_desc = is_descendant_of_candidate(c);
                     let prev_desc = is_descendant_of_candidate(prev_c);
                     match (cur_desc, prev_desc) {
                         (true, false) => {
                             best = Some((score, c));
                             tie = false;
+                            continue;
                         }
                         (false, true) => {
-                            // prev wins; keep best, drop tie flag.
                             tie = false;
+                            continue;
                         }
-                        _ => tie = true,
+                        _ => {}
                     }
+                    // Tie-breaker 2: closer start_time to session.started_at.
+                    // For per-session CLIs (`opencode run`, `claude`, etc.)
+                    // the process is launched right when the session is
+                    // created, so the time gap is typically <2s. The
+                    // long-lived daemon's gap is minutes-to-hours.
+                    if let Some(started) = session.started_at {
+                        let s_t = started.timestamp();
+                        let cur_gap = (c.start_time as i64 - s_t).abs();
+                        let prev_gap = (prev_c.start_time as i64 - s_t).abs();
+                        // Require a meaningful margin (>= 30s) so we
+                        // don't crown a winner from clock-jitter noise.
+                        const MARGIN: i64 = 30;
+                        if cur_gap + MARGIN < prev_gap {
+                            best = Some((score, c));
+                            tie = false;
+                            continue;
+                        }
+                        if prev_gap + MARGIN < cur_gap {
+                            tie = false;
+                            continue;
+                        }
+                    }
+                    tie = true;
                 }
                 _ => {}
             }
@@ -386,7 +410,23 @@ fn enforce_unique_pid(out: &mut HashMap<String, ProcessInfo>, sessions: &[Sessio
 
 /// Score a candidate process against a session. Each criterion adds 1.
 /// Returns 0..=3.
+///
+/// **cwd mismatch is a deal-breaker.** When both candidate and session
+/// have a known cwd, they must agree exactly; otherwise we return 0
+/// (regardless of binary/time match). This stops the binary+time
+/// combination from match-laundering across unrelated cwds — common
+/// when a user has, say, a daemon in `/tmp/foo` and an old session in
+/// `/home/user/proj` whose only signal is "an opencode is running and
+/// the session was active recently". Empirically this was the cause of
+/// stale OpenCode sessions stealing daemon PIDs from the active ones.
 fn score_candidate(c: &Candidate, s: &SessionSummary) -> u32 {
+    // Hard cwd gate: when both sides know their cwd, they must match.
+    if let (Some(cc), Some(sc)) = (&c.cwd, &s.cwd) {
+        if cc.as_os_str() != std::ffi::OsStr::new(sc) {
+            return 0;
+        }
+    }
+
     let mut score = 0;
 
     // Binary matches an expected name for this client.
@@ -394,7 +434,7 @@ fn score_candidate(c: &Candidate, s: &SessionSummary) -> u32 {
         score += 1;
     }
 
-    // cwd exact match.
+    // cwd exact match (counted only when both sides know it).
     if let (Some(cc), Some(sc)) = (&c.cwd, &s.cwd) {
         if cc.as_os_str() == std::ffi::OsStr::new(sc) {
             score += 1;
@@ -548,6 +588,53 @@ mod tests {
     }
 
     #[test]
+    fn score_tier_breaks_tie_by_closer_start_time() {
+        // Two opencode candidates in the same cwd, neither a descendant
+        // of the other (sibling processes, e.g. an existing daemon and
+        // a fresh `opencode run`). Score equally on (binary, cwd, time).
+        // Tie-breaker: the candidate whose start_time is closer to the
+        // session's started_at wins.
+        let now = Utc::now();
+        let s = SessionSummary::new(
+            ClientKind::OpenCode,
+            None,
+            "ses_targeted".into(),
+            Some(now - Duration::seconds(5)), // session just started
+            Some(now),
+            None,
+            Some("/tmp/proj".into()),
+            PathBuf::from("/.local/share/opencode/opencode.db"),
+            None,
+            None,
+            None,
+            None,
+        );
+        // Daemon: started 30 minutes ago.
+        let mut daemon = candidate(100, "opencode", "/tmp/proj");
+        daemon.parent_pid = Some(1);
+        daemon.start_time = (now - Duration::minutes(30)).timestamp() as u64;
+        // Fresh run client: started ~3s before the session_started_at
+        // (well within the session's window so the +1 time bonus also
+        // fires for both, leaving us at score==2 either way).
+        let mut fresh = candidate(101, "opencode", "/tmp/proj");
+        fresh.parent_pid = Some(2);
+        fresh.start_time = (now - Duration::seconds(8)).timestamp() as u64;
+
+        let scanner = FakeScanner {
+            processes: vec![daemon, fresh],
+        };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+
+        let result = correlate(&scanner, &fd, &[s]);
+        let info = result
+            .get("ses_targeted")
+            .expect("closer-start-time candidate must win the tie");
+        assert_eq!(info.pid, 101, "fresh run client must beat the old daemon");
+    }
+
+    #[test]
     fn score_tier_breaks_tie_in_favor_of_descendant() {
         // Wrapper pattern: a parent process and its child both have the
         // same comm/cwd/argv (e.g. npm-loader → real gemini node). Both
@@ -608,10 +695,13 @@ mod tests {
             None,
             None,
         );
+        // Both candidates within the time tie-breaker margin (30s) of
+        // each other relative to session.started_at, so neither wins
+        // and the match is correctly refused.
         let mut c1 = candidate(42, "claude", "/home/user/proj");
         let mut c2 = candidate(43, "claude", "/home/user/proj");
         c1.start_time = (now - Duration::minutes(5)).timestamp() as u64;
-        c2.start_time = (now - Duration::minutes(3)).timestamp() as u64;
+        c2.start_time = (now - Duration::minutes(5) - Duration::seconds(10)).timestamp() as u64;
 
         let scanner = FakeScanner {
             processes: vec![c1, c2],
@@ -622,6 +712,45 @@ mod tests {
 
         let result = correlate(&scanner, &fd, &[s]);
         assert!(result.is_empty(), "ambiguous match should not be emitted");
+    }
+
+    #[test]
+    fn score_tier_rejects_cwd_mismatch_even_when_binary_and_time_agree() {
+        // Regression: a long-running daemon in cwd A must NOT match a
+        // session in cwd B just because both have the same binary and
+        // the daemon started during the session's active window.
+        // Empirically this was the cause of a fresh `opencode serve`
+        // in /tmp/* stealing matches from sessions in /home/user/proj.
+        let now = Utc::now();
+        let s = SessionSummary::new(
+            ClientKind::OpenCode,
+            None,
+            "ses_in_proj".into(),
+            Some(now - Duration::hours(2)),
+            Some(now),
+            None,
+            Some("/home/user/proj".into()),
+            PathBuf::from("/.local/share/opencode/opencode.db"),
+            None,
+            None,
+            None,
+            None,
+        );
+        // Daemon in a totally unrelated cwd, started during the session
+        // window — would have scored 2 (binary + time) under the prior
+        // additive scheme. Must now score 0.
+        let mut c = candidate(900, "opencode", "/tmp/elsewhere");
+        c.start_time = (now - Duration::minutes(5)).timestamp() as u64;
+
+        let scanner = FakeScanner { processes: vec![c] };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+        let result = correlate(&scanner, &fd, &[s]);
+        assert!(
+            result.is_empty(),
+            "cwd-mismatched daemon must not match: {result:?}"
+        );
     }
 
     #[test]

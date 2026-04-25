@@ -41,6 +41,28 @@ pub(crate) fn is_valid_uuid(s: &str) -> bool {
     true
 }
 
+/// OpenCode session id shape: `ses_` + 26 base62-ish chars
+/// (alphanumeric, mixed case). Used for argv-tier extraction of
+/// `opencode run -s <id>` invocations.
+pub(crate) fn is_valid_opencode_id(s: &str) -> bool {
+    let Some(rest) = s.strip_prefix("ses_") else {
+        return false;
+    };
+    if rest.len() != 26 {
+        return false;
+    }
+    rest.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Validator selector per client. The argv-tier accepts a token as a
+/// session id only if the per-client validator approves it.
+fn id_validator(client: ClientKind) -> fn(&str) -> bool {
+    match client {
+        ClientKind::OpenCode => is_valid_opencode_id,
+        _ => is_valid_uuid,
+    }
+}
+
 /// Return `Some(value)` when `tok` is `flag=value`. Useful for matching
 /// the `--resume=<uuid>` / `--session=<uuid>` shapes. Allocation-free.
 fn eq_value<'a>(tok: &'a str, flag: &str) -> Option<&'a str> {
@@ -48,22 +70,23 @@ fn eq_value<'a>(tok: &'a str, flag: &str) -> Option<&'a str> {
         .and_then(|rest| rest.strip_prefix('='))
 }
 
-/// Scan tokens for a per-flag UUID value. Supports both the separated
-/// (`--flag <value>`) and `=`-joined (`--flag=value`) shapes. `flags`
-/// is the set of accepted flag names (e.g. `["-r", "--resume"]`).
-fn find_flag_uuid(tokens: &[String], flags: &[&str]) -> Option<String> {
+/// Scan tokens for a per-flag session-id value. Supports both the
+/// separated (`--flag <value>`) and `=`-joined (`--flag=value`) shapes.
+/// `flags` is the set of accepted flag names (e.g. `["-r", "--resume"]`);
+/// `is_valid` validates the captured value (per-client format).
+fn find_flag_id(tokens: &[String], flags: &[&str], is_valid: fn(&str) -> bool) -> Option<String> {
     let mut i = 0;
     while i < tokens.len() {
         let tok = tokens[i].as_str();
         for &flag in flags {
             if tok == flag {
                 if let Some(next) = tokens.get(i + 1) {
-                    if is_valid_uuid(next) {
+                    if is_valid(next) {
                         return Some(next.clone());
                     }
                 }
             } else if let Some(val) = eq_value(tok, flag) {
-                if is_valid_uuid(val) {
+                if is_valid(val) {
                     return Some(val.to_string());
                 }
             }
@@ -101,15 +124,16 @@ pub(crate) fn extract_session_uuid(client: ClientKind, argv: &[String]) -> Optio
         return None;
     }
     let tokens = &argv[1..];
+    let validator = id_validator(client);
     match client {
         // Claude has TWO flags that name a session UUID in argv:
         //   * `-r/--resume <uuid>`  — resume a specific past session
         //   * `--session-id <uuid>` — start a new session with this ID
         // Both bind a process to a session for our purposes.
-        ClientKind::Claude => find_flag_uuid(tokens, &["-r", "--resume", "--session-id"]),
-        ClientKind::GeminiCli => find_flag_uuid(tokens, &["-r", "--resume"]),
+        ClientKind::Claude => find_flag_id(tokens, &["-r", "--resume", "--session-id"], validator),
+        ClientKind::GeminiCli => find_flag_id(tokens, &["-r", "--resume"], validator),
         ClientKind::Codex => find_subcommand_uuid(tokens, &["resume", "fork"]),
-        ClientKind::OpenCode => find_flag_uuid(tokens, &["-s", "--session"]),
+        ClientKind::OpenCode => find_flag_id(tokens, &["-s", "--session"], validator),
         ClientKind::Copilot | ClientKind::Cursor | ClientKind::Antigravity => None,
     }
 }
@@ -245,31 +269,69 @@ mod tests {
 
     // ---- OpenCode --------------------------------------------------------
 
+    /// OpenCode session ids have shape `ses_<26 alphanumeric>` (mixed
+    /// case). UUIDs would be rejected. This is a real id from `opencode
+    /// session list`.
+    const OC_ID: &str = "ses_23c93ae9fffeyoWWO2jksO2OxI";
+
     #[test]
     fn opencode_run_short_session() {
-        let a = argv(&["opencode", "run", "-s", UUID]);
+        let a = argv(&["opencode", "run", "-s", OC_ID]);
         assert_eq!(
             extract_session_uuid(ClientKind::OpenCode, &a).as_deref(),
-            Some(UUID)
+            Some(OC_ID)
         );
     }
 
     #[test]
     fn opencode_run_long_session() {
-        let a = argv(&["opencode", "run", "--session", UUID]);
+        let a = argv(&["opencode", "run", "--session", OC_ID]);
         assert_eq!(
             extract_session_uuid(ClientKind::OpenCode, &a).as_deref(),
-            Some(UUID)
+            Some(OC_ID)
         );
     }
 
     #[test]
     fn opencode_run_eq_session() {
-        let a = argv(&["opencode", "run", &format!("--session={UUID}")]);
+        let a = argv(&["opencode", "run", &format!("--session={OC_ID}")]);
         assert_eq!(
             extract_session_uuid(ClientKind::OpenCode, &a).as_deref(),
-            Some(UUID)
+            Some(OC_ID)
         );
+    }
+
+    #[test]
+    fn opencode_rejects_uuid_shape() {
+        // OpenCode does not use UUIDs; a UUID-shaped value following
+        // `-s` must NOT be captured, even though it would for Claude.
+        let a = argv(&["opencode", "run", "-s", UUID]);
+        assert_eq!(extract_session_uuid(ClientKind::OpenCode, &a), None);
+    }
+
+    #[test]
+    fn opencode_rejects_garbage_after_s() {
+        let a = argv(&["opencode", "run", "-s", "garbage"]);
+        assert_eq!(extract_session_uuid(ClientKind::OpenCode, &a), None);
+    }
+
+    #[test]
+    fn is_valid_opencode_id_basic() {
+        assert!(is_valid_opencode_id(OC_ID));
+        assert!(!is_valid_opencode_id(UUID));
+        assert!(!is_valid_opencode_id(""));
+        assert!(!is_valid_opencode_id("ses_too_short"));
+        assert!(!is_valid_opencode_id("ses_with-dash-which-isnt-allowed"));
+        // wrong prefix
+        assert!(!is_valid_opencode_id("xes_23c93ae9fffeyoWWO2jksO2OxI"));
+    }
+
+    #[test]
+    fn claude_rejects_opencode_id_shape() {
+        // Claude expects UUIDs; an OpenCode id following `--resume`
+        // must NOT be captured.
+        let a = argv(&["claude", "--resume", OC_ID]);
+        assert_eq!(extract_session_uuid(ClientKind::Claude, &a), None);
     }
 
     // ---- Unsupported clients --------------------------------------------
