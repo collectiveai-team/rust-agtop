@@ -340,7 +340,7 @@ fn init_logging(verbose: bool, tui_mode: bool, log_file: Option<&std::path::Path
             .open(path)
         {
             Ok(file) => {
-                let default = if verbose { "info" } else { "info" };
+                let default = if verbose { "debug" } else { "info" };
                 let filter =
                     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
                 let _ = fmt().with_env_filter(filter).with_writer(file).try_init();
