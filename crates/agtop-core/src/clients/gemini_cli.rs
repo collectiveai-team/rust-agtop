@@ -117,6 +117,18 @@ impl Client for GeminiCliClient {
             }
         }
 
+        // Collapse duplicate session_ids. Gemini CLI writes a NEW
+        // `session-<datetime>-<shortid>.jsonl` every time you `--resume <uuid>`,
+        // but each file's first record carries the SAME `sessionId`. Other
+        // clients (Claude renames per resume; Codex appends; SQLite-backed
+        // clients enforce PK uniqueness) never produce duplicates, and the
+        // correlator's PID-binding map is keyed on `session_id` — so duplicates
+        // here cause one entry to silently lose its PID match.
+        //
+        // Tradeoff: the older transcript files become invisible to the session
+        // list. See `docs/gemini-cli.md` ("Resume semantics") for rationale.
+        out = collapse_duplicate_session_ids(out);
+
         {
             use std::collections::HashSet;
             let live_paths: HashSet<&std::path::Path> =
@@ -230,8 +242,79 @@ impl Client for GeminiCliClient {
             agent_turns: analysis.agent_turns,
             user_turns: analysis.user_turns,
             project_name: None,
+            pid: None,
+            liveness: None,
+            match_confidence: None,
         })
     }
+}
+
+/// Collapse `SessionSummary` entries that share the same `session_id`.
+///
+/// For each duplicate group, keep one summary whose:
+///   * `started_at` = earliest `started_at` across the group (or any non-`None`
+///     value if the most-recent entry's `started_at` was `None`);
+///   * `last_active` = latest `last_active` across the group;
+///   * remaining fields (incl. `data_path`, `session_title`, `model`, `state`)
+///     come from the entry with the latest `last_active` — that's the most
+///     recent invocation, which has the freshest title and current state.
+///
+/// Stable on session_id ordering: groups iterate in original insertion order,
+/// preserving the rest of the list's order.
+fn collapse_duplicate_session_ids(sessions: Vec<SessionSummary>) -> Vec<SessionSummary> {
+    use std::collections::HashMap;
+
+    // First pass: bucket indices by session_id, preserving insertion order
+    // for ids encountered exactly once.
+    let mut order: Vec<String> = Vec::with_capacity(sessions.len());
+    let mut by_id: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, s) in sessions.iter().enumerate() {
+        let entry = by_id.entry(s.session_id.clone()).or_default();
+        if entry.is_empty() {
+            order.push(s.session_id.clone());
+        }
+        entry.push(idx);
+    }
+
+    // Second pass: for each id, pick the representative (latest last_active)
+    // and merge in the earliest started_at from the rest of the group.
+    let mut out: Vec<SessionSummary> = Vec::with_capacity(order.len());
+    for id in order {
+        let indices = by_id.remove(&id).unwrap_or_default();
+        if indices.len() == 1 {
+            out.push(sessions[indices[0]].clone());
+            continue;
+        }
+
+        // Find the index with the latest last_active. `None` sorts before
+        // any `Some(_)`, so a missing timestamp loses to a present one.
+        let rep_idx = *indices
+            .iter()
+            .max_by_key(|&&i| sessions[i].last_active)
+            .expect("indices non-empty by construction");
+        let mut rep = sessions[rep_idx].clone();
+
+        // Earliest started_at across the group. Treat `None` as "later than
+        // any Some" so a present timestamp always wins over a missing one.
+        let earliest_started = indices.iter().filter_map(|&i| sessions[i].started_at).min();
+        if let Some(ts) = earliest_started {
+            rep.started_at = Some(ts);
+        }
+
+        // Latest last_active is already on `rep` because rep_idx maximised
+        // it — but defensively recompute in case the representative had
+        // `None` and another duplicate had `Some(_)`.
+        let latest_last_active = indices
+            .iter()
+            .filter_map(|&i| sessions[i].last_active)
+            .max();
+        if rep.last_active.is_none() {
+            rep.last_active = latest_last_active;
+        }
+
+        out.push(rep);
+    }
+    out
 }
 
 /// Read `~/.gemini/projects.json` and build a slug → path map.
@@ -1181,5 +1264,92 @@ mod tests {
         let children = client.children(&sessions[0]).unwrap();
         assert_eq!(children.len(), 1, "expected one child subagent");
         assert_eq!(children[0].session_id, child_session_id);
+    }
+
+    /// `gemini --resume <uuid>` writes a NEW jsonl file each invocation but
+    /// reuses the same `sessionId` inside. Without dedup, the parser emits
+    /// two `SessionSummary` records sharing the same `session_id`, which
+    /// violates the correlator's implicit `(client, session_id)` uniqueness
+    /// invariant — only one entry can be PID-matched, the other looks
+    /// orphaned in the UI.
+    ///
+    /// `list_sessions` MUST collapse duplicates to a single summary that
+    /// preserves the union of timestamps:
+    ///   * `started_at` = earliest across the duplicates (when the session
+    ///     was first created);
+    ///   * `last_active` = latest across the duplicates (most recent activity);
+    ///   * `data_path` from the most-recently-active file (so any future
+    ///     "open transcript" action lands on current data).
+    #[test]
+    fn duplicate_session_ids_collapse_to_one_summary() {
+        let td = TestDir::new("dup-resume");
+        let chats_dir = td.path.join("tmp").join("myproject").join("chats");
+        fs::create_dir_all(&chats_dir).unwrap();
+
+        fs::write(
+            td.path.join("projects.json"),
+            r#"{"projects":{"/home/user/myproject":"myproject"}}"#,
+        )
+        .unwrap();
+
+        let session_id = "81b96307-1e14-40fa-9a24-184a072591fa";
+
+        // Older invocation: started 09:00, last activity 09:30.
+        let older = chats_dir.join("session-2026-04-25T09-00-81b96307.jsonl");
+        fs::write(
+            &older,
+            format!(
+                "{{\"sessionId\":\"{session_id}\",\"startTime\":\"2026-04-25T09:00:00Z\",\"lastUpdated\":\"2026-04-25T09:30:00Z\",\"kind\":\"main\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        // Newer invocation: started 10:00, last activity 10:15.
+        let newer = chats_dir.join("session-2026-04-25T10-00-81b96307.jsonl");
+        fs::write(
+            &newer,
+            format!(
+                "{{\"sessionId\":\"{session_id}\",\"startTime\":\"2026-04-25T10:00:00Z\",\"lastUpdated\":\"2026-04-25T10:15:00Z\",\"kind\":\"main\"}}\n"
+            ),
+        )
+        .unwrap();
+
+        let client = GeminiCliClient {
+            gemini_dir: td.path.clone(),
+            discover_cache: Mutex::default(),
+        };
+
+        let sessions = client.list_sessions().unwrap();
+        let collapsed: Vec<_> = sessions
+            .iter()
+            .filter(|s| s.session_id == session_id)
+            .collect();
+
+        assert_eq!(
+            collapsed.len(),
+            1,
+            "two on-disk files with the same sessionId must collapse to ONE summary, got {}: {:?}",
+            collapsed.len(),
+            collapsed
+                .iter()
+                .map(|s| s.data_path.display().to_string())
+                .collect::<Vec<_>>()
+        );
+
+        let s = collapsed[0];
+        assert_eq!(
+            s.started_at,
+            parse_ts("2026-04-25T09:00:00Z"),
+            "started_at must be the EARLIEST across duplicates",
+        );
+        assert_eq!(
+            s.last_active,
+            parse_ts("2026-04-25T10:15:00Z"),
+            "last_active must be the LATEST across duplicates",
+        );
+        assert_eq!(
+            s.data_path, newer,
+            "data_path must point at the most-recently-active file",
+        );
     }
 }

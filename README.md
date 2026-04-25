@@ -18,9 +18,41 @@ Adding a new client is a single `impl Client` in `agtop-core::clients`.
 See [`docs/gemini-cli.md`](docs/gemini-cli.md) for Gemini CLI integration
 details, data sources, and implementation notes.
 
+## Process tracking
+
+When an agent CLI is running, agtop correlates its OS process to the
+session transcript it's writing. The session table's `PID` column shows
+the live PID; the info panel shows liveness state (`live` / `stopped`)
+and how the match was established.
+
+Correlation uses the session id literal in argv (`--resume <uuid>`,
+`-s <ses_…>`) as the most-confident signal, the transcript file held
+open by the CLI as the next-best signal, and falls back to scoring on
+`cwd`, binary name, and start-time overlap.
+
+See [`docs/session-pid-tracking-status.md`](docs/session-pid-tracking-status.md)
+for per-client coverage and the matching algorithm details.
+
+### Platform matrix
+
+| Platform | Process enum | Fd enum (definitive) | Score fallback |
+|----------|:-:|:-:|:-:|
+| Linux    | ✅ | ✅ (/proc)    | ✅ |
+| macOS    | ✅ | ✅ (libproc)  | ✅ |
+| Windows  | ✅ | ❌           | ✅ |
+
+On Windows the score-only fallback still works but may be ambiguous
+when multiple agents run in the same cwd.
+
 ## Status
 
-**v0.2** adds an interactive TUI (ratatui + crossterm) on top of the
+**v0.3** adds session ↔ OS-process correlation. When a CLI is running
+agtop binds the right PID to the right session row across all
+supported clients, including realistic Linux+VSCode setups (`opencode
+serve`, `codex app-server`), nvm-managed Node hosts (Gemini under Node
+v24/v25), and `--resume` workflows. See "Process tracking" above.
+
+**v0.2** added an interactive TUI (ratatui + crossterm) on top of the
 v0.1 analysis engine. Three output modes:
 
 - *(no flag)* — interactive htop-style dashboard (default).

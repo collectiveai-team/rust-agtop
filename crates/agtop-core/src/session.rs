@@ -228,6 +228,17 @@ pub struct SessionAnalysis {
     /// `None` when unavailable.
     #[serde(default)]
     pub project_name: Option<String>,
+    /// OS PID of the agent CLI process currently running this session.
+    /// `None` when no match was established.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// Whether the matched process is currently live or has just exited.
+    /// `None` when no match was established.
+    #[serde(default)]
+    pub liveness: Option<crate::process::Liveness>,
+    /// How we matched the PID. `None` when no match.
+    #[serde(default)]
+    pub match_confidence: Option<crate::process::Confidence>,
 }
 
 impl SessionAnalysis {
@@ -263,6 +274,9 @@ impl SessionAnalysis {
             agent_turns: None,
             user_turns: None,
             project_name: None,
+            pid: None,
+            liveness: None,
+            match_confidence: None,
         }
     }
 }

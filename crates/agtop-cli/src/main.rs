@@ -152,7 +152,13 @@ fn main() -> Result<()> {
             anyhow::bail!("--watch is not supported with --json (JSON is a one-shot dump)");
         }
         let live = filtered_clients(&clients, &enabled_initial);
-        let analyses = analyze_all(&live, plan);
+        let mut analyses = analyze_all(&live, plan);
+        // One-shot PID correlation for --json output. The helper also
+        // propagates the parent's PID to subagent children (which share
+        // the parent CLI's OS process). See process::attach_process_info.
+        let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
+        let info_map = agtop_core::ProcessCorrelator::new().snapshot(&summaries);
+        agtop_core::process::attach_process_info(&info_map, &mut analyses);
         let out = JsonOutput {
             plan: cli.plan.clone(),
             sessions: analyses.iter().map(JsonSession::from).collect(),
@@ -334,7 +340,7 @@ fn init_logging(verbose: bool, tui_mode: bool, log_file: Option<&std::path::Path
             .open(path)
         {
             Ok(file) => {
-                let default = if verbose { "info" } else { "info" };
+                let default = if verbose { "debug" } else { "info" };
                 let filter =
                     EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default));
                 let _ = fmt().with_env_filter(filter).with_writer(file).try_init();
@@ -599,6 +605,18 @@ struct JsonSession {
     context_used_tokens: Option<u64>,
     context_window: Option<u64>,
     data_path: String,
+    /// OS PID of the agent CLI process currently running this session.
+    /// `null` when no match was established.
+    #[serde(default)]
+    pid: Option<u32>,
+    /// Whether the matched process is currently live or has just exited.
+    /// `null` when no match was established.
+    #[serde(default)]
+    liveness: Option<agtop_core::Liveness>,
+    /// How the PID match was established (fd | cwd+argv).
+    /// `null` when no match was established.
+    #[serde(default)]
+    match_confidence: Option<agtop_core::Confidence>,
 }
 
 impl From<&SessionAnalysis> for JsonSession {
@@ -633,6 +651,9 @@ impl JsonSession {
             context_used_tokens: a.context_used_tokens,
             context_window: a.context_window,
             data_path: a.summary.data_path.display().to_string(),
+            pid: a.pid,
+            liveness: a.liveness,
+            match_confidence: a.match_confidence,
         }
     }
 }

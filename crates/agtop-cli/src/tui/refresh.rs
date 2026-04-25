@@ -17,6 +17,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use agtop_core::process::ProcessCorrelator;
+
 use agtop_core::pricing::Plan;
 use agtop_core::quota::ProviderResult;
 
@@ -218,6 +220,7 @@ pub fn spawn(
         let mut project_name_cache: ProjectNameCache = HashMap::new();
         let mut plan_cache_key: Option<u64> = None;
         let mut plan_cache_val: Vec<agtop_core::PlanUsage> = Vec::new();
+        let mut correlator = ProcessCorrelator::new();
         loop {
             // Check shutdown flag before starting any new analysis.
             if shutdown_worker.load(Ordering::Acquire) {
@@ -277,11 +280,19 @@ pub fn spawn(
             })
             .await;
             let msg = match result {
-                Ok((analyses, plan_usage, cache_out, project_cache_out, new_key, new_val)) => {
+                Ok((mut analyses, plan_usage, cache_out, project_cache_out, new_key, new_val)) => {
                     session_cache = cache_out;
                     project_name_cache = project_cache_out;
                     plan_cache_key = new_key;
                     plan_cache_val = new_val;
+
+                    // Attach OS-process info, propagating each parent's
+                    // PID to its subagents (which run in-process within
+                    // the parent CLI). See process::attach_process_info.
+                    let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
+                    let info_map = correlator.snapshot(&summaries);
+                    agtop_core::process::attach_process_info(&info_map, &mut analyses);
+
                     RefreshMsg::Snapshot {
                         generation,
                         analyses,

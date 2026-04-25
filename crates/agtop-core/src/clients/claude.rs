@@ -553,6 +553,9 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         },
         user_turns: None,
         project_name: None,
+        pid: None,
+        liveness: None,
+        match_confidence: None,
     })
 }
 

@@ -52,6 +52,16 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // Standard columns via the shared helper.
             lines.extend(ColumnId::all().iter().map(|&col| column_line(col, a, now)));
 
+            // Match confidence — only shown when we have a pid.
+            if a.pid.is_some() {
+                let label = match a.match_confidence {
+                    Some(agtop_core::Confidence::High) => "fd",
+                    Some(agtop_core::Confidence::Medium) => "cwd+argv",
+                    None => "-",
+                };
+                lines.push(kv_line("match", label.into()));
+            }
+
             lines.push(kv_line(
                 "effective_model",
                 a.effective_model.clone().unwrap_or_else(|| "-".into()),
@@ -318,6 +328,18 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
             s.session_title.clone().unwrap_or_else(|| "-".into()),
         ),
         ColumnId::Cwd => kv_line("cwd", s.cwd.clone().unwrap_or_else(|| "-".into())),
+        ColumnId::Pid => kv_line(
+            "pid",
+            match (a.pid, a.liveness) {
+                (Some(pid), Some(agtop_core::Liveness::Live)) => {
+                    format!("{pid} (live)")
+                }
+                (Some(pid), Some(agtop_core::Liveness::Stopped)) => {
+                    format!("{pid} (stopped)")
+                }
+                _ => "-".into(),
+            },
+        ),
         // SubscriptionLogo is injected by visible() — not displayed in info tab.
         ColumnId::SubscriptionLogo => Line::default(),
     }

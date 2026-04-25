@@ -37,6 +37,7 @@ pub enum ColumnId {
     Context,
     Project,
     SessionName,
+    Pid,
 }
 
 impl ColumnId {
@@ -53,6 +54,7 @@ impl ColumnId {
             ColumnId::Model,
             ColumnId::Effort,
             ColumnId::State,
+            ColumnId::Pid,
             ColumnId::Tokens,
             ColumnId::OutputTokens,
             ColumnId::CacheTokens,
@@ -91,6 +93,7 @@ impl ColumnId {
             ColumnId::Context => "CONTEXT",
             ColumnId::Project => "PROJECT",
             ColumnId::SessionName => "NAME",
+            ColumnId::Pid => "PID",
         }
     }
 
@@ -118,6 +121,7 @@ impl ColumnId {
             ColumnId::Context => "Peak context window usage",
             ColumnId::Project => "Inferred project name (from git remote)",
             ColumnId::SessionName => "Session title/name set by the agent",
+            ColumnId::Pid => "OS process ID of the live agent CLI",
         }
     }
 
@@ -146,6 +150,7 @@ impl ColumnId {
             ColumnId::Context => Some(20),
             ColumnId::Project => Some(16),
             ColumnId::SessionName => Some(24),
+            ColumnId::Pid => Some(7), // 6 digits + padding
         }
     }
 
@@ -174,6 +179,7 @@ impl ColumnId {
             ColumnId::Context => None,
             ColumnId::Project => Some(SortColumn::Project),
             ColumnId::SessionName => None,
+            ColumnId::Pid => None, // not sortable
         }
     }
 
@@ -252,6 +258,7 @@ impl Default for ColumnConfig {
                             | ColumnId::Context
                             | ColumnId::Cost
                             | ColumnId::Project
+                            | ColumnId::Pid
                     ),
                 })
                 .collect(),
@@ -608,6 +615,7 @@ mod cfg_client_tests {
             ColumnId::Context,
             ColumnId::Cost,
             ColumnId::Project,
+            ColumnId::Pid,
         ] {
             assert!(
                 visible.contains(id),
