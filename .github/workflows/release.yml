@@ -44,16 +44,18 @@ jobs:
 
   build-macos-x86:
     name: Build (macOS x86_64)
-    runs-on: macos-13
+    runs-on: macos-latest
     needs: ci
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build release binary
-        run: cargo build --release --bin agtop
+        run: cargo build --release --bin agtop --target x86_64-apple-darwin
       - name: Rename binary
-        run: cp target/release/agtop agtop-x86_64-apple-darwin
+        run: cp target/x86_64-apple-darwin/release/agtop agtop-x86_64-apple-darwin
       - uses: actions/upload-artifact@v4
         with:
           name: agtop-x86_64-apple-darwin
