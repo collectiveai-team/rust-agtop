@@ -162,6 +162,31 @@ Some versions may also include `response_text`; agtop should not require it.
 The `gemini_cli.token.usage` metric is tagged by `model` and token `type`,
 where `type` can be `input`, `output`, `thought`, `cache`, or `tool`.
 
+### Node host detection (v24 / v25)
+
+Gemini CLI runs as a Node.js application (`/usr/bin/gemini` is a symlink
+to a `gemini.js` bundle). For agtop to bind a Gemini session to a PID,
+the process scanner must recognise the Node host as a candidate.
+
+Recent Node.js renames the main thread `comm` via `prctl(PR_SET_NAME)`,
+and the exact string differs across major versions. agtop accepts all
+three forms seen in practice and normalises them to `"node"` so the
+rest of the pipeline stays version-agnostic:
+
+| Source                       | comm                |
+|------------------------------|---------------------|
+| Older Node (no prctl rename) | `node`              |
+| Node v25.x                   | `node-MainThread`   |
+| Node v24.x (incl. nvm)       | `MainThread`        |
+
+The argv-mentions-`gemini` gate prevents arbitrary node processes that
+happen to rename their main thread to `MainThread` from being matched;
+only candidates whose argv references a gemini binary path are kept.
+
+If you upgrade your Node major and Gemini suddenly stops getting a PID
+in agtop, check `cat /proc/<pid>/comm` for the live `gemini` process
+and report any new comm strings.
+
 ### Resume semantics and duplicate-id collapsing
 
 Gemini CLI handles `gemini --resume <uuid>` differently from every other agent
