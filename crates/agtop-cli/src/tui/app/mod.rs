@@ -33,9 +33,15 @@ use agtop_core::session::SessionAnalysis;
 use super::column_config::ColumnConfig;
 use agtop_core::quota::ProviderResult;
 
-struct LogoMap(
-    std::collections::HashMap<agtop_core::ClientKind, ratatui_image::protocol::Protocol>,
-);
+/// Pre-rendered logo cells for one provider. The number of cells equals
+/// the logo column width (currently 3). At render time we just `clone`
+/// these cells into the target buffer instead of going through the full
+/// `Image::render` path on every frame, which used to cost ~30 ms per
+/// frame on the Kitty graphics protocol because the placeholder escape
+/// sequence was rebuilt for every visible row on every redraw.
+pub type LogoCells = Vec<ratatui::buffer::Cell>;
+
+struct LogoMap(std::collections::HashMap<agtop_core::ClientKind, LogoCells>);
 
 impl std::fmt::Debug for LogoMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -569,16 +575,22 @@ impl App {
 
     pub fn set_logos(
         &mut self,
-        logos: std::collections::HashMap<agtop_core::ClientKind, ratatui_image::protocol::Protocol>,
+        logos: std::collections::HashMap<agtop_core::ClientKind, LogoCells>,
     ) {
         self.logos = LogoMap(logos);
     }
 
-    pub fn logo(
-        &self,
-        client: agtop_core::ClientKind,
-    ) -> Option<&ratatui_image::protocol::Protocol> {
+    pub fn logo(&self, client: agtop_core::ClientKind) -> Option<&LogoCells> {
         self.logos.0.get(&client)
+    }
+
+    /// True when at least one logo is loaded. Callers that need to
+    /// reserve a logo column (session table, info tab) should hide
+    /// that column when this is false — e.g. on terminals without a
+    /// graphics protocol where the logo would otherwise be invisible
+    /// noise.
+    pub fn has_logos(&self) -> bool {
+        !self.logos.0.is_empty()
     }
 
     /// Backward-compat alias used by events.rs until it's updated.

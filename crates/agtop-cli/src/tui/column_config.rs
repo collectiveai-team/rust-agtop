@@ -271,23 +271,36 @@ impl ColumnConfig {
         self
     }
 
-    /// Returns ordered list of visible column IDs.
+    /// Returns ordered list of visible column IDs, including the
+    /// `SubscriptionLogo` slot before `Subscription` when both
+    /// `Subscription` is visible and `with_logo` is true.
     ///
-    /// `SubscriptionLogo` is injected immediately before `Subscription` whenever
-    /// Subscription is visible. It is never stored in `self.columns`.
-    pub fn visible(&self) -> Vec<ColumnId> {
+    /// `SubscriptionLogo` is never stored in `self.columns` — it is
+    /// derived from `Subscription` at view time. Pass `with_logo=false`
+    /// when running on a terminal that cannot render an actual image
+    /// in 3 cells (i.e. halfblocks fallback) so the column doesn't
+    /// reserve dead space.
+    pub fn visible_ext(&self, with_logo: bool) -> Vec<ColumnId> {
         let mut result = Vec::new();
         for entry in &self.columns {
             if !entry.visible {
                 continue;
             }
-            // Inject the logo slot immediately before Subscription.
-            if entry.id == ColumnId::Subscription {
+            if with_logo && entry.id == ColumnId::Subscription {
                 result.push(ColumnId::SubscriptionLogo);
             }
             result.push(entry.id);
         }
         result
+    }
+
+    /// Backwards-compatible wrapper that always includes the logo
+    /// column. New call sites should use `visible_ext` and pass the
+    /// runtime "logos available" flag. Currently used only by the
+    /// test suite, where logo availability is irrelevant.
+    #[cfg(test)]
+    pub fn visible(&self) -> Vec<ColumnId> {
+        self.visible_ext(true)
     }
 
     /// Toggle visibility of a column by index into `self.columns`.

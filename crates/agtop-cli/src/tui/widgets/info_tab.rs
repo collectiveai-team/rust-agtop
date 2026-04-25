@@ -13,7 +13,6 @@ use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
 use crate::tui::widgets::state_display::display_state;
 use agtop_core::session::SessionAnalysis;
-use ratatui_image::Image;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -121,7 +120,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             }
             // Logo width in terminal cells: must stay in sync with the number of
             // spaces prepended to the subscription value span below.
-            const LOGO_WIDTH: u16 = 3;
+            const LOGO_WIDTH: u16 = crate::tui::LOGO_WIDTH;
 
             // Determine which line index corresponds to the Subscription row.
             // sub_line_idx is correct because extra lines (effective_model,
@@ -134,15 +133,20 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 .position(|&c| c == ColumnId::Subscription);
             let sub_line_idx = sub_col_pos.map(|pos| parent_line_offset + pos);
 
-            // Prepend LOGO_WIDTH spaces to the subscription value span so the
-            // logo image can overlay that blank area after paragraph rendering.
-            if let Some(idx) = sub_line_idx {
-                if let Some(line) = lines.get_mut(idx) {
-                    // kv_line format: [key_span(idx 0)][gap_span(idx 1)][value_span(idx 2)]
-                    if let Some(value_span) = line.spans.get_mut(2) {
-                        let original = value_span.content.to_string();
-                        let padding = " ".repeat(LOGO_WIDTH as usize);
-                        value_span.content = format!("{padding}{original}").into();
+            // Prepend LOGO_WIDTH spaces to the subscription value span so
+            // the logo image can overlay that blank area after paragraph
+            // rendering. Skip on terminals without a graphics protocol
+            // (no logos loaded) so the value isn't gratuitously indented.
+            let show_logo = app.has_logos();
+            if show_logo {
+                if let Some(idx) = sub_line_idx {
+                    if let Some(line) = lines.get_mut(idx) {
+                        // kv_line format: [key_span(idx 0)][gap_span(idx 1)][value_span(idx 2)]
+                        if let Some(value_span) = line.spans.get_mut(2) {
+                            let original = value_span.content.to_string();
+                            let padding = " ".repeat(LOGO_WIDTH as usize);
+                            value_span.content = format!("{padding}{original}").into();
+                        }
                     }
                 }
             }
@@ -175,30 +179,32 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // Overlay the provider logo on the subscription line.
             // Key is right-aligned in 16 chars, then 2-char gap → value starts
             // at col x+18. The LOGO_WIDTH prepended spaces are the logo cell.
-            if let Some(idx) = sub_line_idx {
-                let logo_col_rect;
-                let logo_line_in_col;
-                if idx < split {
-                    // Subscription is in the left column.
-                    logo_col_rect = cols[0];
-                    logo_line_in_col = idx;
-                } else {
-                    // Subscription is in the right column.
-                    logo_col_rect = cols[1];
-                    logo_line_in_col = idx - split;
-                }
+            if show_logo {
+                if let Some(idx) = sub_line_idx {
+                    let logo_col_rect;
+                    let logo_line_in_col;
+                    if idx < split {
+                        // Subscription is in the left column.
+                        logo_col_rect = cols[0];
+                        logo_line_in_col = idx;
+                    } else {
+                        // Subscription is in the right column.
+                        logo_col_rect = cols[1];
+                        logo_line_in_col = idx - split;
+                    }
 
-                let logo_y = logo_col_rect.y + logo_line_in_col as u16;
-                // key (16 chars) + gap (2 chars) = 18 chars before value starts
-                let logo_x = logo_col_rect.x + 18;
+                    let logo_y = logo_col_rect.y + logo_line_in_col as u16;
+                    // key (16 chars) + gap (2 chars) = 18 chars before value starts
+                    let logo_x = logo_col_rect.x + 18;
 
-                if logo_y < logo_col_rect.y + logo_col_rect.height
-                    && logo_x + LOGO_WIDTH <= logo_col_rect.x + logo_col_rect.width
-                {
-                    let logo_rect = Rect::new(logo_x, logo_y, LOGO_WIDTH, 1);
-                    let client = a.summary.client;
-                    if let Some(proto) = app.logo(client) {
-                        frame.render_widget(Image::new(proto), logo_rect);
+                    if logo_y < logo_col_rect.y + logo_col_rect.height
+                        && logo_x + LOGO_WIDTH <= logo_col_rect.x + logo_col_rect.width
+                    {
+                        let logo_rect = Rect::new(logo_x, logo_y, LOGO_WIDTH, 1);
+                        let client = a.summary.client;
+                        if let Some(cells) = app.logo(client) {
+                            crate::tui::paste_logo_cells(frame.buffer_mut(), logo_rect, cells);
+                        }
                     }
                 }
             }

@@ -48,7 +48,10 @@ pub fn render(
     };
 
     let col_cfg = app.column_config();
-    let visible = col_cfg.visible();
+    // Hide the SubscriptionLogo slot when no logos are loaded
+    // (terminals without a graphics protocol). Otherwise the column
+    // reserves dead space.
+    let visible = col_cfg.visible_ext(app.has_logos());
 
     let header_cells: Vec<Cell<'static>> = visible
         .iter()

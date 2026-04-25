@@ -69,7 +69,6 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         error_token, provider_short_name, status_glyph, status_style,
     };
     use agtop_core::logo::provider_id_to_client_kind;
-    use ratatui_image::Image;
 
     let slots = app.quota_slots();
     let selected = app.selected_provider();
@@ -127,16 +126,19 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
             continue;
         }
 
-        // Split the row rect: [glyph:1][gap:1][logo:3][gap:1][text:rest]
+        // Split the row rect. When no logos are loaded (terminal without
+        // a graphics protocol) we collapse the logo slot to zero width so
+        // the plan text doesn't get gratuitously indented past empty cells.
+        let show_logo = app.has_logos();
         let row_rect = Rect::new(area.x, row_y, area.width, 1);
         let parts = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(1), // glyph
-                Constraint::Length(1), // gap
-                Constraint::Length(3), // logo
-                Constraint::Length(1), // gap
-                Constraint::Min(1),    // plan text
+                Constraint::Length(1),                             // glyph
+                Constraint::Length(1),                             // gap
+                Constraint::Length(if show_logo { 3 } else { 0 }), // logo
+                Constraint::Length(if show_logo { 1 } else { 0 }), // gap
+                Constraint::Min(1),                                // plan text
             ])
             .split(row_rect);
 
@@ -158,12 +160,11 @@ fn render_list(frame: &mut Frame<'_>, area: Rect, app: &App) {
         };
         frame.render_widget(text_p, text_rect);
 
-        // Logo (if available)
+        // Logo (if available) — stamp pre-rendered cells.
         let provider_id = slot.current.provider_id;
         if let Some(client_kind) = provider_id_to_client_kind(provider_id) {
-            if let Some(proto) = app.logo(client_kind) {
-                let img = Image::new(proto);
-                frame.render_widget(img, logo_rect);
+            if let Some(cells) = app.logo(client_kind) {
+                crate::tui::paste_logo_cells(frame.buffer_mut(), logo_rect, cells);
             }
         }
         // No logo → logo_rect stays blank (already cleared by ratatui).
