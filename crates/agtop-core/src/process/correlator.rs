@@ -171,12 +171,24 @@ pub(crate) fn correlate(
     // Iterate unmatched sessions, scoring against unmatched candidates.
     // Threshold 2/3 (unchanged). We collect intermediate matches first
     // so we can apply the (cwd, client) recency dedup before committing.
+    //
+    // Tie-breaker: when two candidates score equally for the same
+    // session, prefer the descendant. Common pattern: an npm-loader
+    // wrapper spawns the real CLI; both inherit the same comm/cwd/argv
+    // and start a few ms apart, but only the child runs the session. By
+    // preferring the candidate whose parent_pid is itself a candidate,
+    // we collapse the wrapper chain to the leaf without needing argv
+    // shape inspection.
     struct ScoreMatch<'a> {
         session: &'a SessionSummary,
         pid: u32,
         parent_pid: Option<u32>,
     }
     let mut score_matches: Vec<ScoreMatch<'_>> = Vec::new();
+
+    let candidate_pids: HashSet<u32> = candidates.iter().map(|c| c.pid).collect();
+    let is_descendant_of_candidate =
+        |c: &Candidate| matches!(c.parent_pid, Some(p) if candidate_pids.contains(&p));
 
     for session in sessions {
         if out.contains_key(&session.session_id) {
@@ -201,8 +213,21 @@ pub(crate) fn correlate(
                     best = Some((score, c));
                     tie = false;
                 }
-                Some((s, _)) if score == s => {
-                    tie = true;
+                Some((s, prev_c)) if score == s => {
+                    // Descendant wins (npm-loader → real CLI).
+                    let cur_desc = is_descendant_of_candidate(c);
+                    let prev_desc = is_descendant_of_candidate(prev_c);
+                    match (cur_desc, prev_desc) {
+                        (true, false) => {
+                            best = Some((score, c));
+                            tie = false;
+                        }
+                        (false, true) => {
+                            // prev wins; keep best, drop tie flag.
+                            tie = false;
+                        }
+                        _ => tie = true,
+                    }
                 }
                 _ => {}
             }
@@ -519,6 +544,50 @@ mod tests {
         let result = correlate(&scanner, &fd, &[s]);
         let info = result.get("s1").expect("s1 must be matched");
         assert_eq!(info.pid, 42);
+        assert_eq!(info.match_confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn score_tier_breaks_tie_in_favor_of_descendant() {
+        // Wrapper pattern: a parent process and its child both have the
+        // same comm/cwd/argv (e.g. npm-loader → real gemini node). Both
+        // score 2 against the session. The descendant must win.
+        let now = Utc::now();
+        let s = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "s1".into(),
+            Some(now - Duration::minutes(10)),
+            Some(now),
+            None,
+            Some("/home/user/proj".into()),
+            PathBuf::from("/tmp/s1.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        // PID 100 is the parent (wrapper); PID 101 is the child whose
+        // parent_pid points back at PID 100.
+        let mut parent = candidate(100, "claude", "/home/user/proj");
+        parent.parent_pid = Some(1);
+        parent.start_time = (now - Duration::minutes(5)).timestamp() as u64;
+        let mut child = candidate(101, "claude", "/home/user/proj");
+        child.parent_pid = Some(100);
+        child.start_time = (now - Duration::minutes(5)).timestamp() as u64;
+
+        let scanner = FakeScanner {
+            processes: vec![parent, child],
+        };
+        let fd = FakeFdScanner {
+            map: HashMap::new(),
+        };
+
+        let result = correlate(&scanner, &fd, &[s]);
+        let info = result
+            .get("s1")
+            .expect("descendant must win the tie and produce a match");
+        assert_eq!(info.pid, 101, "child PID must win, not parent wrapper");
         assert_eq!(info.match_confidence, Confidence::Medium);
     }
 

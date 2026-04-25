@@ -90,8 +90,12 @@ impl SysinfoScanner {
             "antigravity",
         ];
         let direct = DIRECT.contains(&binary);
-        // Gemini CLI runs under node; disambiguate via argv.
-        let node_hosted_gemini = binary == "node" && argv.iter().any(|a| a.contains("gemini"));
+        // Gemini CLI runs under node; disambiguate via argv. The Linux
+        // kernel exposes the main thread's `comm` (which Node.js renames
+        // to "node-MainThread" via prctl on recent versions), and
+        // sysinfo surfaces that as `binary`. Accept both forms.
+        let is_node_host = binary == "node" || binary == "node-MainThread";
+        let node_hosted_gemini = is_node_host && argv.iter().any(|a| a.contains("gemini"));
         if !direct && !node_hosted_gemini {
             return false;
         }
@@ -108,12 +112,22 @@ impl SysinfoScanner {
     /// though its binary name would qualify. Matched against the joined
     /// argv (case-insensitive substring).
     ///
-    /// Examples kept out:
-    ///   * `codex app-server`            (VSCode/IDE daemon)
-    ///   * `opencode serve --port ...`   (Bun headless server)
-    ///   * `claude mcp-server ...`       (MCP transport)
+    /// We deliberately DO NOT exclude `serve`, `server`, or `app-server`
+    /// here: on Linux+VSCode setups, the user-facing OpenCode is the
+    /// `opencode serve` daemon (the webview talks HTTP to it), and the
+    /// user-facing Codex IDE backend is `codex app-server`. Banning those
+    /// at scanner-time prevents ANY OpenCode/Codex session from ever
+    /// matching a PID. The "all sessions same PID" regression for
+    /// SQLite-backed clients is prevented elsewhere: `paths_for` returns
+    /// an empty list for OpenCode/Antigravity (so fd-tier never fans out
+    /// across sessions), and the cwd-tier's `(cwd, client)` recency
+    /// dedup picks one session per (cwd, daemon-PID) pair.
+    ///
+    /// Examples that ARE kept out:
+    ///   * `claude mcp-server ...`       (MCP transport child)
     ///   * `claude --input-format stream-json ...`  (IDE bridge helper)
-    ///   * any `*.app/` macOS bundle path
+    ///   * anything advertising itself as a `daemon` subcommand
+    ///   * any `*.app/` macOS bundle path (desktop apps, not CLIs)
     fn is_excluded_invocation(argv: &[String]) -> bool {
         let joined = argv.join(" ");
         let lower = joined.to_lowercase();
@@ -121,16 +135,9 @@ impl SysinfoScanner {
         if lower.contains(".app/") || lower.contains(".app\\") {
             return true;
         }
-        // Long-running server / daemon subcommands. Match as
-        // whitespace-bounded tokens to avoid false positives in paths.
-        const DAEMON_TOKENS: &[&str] = &[
-            "app-server",
-            "mcp-server",
-            "mcp-stdio",
-            "serve",
-            "server",
-            "daemon",
-        ];
+        // MCP transport children and explicit daemon subcommands. Match
+        // as whitespace-bounded tokens to avoid false positives in paths.
+        const DAEMON_TOKENS: &[&str] = &["mcp-server", "mcp-stdio", "daemon"];
         for tok in DAEMON_TOKENS {
             if contains_token(&lower, tok) {
                 return true;
@@ -159,15 +166,38 @@ impl Scanner for SysinfoScanner {
 
         self.candidates.clear();
         for (pid, proc) in self.system.processes() {
-            let binary = proc.name().to_string_lossy().into_owned();
+            // Skip individual threads. On Linux, sysinfo enumerates each
+            // thread (TID) under /proc/<pid>/task as if it were a separate
+            // process. Threads that did not rename themselves via
+            // prctl(PR_SET_NAME) inherit the parent's `comm`, so a single
+            // multi-threaded `claude` produces multiple Candidate entries
+            // with identical (binary, cwd, argv, start_time) — which the
+            // score-tier sees as ties and refuses to match. We only want
+            // the thread group leader (TGID == TID), which sysinfo
+            // identifies as `thread_kind() == None`.
+            if proc.thread_kind().is_some() {
+                continue;
+            }
+            let raw_binary = proc.name().to_string_lossy().into_owned();
             let argv: Vec<String> = proc
                 .cmd()
                 .iter()
                 .map(|s| s.to_string_lossy().into_owned())
                 .collect();
-            if !Self::is_known_cli(&binary, &argv) {
+            if !Self::is_known_cli(&raw_binary, &argv) {
                 continue;
             }
+            // Normalize the binary name. Recent Node.js renames its main
+            // thread comm to "node-MainThread"; sysinfo surfaces that as
+            // `name()`. The downstream score tier compares against
+            // `expected_binaries(client)` which lists "node" — so we
+            // collapse the rename here to keep the rest of the pipeline
+            // ignorant of kernel comm quirks.
+            let binary = if raw_binary == "node-MainThread" {
+                "node".to_string()
+            } else {
+                raw_binary
+            };
             self.candidates.push(Candidate {
                 pid: pid.as_u32(),
                 parent_pid: proc.parent().map(|p| p.as_u32()),
@@ -235,6 +265,17 @@ pub(crate) mod tests {
             "node",
             &["node".into(), "/home/app/server.js".into()]
         ));
+        // Recent Node.js renames its main thread comm to "node-MainThread"
+        // via prctl. sysinfo surfaces that as binary; we must accept it
+        // when argv discloses gemini, and reject it otherwise.
+        assert!(SysinfoScanner::is_known_cli(
+            "node-MainThread",
+            &["node".into(), "/opt/gemini/bin/gemini".into()]
+        ));
+        assert!(!SysinfoScanner::is_known_cli(
+            "node-MainThread",
+            &["node".into(), "/home/app/server.js".into()]
+        ));
     }
 
     #[test]
@@ -244,22 +285,7 @@ pub(crate) mod tests {
 
     #[test]
     fn is_known_cli_rejects_daemons() {
-        // codex VSCode IDE backend
-        assert!(!SysinfoScanner::is_known_cli(
-            "codex",
-            &["codex".into(), "app-server".into(), "--analytics".into()]
-        ));
-        // opencode headless server
-        assert!(!SysinfoScanner::is_known_cli(
-            "opencode",
-            &[
-                "opencode".into(),
-                "serve".into(),
-                "--port".into(),
-                "39241".into()
-            ]
-        ));
-        // claude MCP transport
+        // claude MCP transport child
         assert!(!SysinfoScanner::is_known_cli(
             "claude",
             &["claude".into(), "mcp-server".into()]
@@ -274,6 +300,30 @@ pub(crate) mod tests {
                 "--input-format".into(),
                 "stream-json".into(),
             ]
+        ));
+    }
+
+    #[test]
+    fn is_known_cli_accepts_user_facing_serve_and_app_server() {
+        // On Linux+VSCode, the user-facing OpenCode is `opencode serve`
+        // (the webview talks HTTP to it). Banning `serve` would prevent
+        // ANY OpenCode session from matching. fd-tier prevents the
+        // shared-DB fan-out (via `paths_for` returning empty for
+        // OpenCode), and cwd-tier recency-dedup picks one session per
+        // (cwd, daemon-PID) pair.
+        assert!(SysinfoScanner::is_known_cli(
+            "opencode",
+            &[
+                "opencode".into(),
+                "serve".into(),
+                "--port".into(),
+                "39241".into()
+            ]
+        ));
+        // Same reasoning for `codex app-server` (Codex IDE backend).
+        assert!(SysinfoScanner::is_known_cli(
+            "codex",
+            &["codex".into(), "app-server".into(), "--analytics".into()]
         ));
     }
 

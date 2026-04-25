@@ -102,7 +102,12 @@ pub(crate) fn extract_session_uuid(client: ClientKind, argv: &[String]) -> Optio
     }
     let tokens = &argv[1..];
     match client {
-        ClientKind::Claude | ClientKind::GeminiCli => find_flag_uuid(tokens, &["-r", "--resume"]),
+        // Claude has TWO flags that name a session UUID in argv:
+        //   * `-r/--resume <uuid>`  — resume a specific past session
+        //   * `--session-id <uuid>` — start a new session with this ID
+        // Both bind a process to a session for our purposes.
+        ClientKind::Claude => find_flag_uuid(tokens, &["-r", "--resume", "--session-id"]),
+        ClientKind::GeminiCli => find_flag_uuid(tokens, &["-r", "--resume"]),
         ClientKind::Codex => find_subcommand_uuid(tokens, &["resume", "fork"]),
         ClientKind::OpenCode => find_flag_uuid(tokens, &["-s", "--session"]),
         ClientKind::Copilot | ClientKind::Cursor | ClientKind::Antigravity => None,
@@ -158,6 +163,26 @@ mod tests {
     fn claude_resume_search_term_is_none() {
         let a = argv(&["claude", "--resume", "fix-the-bug"]);
         assert_eq!(extract_session_uuid(ClientKind::Claude, &a), None);
+    }
+
+    #[test]
+    fn claude_session_id_with_uuid() {
+        // `claude --session-id <uuid>` starts a new session with the
+        // given ID. Argv-tier must extract it.
+        let a = argv(&["claude", "--session-id", UUID]);
+        assert_eq!(
+            extract_session_uuid(ClientKind::Claude, &a).as_deref(),
+            Some(UUID)
+        );
+    }
+
+    #[test]
+    fn claude_session_id_eq_form() {
+        let a = argv(&["claude", &format!("--session-id={UUID}")]);
+        assert_eq!(
+            extract_session_uuid(ClientKind::Claude, &a).as_deref(),
+            Some(UUID)
+        );
     }
 
     // ---- Codex -----------------------------------------------------------
