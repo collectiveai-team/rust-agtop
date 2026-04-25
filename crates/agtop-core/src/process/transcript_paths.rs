@@ -9,8 +9,18 @@ use std::path::PathBuf;
 
 use crate::session::{ClientKind, SessionSummary};
 
-/// Return the set of file paths that a process running `session` is
-/// expected to be holding open.
+/// Return the set of file paths that uniquely identify `session` and would
+/// be expected open by a process running it.
+///
+/// Returning an empty vec disables the fd-tier match for that client; the
+/// correlator falls back to argv-tier and cwd-tier matching.
+///
+/// SQLite-backed clients (OpenCode, Antigravity) intentionally return an
+/// empty list: the DB file is shared by every session of that client, so
+/// holding it open does NOT identify a single session — it only identifies
+/// the daemon. Matching on it produces a false-positive that stamps the
+/// same PID onto every session. Use argv-tier (`-s/--session <uuid>`) or
+/// cwd+recency tier instead.
 #[allow(dead_code)]
 pub(crate) fn paths_for(session: &SessionSummary) -> Vec<PathBuf> {
     match session.client {
@@ -21,17 +31,9 @@ pub(crate) fn paths_for(session: &SessionSummary) -> Vec<PathBuf> {
         | ClientKind::Copilot
         | ClientKind::Cursor => vec![session.data_path.clone()],
 
-        // SQLite-backed clients: the DB plus WAL+SHM are open while the
-        // process is writing. WAL is the most reliable signal because
-        // it's created the moment a write begins.
-        ClientKind::OpenCode | ClientKind::Antigravity => {
-            let base = session.data_path.clone();
-            vec![
-                base.clone(),
-                append_suffix(&base, "-wal"),
-                append_suffix(&base, "-shm"),
-            ]
-        }
+        // SQLite-backed clients: shared DB file does not identify a
+        // single session. See doc comment above.
+        ClientKind::OpenCode | ClientKind::Antigravity => Vec::new(),
     }
 }
 
@@ -48,12 +50,6 @@ pub(crate) fn expected_binaries(client: ClientKind) -> &'static [&'static str] {
         ClientKind::Cursor => &["cursor", "cursor-agent"],
         ClientKind::Antigravity => &["antigravity"],
     }
-}
-
-fn append_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
-    let mut s = path.as_os_str().to_os_string();
-    s.push(suffix);
-    PathBuf::from(s)
 }
 
 #[cfg(test)]
@@ -99,17 +95,18 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_clients_expect_db_wal_shm_triple() {
-        let s = summary(ClientKind::OpenCode, "/tmp/storage.db");
-        let paths = paths_for(&s);
-        assert_eq!(
-            paths,
-            vec![
-                PathBuf::from("/tmp/storage.db"),
-                PathBuf::from("/tmp/storage.db-wal"),
-                PathBuf::from("/tmp/storage.db-shm"),
-            ]
-        );
+    fn sqlite_clients_have_no_fd_paths() {
+        // SQLite DBs are shared across sessions; holding them open does
+        // NOT identify a single session. Returning empty disables the
+        // fd-tier match for these clients (correlator falls back to
+        // argv- and cwd-tier matching).
+        for client in [ClientKind::OpenCode, ClientKind::Antigravity] {
+            let s = summary(client, "/tmp/storage.db");
+            assert!(
+                paths_for(&s).is_empty(),
+                "fd-tier must be disabled for {client:?}"
+            );
+        }
     }
 
     #[test]

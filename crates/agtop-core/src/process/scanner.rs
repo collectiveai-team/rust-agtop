@@ -18,6 +18,32 @@ pub(crate) struct Candidate {
     pub start_time: u64,
 }
 
+/// True if `needle` appears in `haystack` bounded on both sides by either
+/// a string boundary or a non-alphanumeric, non-`-` character. Used to
+/// match shell tokens (`serve`, `app-server`, …) without firing on
+/// substring hits inside paths like `/usr/share/server-data/`.
+fn contains_token(haystack: &str, needle: &str) -> bool {
+    let mut start = 0usize;
+    while let Some(pos) = haystack[start..].find(needle) {
+        let abs = start + pos;
+        let before = if abs == 0 {
+            None
+        } else {
+            haystack[..abs].chars().next_back()
+        };
+        let after = haystack[abs + needle.len()..].chars().next();
+        let bound = |c: Option<char>| match c {
+            None => true,
+            Some(ch) => !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'),
+        };
+        if bound(before) && bound(after) {
+            return true;
+        }
+        start = abs + needle.len();
+    }
+    false
+}
+
 /// OS process enumeration.
 #[allow(dead_code)]
 pub(crate) trait Scanner {
@@ -63,11 +89,58 @@ impl SysinfoScanner {
             "cursor-agent",
             "antigravity",
         ];
-        if DIRECT.contains(&binary) {
+        let direct = DIRECT.contains(&binary);
+        // Gemini CLI runs under node; disambiguate via argv.
+        let node_hosted_gemini = binary == "node" && argv.iter().any(|a| a.contains("gemini"));
+        if !direct && !node_hosted_gemini {
+            return false;
+        }
+        // Reject long-running daemons / IDE bridges / desktop bundles —
+        // these are not interactive sessions and would otherwise be
+        // false-positive matched by cwd-tier scoring.
+        if Self::is_excluded_invocation(argv) {
+            return false;
+        }
+        true
+    }
+
+    /// Heuristics that mark a process as NOT an interactive session even
+    /// though its binary name would qualify. Matched against the joined
+    /// argv (case-insensitive substring).
+    ///
+    /// Examples kept out:
+    ///   * `codex app-server`            (VSCode/IDE daemon)
+    ///   * `opencode serve --port ...`   (Bun headless server)
+    ///   * `claude mcp-server ...`       (MCP transport)
+    ///   * `claude --input-format stream-json ...`  (IDE bridge helper)
+    ///   * any `*.app/` macOS bundle path
+    fn is_excluded_invocation(argv: &[String]) -> bool {
+        let joined = argv.join(" ");
+        let lower = joined.to_lowercase();
+        // macOS .app bundle paths (Claude Desktop, Codex Desktop, etc).
+        if lower.contains(".app/") || lower.contains(".app\\") {
             return true;
         }
-        // Gemini CLI runs under node; disambiguate via argv.
-        if binary == "node" && argv.iter().any(|a| a.contains("gemini")) {
+        // Long-running server / daemon subcommands. Match as
+        // whitespace-bounded tokens to avoid false positives in paths.
+        const DAEMON_TOKENS: &[&str] = &[
+            "app-server",
+            "mcp-server",
+            "mcp-stdio",
+            "serve",
+            "server",
+            "daemon",
+        ];
+        for tok in DAEMON_TOKENS {
+            if contains_token(&lower, tok) {
+                return true;
+            }
+        }
+        // Claude IDE bridge helper: stream-json IO mode is never an
+        // interactive session.
+        if lower.contains("--input-format stream-json")
+            || lower.contains("--input-format=stream-json")
+        {
             return true;
         }
         false
@@ -167,5 +240,92 @@ pub(crate) mod tests {
     #[test]
     fn is_known_cli_rejects_random_binary() {
         assert!(!SysinfoScanner::is_known_cli("bash", &[]));
+    }
+
+    #[test]
+    fn is_known_cli_rejects_daemons() {
+        // codex VSCode IDE backend
+        assert!(!SysinfoScanner::is_known_cli(
+            "codex",
+            &["codex".into(), "app-server".into(), "--analytics".into()]
+        ));
+        // opencode headless server
+        assert!(!SysinfoScanner::is_known_cli(
+            "opencode",
+            &[
+                "opencode".into(),
+                "serve".into(),
+                "--port".into(),
+                "39241".into()
+            ]
+        ));
+        // claude MCP transport
+        assert!(!SysinfoScanner::is_known_cli(
+            "claude",
+            &["claude".into(), "mcp-server".into()]
+        ));
+        // claude stream-json IDE bridge
+        assert!(!SysinfoScanner::is_known_cli(
+            "claude",
+            &[
+                "claude".into(),
+                "--output-format".into(),
+                "stream-json".into(),
+                "--input-format".into(),
+                "stream-json".into(),
+            ]
+        ));
+    }
+
+    #[test]
+    fn is_known_cli_rejects_macos_app_bundles() {
+        assert!(!SysinfoScanner::is_known_cli(
+            "claude",
+            &["/Applications/Claude.app/Contents/MacOS/claude".into()]
+        ));
+    }
+
+    #[test]
+    fn is_known_cli_accepts_session_invocations() {
+        // claude resume <uuid>
+        assert!(SysinfoScanner::is_known_cli(
+            "claude",
+            &[
+                "claude".into(),
+                "--resume".into(),
+                "12345678-1234-1234-1234-123456789abc".into()
+            ]
+        ));
+        // codex resume <uuid> (positional)
+        assert!(SysinfoScanner::is_known_cli(
+            "codex",
+            &[
+                "codex".into(),
+                "resume".into(),
+                "12345678-1234-1234-1234-123456789abc".into()
+            ]
+        ));
+        // opencode run -s <uuid>
+        assert!(SysinfoScanner::is_known_cli(
+            "opencode",
+            &[
+                "opencode".into(),
+                "run".into(),
+                "-s".into(),
+                "12345678-1234-1234-1234-123456789abc".into()
+            ]
+        ));
+    }
+
+    #[test]
+    fn contains_token_respects_word_boundaries() {
+        // positive
+        assert!(super::contains_token("opencode serve --port 1", "serve"));
+        assert!(super::contains_token("codex app-server foo", "app-server"));
+        assert!(super::contains_token("daemon", "daemon"));
+        // negative — token embedded in identifier or path
+        assert!(!super::contains_token("/usr/share/serverpkg/x", "server"));
+        assert!(!super::contains_token("preserved", "serve"));
+        assert!(!super::contains_token("observer", "serve"));
     }
 }

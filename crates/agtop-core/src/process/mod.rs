@@ -11,6 +11,7 @@
 //! a best-effort observability feature layered on top of the core
 //! session display. All errors are logged at `debug!` and degraded away.
 
+pub(crate) mod argv_uuid;
 pub(crate) mod correlator;
 pub(crate) mod fd;
 pub(crate) mod scanner;
