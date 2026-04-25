@@ -286,16 +286,12 @@ pub fn spawn(
                     plan_cache_key = new_key;
                     plan_cache_val = new_val;
 
-                    // Attach OS-process info.
+                    // Attach OS-process info, propagating each parent's
+                    // PID to its subagents (which run in-process within
+                    // the parent CLI). See process::attach_process_info.
                     let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
                     let info_map = correlator.snapshot(&summaries);
-                    for a in &mut analyses {
-                        if let Some(info) = info_map.get(&a.summary.session_id) {
-                            a.pid = Some(info.pid);
-                            a.liveness = Some(info.liveness);
-                            a.match_confidence = Some(info.match_confidence);
-                        }
-                    }
+                    agtop_core::process::attach_process_info(&info_map, &mut analyses);
 
                     RefreshMsg::Snapshot {
                         generation,

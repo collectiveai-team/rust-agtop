@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::process::correlator::correlate;
 use crate::process::fd::{default_fd_scanner, FdScanner};
 use crate::process::scanner::{Scanner, SysinfoScanner};
-use crate::session::SessionSummary;
+use crate::session::{SessionAnalysis, SessionSummary};
 
 /// How certain we are about a given PID-to-session match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,36 @@ impl ProcessCorrelator {
     }
 }
 
+/// Attach OS-process info to a slice of session analyses, propagating
+/// each parent's match to its in-process subagent children.
+///
+/// Subagents (Claude `Task` tool, Codex `thread_spawn`, Gemini `<parent>/`
+/// subagent transcripts) execute INSIDE the parent CLI process — there
+/// is no separate OS PID for a subagent. This helper writes the parent's
+/// PID/liveness/confidence onto every child so the TUI and JSON output
+/// can show "this subagent is running on PID X" using the only PID that
+/// actually exists.
+///
+/// Used by both the TUI refresh worker and the `--json` one-shot.
+pub fn attach_process_info(
+    info_map: &HashMap<String, ProcessInfo>,
+    analyses: &mut [SessionAnalysis],
+) {
+    for a in analyses.iter_mut() {
+        if let Some(info) = info_map.get(&a.summary.session_id) {
+            a.pid = Some(info.pid);
+            a.liveness = Some(info.liveness);
+            a.match_confidence = Some(info.match_confidence);
+            // Propagate to subagents: same OS process.
+            for child in &mut a.children {
+                child.pid = Some(info.pid);
+                child.liveness = Some(info.liveness);
+                child.match_confidence = Some(info.match_confidence);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
@@ -157,6 +187,74 @@ mod lifecycle_tests {
             None,
             None,
         )
+    }
+
+    fn analysis(id: &str) -> SessionAnalysis {
+        use crate::session::{CostBreakdown, TokenTotals};
+        SessionAnalysis::new(
+            session(id, &format!("/tmp/{id}.jsonl")),
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn attach_process_info_propagates_parent_pid_to_subagent_children() {
+        // Subagents run in-process within the parent CLI; they have no
+        // PID of their own. After correlation we copy the parent's
+        // match (PID + liveness + confidence) onto every child so the
+        // TUI can show the actual OS process.
+        let mut parent = analysis("parent-1");
+        parent.children = vec![analysis("child-1"), analysis("child-2")];
+        let mut analyses = vec![parent];
+
+        let mut info_map = HashMap::new();
+        info_map.insert(
+            "parent-1".to_string(),
+            ProcessInfo {
+                pid: 4242,
+                liveness: Liveness::Live,
+                match_confidence: Confidence::High,
+                parent_pid: Some(1),
+            },
+        );
+
+        attach_process_info(&info_map, &mut analyses);
+
+        let p = &analyses[0];
+        assert_eq!(p.pid, Some(4242));
+        assert_eq!(p.liveness, Some(Liveness::Live));
+        assert_eq!(p.match_confidence, Some(Confidence::High));
+        for child in &p.children {
+            assert_eq!(
+                child.pid,
+                Some(4242),
+                "child {} must inherit parent's PID",
+                child.summary.session_id
+            );
+            assert_eq!(child.liveness, Some(Liveness::Live));
+            assert_eq!(child.match_confidence, Some(Confidence::High));
+        }
+    }
+
+    #[test]
+    fn attach_process_info_leaves_unmatched_children_alone() {
+        // No match for parent → both parent and children stay at None.
+        let mut parent = analysis("parent-1");
+        parent.children = vec![analysis("child-1")];
+        let mut analyses = vec![parent];
+
+        attach_process_info(&HashMap::new(), &mut analyses);
+
+        assert!(analyses[0].pid.is_none());
+        assert!(analyses[0].children[0].pid.is_none());
     }
 
     #[test]

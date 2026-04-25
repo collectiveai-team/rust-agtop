@@ -147,16 +147,12 @@ fn main() -> Result<()> {
         }
         let live = filtered_clients(&clients, &enabled_initial);
         let mut analyses = analyze_all(&live, plan);
-        // One-shot PID correlation for --json output.
+        // One-shot PID correlation for --json output. The helper also
+        // propagates the parent's PID to subagent children (which share
+        // the parent CLI's OS process). See process::attach_process_info.
         let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
         let info_map = agtop_core::ProcessCorrelator::new().snapshot(&summaries);
-        for a in &mut analyses {
-            if let Some(info) = info_map.get(&a.summary.session_id) {
-                a.pid = Some(info.pid);
-                a.liveness = Some(info.liveness);
-                a.match_confidence = Some(info.match_confidence);
-            }
-        }
+        agtop_core::process::attach_process_info(&info_map, &mut analyses);
         let out = JsonOutput {
             plan: cli.plan.clone(),
             sessions: analyses.iter().map(JsonSession::from).collect(),
