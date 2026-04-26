@@ -1418,6 +1418,7 @@ impl TurnAccumulator {
             pid: None,
             liveness: None,
             match_confidence: None,
+            process_metrics: None,
         })
     }
 }

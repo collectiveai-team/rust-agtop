@@ -44,6 +44,16 @@ pub enum Liveness {
     Stopped,
 }
 
+/// Live OS resource metrics for a matched process.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessMetrics {
+    pub cpu_percent: f32,
+    pub memory_bytes: u64,
+    pub virtual_memory_bytes: u64,
+    pub disk_read_bytes: u64,
+    pub disk_written_bytes: u64,
+}
+
 /// Per-session OS-process information attached after correlation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
@@ -51,6 +61,7 @@ pub struct ProcessInfo {
     pub liveness: Liveness,
     pub match_confidence: Confidence,
     pub parent_pid: Option<u32>,
+    pub metrics: Option<ProcessMetrics>,
 }
 
 /// Correlates a set of sessions to currently-running OS processes.
@@ -120,6 +131,7 @@ impl ProcessCorrelator {
                         liveness: Liveness::Stopped,
                         match_confidence: prior_info.match_confidence,
                         parent_pid: prior_info.parent_pid,
+                        metrics: None,
                     },
                 );
                 new_drop_next.insert(sid.clone());
@@ -152,11 +164,13 @@ pub fn attach_process_info(
             a.pid = Some(info.pid);
             a.liveness = Some(info.liveness);
             a.match_confidence = Some(info.match_confidence);
+            a.process_metrics = info.metrics.clone();
             // Propagate to subagents: same OS process.
             for child in &mut a.children {
                 child.pid = Some(info.pid);
                 child.liveness = Some(info.liveness);
                 child.match_confidence = Some(info.match_confidence);
+                child.process_metrics = info.metrics.clone();
             }
         }
     }
@@ -223,6 +237,13 @@ mod lifecycle_tests {
                 liveness: Liveness::Live,
                 match_confidence: Confidence::High,
                 parent_pid: Some(1),
+                metrics: Some(ProcessMetrics {
+                    cpu_percent: 12.5,
+                    memory_bytes: 64 * 1024 * 1024,
+                    virtual_memory_bytes: 512 * 1024 * 1024,
+                    disk_read_bytes: 1_024,
+                    disk_written_bytes: 2_048,
+                }),
             },
         );
 
@@ -232,6 +253,7 @@ mod lifecycle_tests {
         assert_eq!(p.pid, Some(4242));
         assert_eq!(p.liveness, Some(Liveness::Live));
         assert_eq!(p.match_confidence, Some(Confidence::High));
+        assert_eq!(p.process_metrics.as_ref().map(|m| m.cpu_percent), Some(12.5));
         for child in &p.children {
             assert_eq!(
                 child.pid,
@@ -241,6 +263,10 @@ mod lifecycle_tests {
             );
             assert_eq!(child.liveness, Some(Liveness::Live));
             assert_eq!(child.match_confidence, Some(Confidence::High));
+            assert_eq!(
+                child.process_metrics.as_ref().map(|m| m.memory_bytes),
+                Some(64 * 1024 * 1024)
+            );
         }
     }
 
@@ -294,6 +320,7 @@ mod lifecycle_tests {
         });
         let second = c.snapshot(&sessions);
         assert_eq!(second.get(SID).map(|i| i.liveness), Some(Liveness::Stopped));
+        assert!(second.get(SID).and_then(|i| i.metrics.as_ref()).is_none());
 
         // Cycle 3: dropped.
         let third = c.snapshot(&sessions);

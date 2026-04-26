@@ -81,6 +81,7 @@ pub(crate) fn correlate(
                             liveness: Liveness::Live,
                             match_confidence: Confidence::High,
                             parent_pid: c.parent_pid,
+                            metrics: None,
                         },
                     );
                     used_pids.insert(c.pid);
@@ -160,6 +161,7 @@ pub(crate) fn correlate(
                     liveness: Liveness::Live,
                     match_confidence: Confidence::High,
                     parent_pid: c.parent_pid,
+                    metrics: None,
                 },
             );
             used_pids.insert(c.pid);
@@ -321,6 +323,7 @@ pub(crate) fn correlate(
                 liveness: Liveness::Live,
                 match_confidence: Confidence::Medium,
                 parent_pid: m.parent_pid,
+                metrics: None,
             },
         );
         used_pids.insert(m.pid);
@@ -942,6 +945,7 @@ mod tests {
                 liveness: Liveness::Live,
                 match_confidence: Confidence::High,
                 parent_pid: None,
+                metrics: None,
             },
         );
         out.insert(
@@ -951,6 +955,7 @@ mod tests {
                 liveness: Liveness::Live,
                 match_confidence: Confidence::High,
                 parent_pid: None,
+                metrics: None,
             },
         );
 
