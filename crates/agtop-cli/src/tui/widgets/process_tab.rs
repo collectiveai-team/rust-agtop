@@ -43,9 +43,12 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
                 let cpu = fmt::format_percent(a.process_metrics.as_ref().map(|m| m.cpu_percent));
                 let mem = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.memory_bytes));
-                let vsz = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.virtual_memory_bytes));
-                let disk_r = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_read_bytes));
-                let disk_w = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes));
+                let vsz =
+                    fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.virtual_memory_bytes));
+                let disk_r =
+                    fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_read_bytes));
+                let disk_w =
+                    fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes));
 
                 let lines = vec![
                     super::kv_line("pid", pid_val),
@@ -59,10 +62,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
                 let inner = block.inner(area);
                 frame.render_widget(block, area);
-                frame.render_widget(
-                    Paragraph::new(lines).wrap(Wrap { trim: false }),
-                    inner,
-                );
+                frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
                 return;
             }
         },
@@ -70,4 +70,3 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
     frame.render_widget(body, area);
 }
-

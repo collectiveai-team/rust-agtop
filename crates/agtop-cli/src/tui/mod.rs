@@ -1542,8 +1542,15 @@ mod tests {
             .draw(|frame| render(frame, &app, &mut table_state, &mut layout))
             .unwrap();
         let buf = terminal.backend().buffer().clone();
-        let rendered: String = buf.content().iter().map(|c| c.symbol().to_string()).collect();
-        assert!(rendered.contains("Process"), "tab bar must show Process tab title");
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            rendered.contains("Process"),
+            "tab bar must show Process tab title"
+        );
         assert!(
             !rendered.contains("coming soon"),
             "placeholder must be replaced by real widget"

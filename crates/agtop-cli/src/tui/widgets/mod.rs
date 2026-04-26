@@ -16,8 +16,8 @@ pub mod state_display;
 
 /// Right-aligned key–value row used by Info and Process tabs.
 pub(super) fn kv_line(key: &'static str, value: String) -> ratatui::prelude::Line<'static> {
-    use ratatui::prelude::*;
     use crate::tui::theme as th;
+    use ratatui::prelude::*;
     Line::from(vec![
         Span::styled(format!("{key:>16}"), th::INFO_KEY),
         Span::raw("  "),
