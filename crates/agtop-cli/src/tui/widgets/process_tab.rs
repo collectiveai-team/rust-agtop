@@ -48,13 +48,13 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                 let disk_w = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes));
 
                 let lines = vec![
-                    kv_line("pid", pid_val),
-                    kv_line("match", match_label.to_string()),
-                    kv_line("cpu", cpu),
-                    kv_line("memory", mem),
-                    kv_line("virtual_memory", vsz),
-                    kv_line("disk_read", disk_r),
-                    kv_line("disk_written", disk_w),
+                    super::kv_line("pid", pid_val),
+                    super::kv_line("match", match_label.to_string()),
+                    super::kv_line("cpu", cpu),
+                    super::kv_line("memory", mem),
+                    super::kv_line("virtual_memory", vsz),
+                    super::kv_line("disk_read", disk_r),
+                    super::kv_line("disk_written", disk_w),
                 ];
 
                 let inner = block.inner(area);
@@ -71,6 +71,3 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_widget(body, area);
 }
 
-fn kv_line(key: &'static str, value: String) -> Line<'static> {
-    super::kv_line(key, value)
-}
