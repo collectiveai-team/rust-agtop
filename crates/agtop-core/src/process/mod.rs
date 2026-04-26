@@ -47,10 +47,15 @@ pub enum Liveness {
 /// Live OS resource metrics for a matched process.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessMetrics {
+    /// Instantaneous CPU usage as a percentage (0.0–100.0 per core, as reported by sysinfo).
     pub cpu_percent: f32,
+    /// Resident set size in bytes.
     pub memory_bytes: u64,
+    /// Virtual memory size in bytes.
     pub virtual_memory_bytes: u64,
+    /// Cumulative bytes read from disk since process start.
     pub disk_read_bytes: u64,
+    /// Cumulative bytes written to disk since process start.
     pub disk_written_bytes: u64,
 }
 
@@ -61,6 +66,7 @@ pub struct ProcessInfo {
     pub liveness: Liveness,
     pub match_confidence: Confidence,
     pub parent_pid: Option<u32>,
+    /// Live resource metrics; `None` when not yet sampled or process is stopped.
     pub metrics: Option<ProcessMetrics>,
 }
 
@@ -165,7 +171,8 @@ pub fn attach_process_info(
             a.liveness = Some(info.liveness);
             a.match_confidence = Some(info.match_confidence);
             a.process_metrics = info.metrics.clone();
-            // Propagate to subagents: same OS process.
+            // Note: propagation is one level deep only. Subagents run in-process
+            // within their parent CLI, so there is no deeper nesting in practice.
             for child in &mut a.children {
                 child.pid = Some(info.pid);
                 child.liveness = Some(info.liveness);
@@ -225,6 +232,12 @@ mod lifecycle_tests {
         // PID of their own. After correlation we copy the parent's
         // match (PID + liveness + confidence) onto every child so the
         // TUI can show the actual OS process.
+        const FAKE_CPU: f32 = 12.5;
+        const FAKE_MEM_BYTES: u64 = 64 * 1024 * 1024;
+        const FAKE_VMEM_BYTES: u64 = 512 * 1024 * 1024;
+        const FAKE_DISK_READ: u64 = 1_024;
+        const FAKE_DISK_WRITE: u64 = 2_048;
+
         let mut parent = analysis("parent-1");
         parent.children = vec![analysis("child-1"), analysis("child-2")];
         let mut analyses = vec![parent];
@@ -238,11 +251,11 @@ mod lifecycle_tests {
                 match_confidence: Confidence::High,
                 parent_pid: Some(1),
                 metrics: Some(ProcessMetrics {
-                    cpu_percent: 12.5,
-                    memory_bytes: 64 * 1024 * 1024,
-                    virtual_memory_bytes: 512 * 1024 * 1024,
-                    disk_read_bytes: 1_024,
-                    disk_written_bytes: 2_048,
+                    cpu_percent: FAKE_CPU,
+                    memory_bytes: FAKE_MEM_BYTES,
+                    virtual_memory_bytes: FAKE_VMEM_BYTES,
+                    disk_read_bytes: FAKE_DISK_READ,
+                    disk_written_bytes: FAKE_DISK_WRITE,
                 }),
             },
         );
@@ -253,7 +266,7 @@ mod lifecycle_tests {
         assert_eq!(p.pid, Some(4242));
         assert_eq!(p.liveness, Some(Liveness::Live));
         assert_eq!(p.match_confidence, Some(Confidence::High));
-        assert_eq!(p.process_metrics.as_ref().map(|m| m.cpu_percent), Some(12.5));
+        assert_eq!(p.process_metrics.as_ref().map(|m| m.cpu_percent), Some(FAKE_CPU));
         for child in &p.children {
             assert_eq!(
                 child.pid,
@@ -265,7 +278,7 @@ mod lifecycle_tests {
             assert_eq!(child.match_confidence, Some(Confidence::High));
             assert_eq!(
                 child.process_metrics.as_ref().map(|m| m.memory_bytes),
-                Some(64 * 1024 * 1024)
+                Some(FAKE_MEM_BYTES)
             );
         }
     }
