@@ -11,6 +11,7 @@ use crate::tui::app::App;
 use crate::tui::theme as th;
 use agtop_core::process::{Confidence, Liveness};
 
+/// Render the Process tab into `area`, showing live OS metrics for the selected session.
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Process ");
 
@@ -40,23 +41,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     None => "-",
                 };
 
-                let (cpu, mem, vsz, disk_r, disk_w) = if let Some(ref m) = a.process_metrics {
-                    (
-                        fmt::format_percent(Some(m.cpu_percent)),
-                        fmt::compact_opt(Some(m.memory_bytes)),
-                        fmt::compact_opt(Some(m.virtual_memory_bytes)),
-                        fmt::compact_opt(Some(m.disk_read_bytes)),
-                        fmt::compact_opt(Some(m.disk_written_bytes)),
-                    )
-                } else {
-                    (
-                        "-".into(),
-                        "-".into(),
-                        "-".into(),
-                        "-".into(),
-                        "-".into(),
-                    )
-                };
+                let cpu = fmt::format_percent(a.process_metrics.as_ref().map(|m| m.cpu_percent));
+                let mem = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.memory_bytes));
+                let vsz = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.virtual_memory_bytes));
+                let disk_r = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_read_bytes));
+                let disk_w = fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes));
 
                 let lines = vec![
                     kv_line("pid", pid_val),
@@ -68,9 +57,8 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     kv_line("disk_written", disk_w),
                 ];
 
-                let outer_block = block;
-                let inner = outer_block.inner(area);
-                frame.render_widget(outer_block, area);
+                let inner = block.inner(area);
+                frame.render_widget(block, area);
                 frame.render_widget(
                     Paragraph::new(lines).wrap(Wrap { trim: false }),
                     inner,
@@ -84,9 +72,5 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 fn kv_line(key: &'static str, value: String) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{key:>16}"), th::INFO_KEY),
-        Span::raw("  "),
-        Span::raw(value),
-    ])
+    super::kv_line(key, value)
 }

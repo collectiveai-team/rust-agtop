@@ -366,11 +366,7 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
 }
 
 fn kv_line(key: &'static str, value: String) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{key:>16}"), th::INFO_KEY),
-        Span::raw("  "),
-        Span::raw(value),
-    ])
+    super::kv_line(key, value)
 }
 
 fn kv_line_styled(key: &'static str, value: String, style: Style) -> Line<'static> {
