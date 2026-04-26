@@ -737,7 +737,14 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
 
     match app.tab() {
         Tab::Info => widgets::info_tab::render(frame, rows[1], app),
-        Tab::Process => widgets::info_tab::render(frame, rows[1], app), // placeholder; Task 2 will implement
+        Tab::Process => {
+            // TODO(task-2): replaced by widgets::process_tab::render
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new("(process tab coming soon)")
+                    .block(ratatui::widgets::Block::default().borders(ratatui::widgets::Borders::ALL).title(" Process ")),
+                rows[1],
+            );
+        }
         Tab::Cost => widgets::cost_tab::render(frame, rows[1], app),
         Tab::Config => widgets::config_tab::render(
             frame,
