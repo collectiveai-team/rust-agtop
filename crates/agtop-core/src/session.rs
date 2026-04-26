@@ -54,6 +54,32 @@ impl std::fmt::Display for ClientKind {
     }
 }
 
+/// Coarse session activity state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionState {
+    /// Agent process is doing work. Tool calls and tool responses are running.
+    Running,
+    /// Agent process explicitly requires user action.
+    Blocked,
+    /// Agent process is alive but has finished the current work/turn.
+    Idle,
+    /// No agent process is associated with the session.
+    Closed,
+}
+
+impl SessionState {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Blocked => "blocked",
+            Self::Idle => "idle",
+            Self::Closed => "closed",
+        }
+    }
+}
+
 /// Lightweight session metadata derived from file headers/names.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,9 +96,9 @@ pub struct SessionSummary {
     pub model: Option<String>,
     /// Working directory (best-effort). Used for display labels.
     pub cwd: Option<String>,
-    /// Coarse workflow state such as `waiting` or `stopped`.
+    /// Coarse session activity state.
     #[serde(default)]
-    pub state: Option<String>,
+    pub state: Option<SessionState>,
     /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
@@ -124,7 +150,7 @@ impl SessionSummary {
         model: Option<String>,
         cwd: Option<String>,
         data_path: std::path::PathBuf,
-        state: Option<String>,
+        state: Option<SessionState>,
         state_detail: Option<String>,
         model_effort: Option<String>,
         model_effort_detail: Option<String>,
@@ -433,5 +459,33 @@ mod tests {
         let usage: PlanUsage = serde_json::from_value(raw).expect("deserialize legacy plan usage");
         assert_eq!(usage.client, ClientKind::Codex);
         assert_eq!(usage.plan_name.as_deref(), Some("plus"));
+    }
+
+    #[test]
+    fn session_state_serializes_to_lowercase_labels() {
+        assert_eq!(serde_json::to_value(SessionState::Running).unwrap(), json!("running"));
+        assert_eq!(serde_json::to_value(SessionState::Blocked).unwrap(), json!("blocked"));
+        assert_eq!(serde_json::to_value(SessionState::Idle).unwrap(), json!("idle"));
+        assert_eq!(serde_json::to_value(SessionState::Closed).unwrap(), json!("closed"));
+    }
+
+    #[test]
+    fn session_state_deserializes_lowercase_labels() {
+        assert_eq!(
+            serde_json::from_value::<SessionState>(json!("running")).unwrap(),
+            SessionState::Running
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionState>(json!("blocked")).unwrap(),
+            SessionState::Blocked
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionState>(json!("idle")).unwrap(),
+            SessionState::Idle
+        );
+        assert_eq!(
+            serde_json::from_value::<SessionState>(json!("closed")).unwrap(),
+            SessionState::Closed
+        );
     }
 }
