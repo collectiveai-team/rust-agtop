@@ -22,8 +22,9 @@ details, data sources, and implementation notes.
 
 When an agent CLI is running, agtop correlates its OS process to the
 session transcript it's writing. The session table's `PID` column shows
-the live PID; the info panel shows liveness state (`live` / `stopped`)
-and how the match was established.
+the live PID; the **Process** tab in the bottom panel shows liveness
+state (`live` / `stopped`), match confidence, and live resource metrics
+(CPU usage, resident memory, virtual memory, cumulative disk I/O).
 
 Correlation uses the session id literal in argv (`--resume <uuid>`,
 `-s <ses_…>`) as the most-confident signal, the transcript file held
@@ -45,6 +46,14 @@ On Windows the score-only fallback still works but may be ambiguous
 when multiple agents run in the same cwd.
 
 ## Status
+
+**v0.4** adds live process metrics. Each matched session now surfaces CPU
+usage, resident/virtual memory, and cumulative disk I/O sampled from the
+OS on every refresh. New TUI columns `CPU` and `MEM` are visible by
+default (plus `VSZ`, `DISK R`, `DISK W` in the Config tab); a dedicated
+**Process** bottom-panel tab shows all metrics with room to read them.
+The `--list` table gains `PID`, `CPU`, and `MEM` columns; `--json` adds
+a `process_metrics` field.
 
 **v0.3** adds session ↔ OS-process correlation. When a CLI is running
 agtop binds the right PID to the right session row across all
@@ -127,7 +136,7 @@ pre-logo builds. No configuration knob is needed.
 | `F6` or `>`          | Cycle sort column                        |
 | `i`                  | Flip sort direction                      |
 | `d`                  | Toggle classic/dashboard layout          |
-| Tab / Shift-Tab      | Cycle bottom-panel tabs (Info, Cost)     |
+| Tab / Shift-Tab      | Cycle bottom-panel tabs (Info, Process, Cost, …) |
 | `F5` or `r`          | Manual refresh                           |
 | `q` / `F10` / Ctrl-C | Quit                                     |
 
@@ -152,11 +161,14 @@ Core types:
 
 - `Client` trait: `list_sessions()` + `analyze(summary, plan)`.
 - `SessionSummary`: metadata discovered without re-reading the full transcript.
-- `SessionAnalysis`: summary + `TokenTotals` + `CostBreakdown`.
+- `SessionAnalysis`: summary + `TokenTotals` + `CostBreakdown` + `ProcessMetrics`.
 - `PlanUsage`: best-effort plan/limit snapshots for dashboard panes.
+- `ProcessCorrelator`: matches sessions to live OS processes and samples resource metrics each refresh.
 
-The client layer is `Send + Sync`, so the upcoming TUI can drive it from
-a background refresh thread.
+The client layer is `Send + Sync`; the TUI drives it from a background
+refresh thread. `ProcessCorrelator` is stateful (retains prior snapshot
+to emit a transient `Stopped` frame when a process exits) and must be
+held across refresh iterations rather than re-created each cycle.
 
 ## Testing
 
