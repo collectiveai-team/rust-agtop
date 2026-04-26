@@ -698,9 +698,10 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     let tab_bar = Tabs::new(titles)
         .select(match app.tab() {
             Tab::Info => 0,
-            Tab::Cost => 1,
-            Tab::Config => 2,
-            Tab::Quota => 3,
+            Tab::Process => 1,
+            Tab::Cost => 2,
+            Tab::Config => 3,
+            Tab::Quota => 4,
         })
         .block(Block::default().borders(Borders::NONE))
         .divider("│");
@@ -736,6 +737,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
 
     match app.tab() {
         Tab::Info => widgets::info_tab::render(frame, rows[1], app),
+        Tab::Process => widgets::process_tab::render(frame, rows[1], app),
         Tab::Cost => widgets::cost_tab::render(frame, rows[1], app),
         Tab::Config => widgets::config_tab::render(
             frame,
@@ -927,7 +929,9 @@ mod tests {
     /// test robust against time-zone drift.
     #[test]
     fn renders_main_layout_without_panicking() {
-        let backend = TestBackend::new(140, 20);
+        // Width increased from 140→160 to accommodate the 2 new visible columns
+        // (CPU=6, MEM=7) added in the process-metrics feature branch.
+        let backend = TestBackend::new(160, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let app = fixture_app();
         let mut state = ratatui::widgets::TableState::default();
@@ -1524,6 +1528,33 @@ mod tests {
         assert!(contents.contains("5h"), "5h missing:\n{contents}");
         assert!(contents.contains("42"), "percentage missing:\n{contents}");
         assert!(contents.contains('■'), "bar char missing:\n{contents}");
+    }
+
+    #[test]
+    fn process_tab_renders_without_panic() {
+        let backend = ratatui::backend::TestBackend::new(160, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new();
+        app.set_tab(crate::tui::app::Tab::Process);
+        let mut table_state = ratatui::widgets::TableState::default();
+        let mut layout = UiLayout::default();
+        terminal
+            .draw(|frame| render(frame, &app, &mut table_state, &mut layout))
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
+        assert!(
+            rendered.contains("Process"),
+            "tab bar must show Process tab title"
+        );
+        assert!(
+            !rendered.contains("coming soon"),
+            "placeholder must be replaced by real widget"
+        );
     }
 
     #[test]

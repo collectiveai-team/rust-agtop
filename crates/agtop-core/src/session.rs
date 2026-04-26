@@ -239,6 +239,10 @@ pub struct SessionAnalysis {
     /// How we matched the PID. `None` when no match.
     #[serde(default)]
     pub match_confidence: Option<crate::process::Confidence>,
+    /// Live OS resource metrics for the matched process. `None` when no
+    /// process is matched or the process has stopped.
+    #[serde(default)]
+    pub process_metrics: Option<crate::process::ProcessMetrics>,
 }
 
 impl SessionAnalysis {
@@ -277,6 +281,7 @@ impl SessionAnalysis {
             pid: None,
             liveness: None,
             match_confidence: None,
+            process_metrics: None,
         }
     }
 }

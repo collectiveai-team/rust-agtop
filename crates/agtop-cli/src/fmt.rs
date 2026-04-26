@@ -105,6 +105,20 @@ pub fn format_duration_compact(secs: u64) -> String {
 // Table cell formatting (CLI --list table)
 // ---------------------------------------------------------------------------
 
+/// Format an optional CPU percentage with one decimal place.
+/// Returns `"-"` when the value is absent.
+pub fn format_percent(value: Option<f32>) -> String {
+    value
+        .map(|v| format!("{v:.1}%"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+/// Format an optional byte count using [`compact`].
+/// Returns `"-"` when the value is absent.
+pub fn compact_opt(value: Option<u64>) -> String {
+    value.map(compact).unwrap_or_else(|| "-".to_string())
+}
+
 /// Fit `s` into a field of exactly `w` display columns: pad with spaces if
 /// shorter, truncate with an ellipsis (`…`) if longer.
 pub fn fit(s: &str, w: usize) -> String {

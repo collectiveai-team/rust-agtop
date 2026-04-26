@@ -184,7 +184,10 @@ fn main() -> Result<()> {
         run_watch(&live, plan, cli.delay.max(1))?;
     } else if cli.list {
         let live = filtered_clients(&clients, &enabled_initial);
-        let analyses = analyze_all(&live, plan);
+        let mut analyses = analyze_all(&live, plan);
+        let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
+        let info_map = agtop_core::ProcessCorrelator::new().snapshot(&summaries);
+        agtop_core::process::attach_process_info(&info_map, &mut analyses);
         let summaries = discover_all(&live);
         render_table(&summaries, &analyses);
     } else {
@@ -232,6 +235,7 @@ fn run_watch(
     // Hide the cursor while redrawing to avoid flicker.
     let _ = execute!(stdout, cursor::Hide);
     let result = (|| -> Result<()> {
+        let mut correlator = agtop_core::ProcessCorrelator::new();
         while running.load(Ordering::SeqCst) {
             // Clear screen + move to top-left before each render.
             execute!(
@@ -241,7 +245,10 @@ fn run_watch(
             )
             .context("clear screen")?;
 
-            let analyses = analyze_all(clients, plan);
+            let mut analyses = analyze_all(clients, plan);
+            let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
+            let info_map = correlator.snapshot(&summaries);
+            agtop_core::process::attach_process_info(&info_map, &mut analyses);
             let summaries = discover_all(clients);
             render_table(&summaries, &analyses);
             writeln!(
@@ -449,6 +456,8 @@ mod client_parse_tests {
 }
 
 fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAnalysis]) {
+    // 14 columns (10+16+10+16+4+20+18+9+9+9+8+7+6+7) + 13 × 2-space gaps
+    const TABLE_WIDTH: usize = 175;
     // Index analyses by session_id for quick lookup.
     use std::collections::HashMap;
     let by_id: HashMap<&str, &SessionAnalysis> = analyses
@@ -458,7 +467,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     let now = Utc::now();
     println!(
-        "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
+        "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
         "CLIENT",
         "SUBSCRIPTION",
         "SESSION",
@@ -469,9 +478,12 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
         "IN",
         "OUT",
         "CACHE",
-        "COST$"
+        "COST$",
+        "PID",
+        "CPU",
+        "MEM"
     );
-    println!("{}", "-".repeat(160));
+    println!("{}", "-".repeat(TABLE_WIDTH));
 
     let mut printed = 0usize;
     for s in summaries {
@@ -521,8 +533,16 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             .last_active
             .map(|t| fmt::relative_age(t, now))
             .unwrap_or_else(|| "-".into());
+        let pid_str = match a {
+            Some(a) => a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+            None => "-".into(),
+        };
+        let cpu_str =
+            fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
+        let mem_str =
+            fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
         println!(
-            "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}",
+            "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
             s.client.as_str(),
             fmt::fit(&subscription, 16),
             fmt::fit(&short_session, 10),
@@ -534,6 +554,9 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             output,
             cache,
             cost_str,
+            pid_str,
+            cpu_str,
+            mem_str,
         );
         printed += 1;
         if printed >= 200 {
@@ -550,7 +573,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     // Footer totals.
     let totals = JsonTotals::from(&analyses.to_vec());
-    println!("{}", "-".repeat(160));
+    println!("{}", "-".repeat(TABLE_WIDTH));
     println!(
         "totals: {} sessions  in={}  out={}  cache={}  cost=${:.4} (billed)  incl.sessions={}",
         analyses.len(),
@@ -617,6 +640,11 @@ struct JsonSession {
     /// `null` when no match was established.
     #[serde(default)]
     match_confidence: Option<agtop_core::Confidence>,
+    /// Live OS resource metrics for the matched process.
+    /// `null` when no process is matched, process has stopped, or metrics
+    /// could not be read.
+    #[serde(default)]
+    process_metrics: Option<agtop_core::process::ProcessMetrics>,
 }
 
 impl From<&SessionAnalysis> for JsonSession {
@@ -654,6 +682,7 @@ impl JsonSession {
             pid: a.pid,
             liveness: a.liveness,
             match_confidence: a.match_confidence,
+            process_metrics: a.process_metrics.clone(),
         }
     }
 }
@@ -681,7 +710,7 @@ mod json_output_tests {
             None,
             None,
         );
-        let analysis = SessionAnalysis::new(
+        let mut analysis = SessionAnalysis::new(
             summary,
             TokenTotals::default(),
             CostBreakdown::default(),
@@ -693,11 +722,26 @@ mod json_output_tests {
             None,
             None,
         );
+        analysis.process_metrics = Some(agtop_core::process::ProcessMetrics {
+            cpu_percent: 3.5,
+            memory_bytes: 1234,
+            virtual_memory_bytes: 5678,
+            disk_read_bytes: 90,
+            disk_written_bytes: 12,
+        });
 
         let json = JsonSession::from_analysis(&analysis, now);
 
         assert_eq!(json.state.as_deref(), Some("stopped"));
         assert_eq!(json.display_state, "working");
+        assert_eq!(
+            json.process_metrics.as_ref().map(|m| m.cpu_percent),
+            Some(3.5)
+        );
+        assert_eq!(
+            json.process_metrics.as_ref().map(|m| m.disk_written_bytes),
+            Some(12)
+        );
     }
 
     #[test]

@@ -106,6 +106,7 @@ pub(crate) mod tests {
     use std::collections::HashMap;
 
     /// Test fake backed by an injected map of pid -> paths.
+    #[derive(Default)]
     pub(crate) struct FakeFdScanner {
         pub map: HashMap<u32, Vec<PathBuf>>,
     }

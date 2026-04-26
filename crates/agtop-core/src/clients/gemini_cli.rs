@@ -245,6 +245,7 @@ impl Client for GeminiCliClient {
             pid: None,
             liveness: None,
             match_confidence: None,
+            process_metrics: None,
         })
     }
 }

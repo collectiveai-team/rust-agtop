@@ -38,6 +38,16 @@ pub enum ColumnId {
     Project,
     SessionName,
     Pid,
+    /// Live CPU usage of the matched process (percentage).
+    Cpu,
+    /// Resident memory of the matched process (bytes, compact format).
+    Memory,
+    /// Virtual memory of the matched process (bytes, compact format).
+    VirtualMemory,
+    /// Cumulative disk bytes read by the matched process.
+    DiskRead,
+    /// Cumulative disk bytes written by the matched process.
+    DiskWritten,
 }
 
 impl ColumnId {
@@ -55,6 +65,11 @@ impl ColumnId {
             ColumnId::Effort,
             ColumnId::State,
             ColumnId::Pid,
+            ColumnId::Cpu,
+            ColumnId::Memory,
+            ColumnId::VirtualMemory,
+            ColumnId::DiskRead,
+            ColumnId::DiskWritten,
             ColumnId::Tokens,
             ColumnId::OutputTokens,
             ColumnId::CacheTokens,
@@ -94,6 +109,11 @@ impl ColumnId {
             ColumnId::Project => "PROJECT",
             ColumnId::SessionName => "NAME",
             ColumnId::Pid => "PID",
+            ColumnId::Cpu => "CPU",
+            ColumnId::Memory => "MEM",
+            ColumnId::VirtualMemory => "VSZ",
+            ColumnId::DiskRead => "DISK R",
+            ColumnId::DiskWritten => "DISK W",
         }
     }
 
@@ -122,6 +142,11 @@ impl ColumnId {
             ColumnId::Project => "Inferred project name (from git remote)",
             ColumnId::SessionName => "Session title/name set by the agent",
             ColumnId::Pid => "OS process ID of the live agent CLI",
+            ColumnId::Cpu => "Live CPU usage of the matched process (%)",
+            ColumnId::Memory => "Live resident memory of the matched process",
+            ColumnId::VirtualMemory => "Live virtual memory of the matched process",
+            ColumnId::DiskRead => "Cumulative bytes read from disk (since process start)",
+            ColumnId::DiskWritten => "Cumulative bytes written to disk (since process start)",
         }
     }
 
@@ -151,6 +176,11 @@ impl ColumnId {
             ColumnId::Project => Some(16),
             ColumnId::SessionName => Some(24),
             ColumnId::Pid => Some(7), // 6 digits + padding
+            ColumnId::Cpu => Some(6),
+            ColumnId::Memory => Some(7),
+            ColumnId::VirtualMemory => Some(7),
+            ColumnId::DiskRead => Some(8),
+            ColumnId::DiskWritten => Some(8),
         }
     }
 
@@ -180,6 +210,11 @@ impl ColumnId {
             ColumnId::Project => Some(SortColumn::Project),
             ColumnId::SessionName => None,
             ColumnId::Pid => None, // not sortable
+            ColumnId::Cpu => None,
+            ColumnId::Memory => None,
+            ColumnId::VirtualMemory => None,
+            ColumnId::DiskRead => None,
+            ColumnId::DiskWritten => None,
         }
     }
 
@@ -187,6 +222,29 @@ impl ColumnId {
     pub fn is_flexible(self) -> bool {
         self.fixed_width().is_none()
     }
+}
+
+/// Returns the default visibility for a column in a fresh or migrated config.
+fn default_visible(id: ColumnId) -> bool {
+    matches!(
+        id,
+        ColumnId::Session
+            | ColumnId::Age
+            | ColumnId::Client
+            | ColumnId::Subscription
+            | ColumnId::Model
+            | ColumnId::Effort
+            | ColumnId::State
+            | ColumnId::Tokens
+            | ColumnId::OutputTokens
+            | ColumnId::CacheTokens
+            | ColumnId::Context
+            | ColumnId::Cost
+            | ColumnId::Project
+            | ColumnId::Pid
+            | ColumnId::Cpu
+            | ColumnId::Memory
+    )
 }
 
 fn default_sort_col() -> SortColumn {
@@ -243,23 +301,7 @@ impl Default for ColumnConfig {
                 .iter()
                 .map(|&id| ColumnEntry {
                     id,
-                    visible: matches!(
-                        id,
-                        ColumnId::Session
-                            | ColumnId::Age
-                            | ColumnId::Client
-                            | ColumnId::Subscription
-                            | ColumnId::Model
-                            | ColumnId::Effort
-                            | ColumnId::State
-                            | ColumnId::Tokens
-                            | ColumnId::OutputTokens
-                            | ColumnId::CacheTokens
-                            | ColumnId::Context
-                            | ColumnId::Cost
-                            | ColumnId::Project
-                            | ColumnId::Pid
-                    ),
+                    visible: default_visible(id),
                 })
                 .collect(),
             sort_col,
@@ -274,6 +316,18 @@ impl ColumnConfig {
         if self.sort_col == SortColumn::Cost {
             self.sort_col = SortColumn::LastActive;
             self.sort_dir = SortColumn::LastActive.default_direction();
+        }
+        // Append any new columns not present in the persisted config.
+        // This ensures old configs gain new columns on upgrade without
+        // losing their existing column order or visibility.
+        let existing_ids: Vec<ColumnId> = self.columns.iter().map(|e| e.id).collect();
+        for &id in ColumnId::all() {
+            if !existing_ids.contains(&id) {
+                self.columns.push(ColumnEntry {
+                    id,
+                    visible: default_visible(id),
+                });
+            }
         }
         self
     }
@@ -564,7 +618,10 @@ mod cfg_client_tests {
 
         let cfg: ColumnConfig =
             serde_json::from_str(json).expect("deserialize legacy provider config");
-        assert_eq!(cfg.columns.len(), 1);
+        // After normalization, missing columns are appended so the total count
+        // equals the full column list. The originally persisted column (Client,
+        // from the "provider" alias) must remain first.
+        assert_eq!(cfg.columns.len(), ColumnId::all().len());
         assert_eq!(cfg.columns[0].id, ColumnId::Client);
         assert_eq!(cfg.sort_col, SortColumn::Client);
         assert_eq!(cfg.sort_dir, SortDir::Asc);
@@ -602,6 +659,35 @@ mod cfg_client_tests {
     }
 
     #[test]
+    fn old_config_gets_new_metric_columns_appended() {
+        let json = r#"{"columns":[{"id":"session","visible":true},{"id":"pid","visible":true}],"sort_col":"last_active","sort_dir":"desc","clients":[]}"#;
+        let cfg: ColumnConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            cfg.columns.len(),
+            ColumnId::all().len(),
+            "normalize must not produce duplicate columns"
+        );
+        // New columns must be appended with their default visibility.
+        assert!(
+            cfg.columns.iter().any(|c| c.id == ColumnId::Cpu),
+            "Cpu column must be present after normalization"
+        );
+        assert!(
+            cfg.columns.iter().any(|c| c.id == ColumnId::Memory),
+            "Memory column must be present after normalization"
+        );
+        // Cpu and Memory are visible by default; the others are hidden.
+        let cpu = cfg.columns.iter().find(|c| c.id == ColumnId::Cpu).unwrap();
+        let mem = cfg
+            .columns
+            .iter()
+            .find(|c| c.id == ColumnId::Memory)
+            .unwrap();
+        assert!(cpu.visible, "Cpu should be visible by default");
+        assert!(mem.visible, "Memory should be visible by default");
+    }
+
+    #[test]
     fn default_visible_columns_match_design() {
         let cfg = ColumnConfig::default();
         let visible: Vec<ColumnId> = cfg.visible();
@@ -616,6 +702,8 @@ mod cfg_client_tests {
             ColumnId::Cost,
             ColumnId::Project,
             ColumnId::Pid,
+            ColumnId::Cpu,
+            ColumnId::Memory,
         ] {
             assert!(
                 visible.contains(id),

@@ -878,6 +878,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         pid: None,
         liveness: None,
         match_confidence: None,
+        process_metrics: None,
     })
 }
 

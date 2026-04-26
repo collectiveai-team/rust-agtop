@@ -71,6 +71,7 @@ pub enum UiMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tab {
     Info,
+    Process,
     Cost,
     Config,
     Quota,
@@ -78,12 +79,13 @@ pub enum Tab {
 
 impl Tab {
     pub fn all() -> &'static [Tab] {
-        &[Tab::Info, Tab::Cost, Tab::Config, Tab::Quota]
+        &[Tab::Info, Tab::Process, Tab::Cost, Tab::Config, Tab::Quota]
     }
 
     pub fn title(self) -> &'static str {
         match self {
             Self::Info => "Info",
+            Self::Process => "Process",
             Self::Cost => "Cost",
             Self::Config => "Config",
             Self::Quota => "Quota",
@@ -92,7 +94,8 @@ impl Tab {
 
     pub fn cycle_forward(self) -> Self {
         match self {
-            Self::Info => Self::Cost,
+            Self::Info => Self::Process,
+            Self::Process => Self::Cost,
             Self::Cost => Self::Config,
             Self::Config => Self::Quota,
             Self::Quota => Self::Info,
@@ -102,7 +105,8 @@ impl Tab {
     pub fn cycle_back(self) -> Self {
         match self {
             Self::Info => Self::Quota,
-            Self::Cost => Self::Info,
+            Self::Process => Self::Info,
+            Self::Cost => Self::Process,
             Self::Config => Self::Cost,
             Self::Quota => Self::Config,
         }
@@ -1373,9 +1377,19 @@ mod tests {
     }
 
     #[test]
+    fn tab_process_is_between_info_and_cost() {
+        assert_eq!(Tab::Info.cycle_forward(), Tab::Process);
+        assert_eq!(Tab::Process.cycle_forward(), Tab::Cost);
+        assert_eq!(Tab::Cost.cycle_back(), Tab::Process);
+        assert_eq!(Tab::Process.cycle_back(), Tab::Info);
+    }
+
+    #[test]
     fn tab_cycles() {
         let mut app = App::new();
         assert_eq!(app.tab(), Tab::Info);
+        app.next_tab();
+        assert_eq!(app.tab(), Tab::Process);
         app.next_tab();
         assert_eq!(app.tab(), Tab::Cost);
         app.next_tab();
