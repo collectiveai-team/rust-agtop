@@ -224,6 +224,29 @@ impl ColumnId {
     }
 }
 
+/// Returns the default visibility for a column in a fresh or migrated config.
+fn default_visible(id: ColumnId) -> bool {
+    matches!(
+        id,
+        ColumnId::Session
+            | ColumnId::Age
+            | ColumnId::Client
+            | ColumnId::Subscription
+            | ColumnId::Model
+            | ColumnId::Effort
+            | ColumnId::State
+            | ColumnId::Tokens
+            | ColumnId::OutputTokens
+            | ColumnId::CacheTokens
+            | ColumnId::Context
+            | ColumnId::Cost
+            | ColumnId::Project
+            | ColumnId::Pid
+            | ColumnId::Cpu
+            | ColumnId::Memory
+    )
+}
+
 fn default_sort_col() -> SortColumn {
     SortColumn::LastActive
 }
@@ -278,25 +301,7 @@ impl Default for ColumnConfig {
                 .iter()
                 .map(|&id| ColumnEntry {
                     id,
-                    visible: matches!(
-                        id,
-                        ColumnId::Session
-                            | ColumnId::Age
-                            | ColumnId::Client
-                            | ColumnId::Subscription
-                            | ColumnId::Model
-                            | ColumnId::Effort
-                            | ColumnId::State
-                            | ColumnId::Tokens
-                            | ColumnId::OutputTokens
-                            | ColumnId::CacheTokens
-                            | ColumnId::Context
-                            | ColumnId::Cost
-                            | ColumnId::Project
-                            | ColumnId::Pid
-                            | ColumnId::Cpu
-                            | ColumnId::Memory
-                    ),
+                    visible: default_visible(id),
                 })
                 .collect(),
             sort_col,
@@ -318,26 +323,7 @@ impl ColumnConfig {
         let existing_ids: Vec<ColumnId> = self.columns.iter().map(|e| e.id).collect();
         for &id in ColumnId::all() {
             if !existing_ids.contains(&id) {
-                let visible = matches!(
-                    id,
-                    ColumnId::Session
-                        | ColumnId::Age
-                        | ColumnId::Client
-                        | ColumnId::Subscription
-                        | ColumnId::Model
-                        | ColumnId::Effort
-                        | ColumnId::State
-                        | ColumnId::Tokens
-                        | ColumnId::OutputTokens
-                        | ColumnId::CacheTokens
-                        | ColumnId::Context
-                        | ColumnId::Cost
-                        | ColumnId::Project
-                        | ColumnId::Pid
-                        | ColumnId::Cpu
-                        | ColumnId::Memory
-                );
-                self.columns.push(ColumnEntry { id, visible });
+                self.columns.push(ColumnEntry { id, visible: default_visible(id) });
             }
         }
         self
@@ -673,6 +659,11 @@ mod cfg_client_tests {
     fn old_config_gets_new_metric_columns_appended() {
         let json = r#"{"columns":[{"id":"session","visible":true},{"id":"pid","visible":true}],"sort_col":"last_active","sort_dir":"desc","clients":[]}"#;
         let cfg: ColumnConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            cfg.columns.len(),
+            ColumnId::all().len(),
+            "normalize must not produce duplicate columns"
+        );
         // New columns must be appended with their default visibility.
         assert!(cfg.columns.iter().any(|c| c.id == ColumnId::Cpu),
             "Cpu column must be present after normalization");
@@ -700,6 +691,8 @@ mod cfg_client_tests {
             ColumnId::Cost,
             ColumnId::Project,
             ColumnId::Pid,
+            ColumnId::Cpu,
+            ColumnId::Memory,
         ] {
             assert!(
                 visible.contains(id),
