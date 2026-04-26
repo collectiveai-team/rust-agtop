@@ -19,7 +19,7 @@ pub(crate) struct Candidate {
     /// Process start time, unix epoch seconds.
     pub start_time: u64,
     /// Live resource metrics sampled when the candidate was enumerated.
-    /// `None` on `FakeScanner` fixtures unless a test explicitly sets it.
+    /// `None` if the OS could not provide the data for this process.
     pub metrics: Option<ProcessMetrics>,
 }
 
@@ -72,9 +72,9 @@ pub(crate) struct SysinfoScanner {
 #[allow(dead_code)]
 impl SysinfoScanner {
     pub(crate) fn new() -> Self {
-        // `new_with_specifics(ProcessRefreshKind::everything())` is heavier
-        // than we need — we don't want disk IO / network stats. Start
-        // minimal and refresh just the process list on each call.
+        // `new_with_specifics(ProcessRefreshKind::everything())` is called on
+        // each refresh (not here) to get full metrics including disk I/O.
+        // Initialize with an empty system; the heavy work happens in refresh().
         let system = sysinfo::System::new();
         Self {
             system,

@@ -1044,7 +1044,6 @@ mod tests {
 
     #[test]
     fn tier_a_copies_candidate_metrics_to_process_info() {
-        use crate::process::ProcessMetrics;
         let session = claude_session(UUID_A, &format!("/tmp/{UUID_A}.jsonl"));
         let metrics = ProcessMetrics {
             cpu_percent: 7.0,
@@ -1069,5 +1068,73 @@ mod tests {
         let info = out.get(UUID_A).expect("should have matched");
         assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(40));
         assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(7.0));
+    }
+
+    #[test]
+    fn tier_b_copies_candidate_metrics_to_process_info() {
+        let session = claude_session(UUID_A, &format!("/tmp/{UUID_A}.jsonl"));
+        let metrics = ProcessMetrics {
+            cpu_percent: 5.0,
+            memory_bytes: 100,
+            virtual_memory_bytes: 200,
+            disk_read_bytes: 300,
+            disk_written_bytes: 400,
+        };
+        // Candidate has a different argv so Tier A won't match.
+        let scanner = FakeScanner {
+            processes: vec![Candidate {
+                pid: 99,
+                parent_pid: None,
+                binary: "claude".to_string(),
+                argv: vec!["claude".to_string()],
+                cwd: Some(std::path::PathBuf::from("/home/user/proj")),
+                start_time: Utc::now().timestamp() as u64,
+                metrics: Some(metrics.clone()),
+            }],
+        };
+        // fd_scanner returns the session transcript path for pid 99.
+        let fd_scanner = FakeFdScanner {
+            map: [(99u32, vec![std::path::PathBuf::from(format!("/home/.claude/{UUID_A}.jsonl"))])].into(),
+        };
+        let out = correlate(&scanner, &fd_scanner, &[session]);
+        let info = out.get(UUID_A).expect("should have matched via Tier B");
+        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(400));
+        assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(5.0));
+    }
+
+    #[test]
+    fn tier_c_copies_candidate_metrics_to_process_info() {
+        // Session needs a cwd so the cwd hard gate passes.
+        let mut session = claude_session(UUID_A, &format!("/tmp/{UUID_A}.jsonl"));
+        session.cwd = Some("/home/user/proj".into());
+        // started_at must be set so the time window criterion can fire.
+        let start = Utc::now() - Duration::seconds(10);
+        session.started_at = Some(start);
+        session.last_active = Some(Utc::now());
+
+        let metrics = ProcessMetrics {
+            cpu_percent: 9.0,
+            memory_bytes: 111,
+            virtual_memory_bytes: 222,
+            disk_read_bytes: 333,
+            disk_written_bytes: 444,
+        };
+        // Binary matches, cwd matches, start_time inside window => score 3.
+        let scanner = FakeScanner {
+            processes: vec![Candidate {
+                pid: 77,
+                parent_pid: None,
+                binary: "claude".to_string(),
+                argv: vec!["claude".to_string()],
+                cwd: Some(std::path::PathBuf::from("/home/user/proj")),
+                start_time: start.timestamp() as u64 + 1,
+                metrics: Some(metrics.clone()),
+            }],
+        };
+        let fd_scanner = FakeFdScanner::default();
+        let out = correlate(&scanner, &fd_scanner, &[session]);
+        let info = out.get(UUID_A).expect("should have matched via Tier C");
+        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(444));
+        assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(9.0));
     }
 }
