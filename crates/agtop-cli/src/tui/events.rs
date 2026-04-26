@@ -546,7 +546,8 @@ mod tests {
     #[test]
     fn tab_into_quota_emits_start_action() {
         let mut app = App::new();
-        // Info → Cost → Config → Quota (3 tabs forward)
+        // Info → Process → Cost → Config → Quota (4 tabs forward)
+        apply_key(&mut app, press(KeyCode::Tab));
         apply_key(&mut app, press(KeyCode::Tab));
         apply_key(&mut app, press(KeyCode::Tab));
         let action = apply_key(&mut app, press(KeyCode::Tab));

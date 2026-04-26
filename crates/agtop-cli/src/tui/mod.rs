@@ -698,9 +698,10 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     let tab_bar = Tabs::new(titles)
         .select(match app.tab() {
             Tab::Info => 0,
-            Tab::Cost => 1,
-            Tab::Config => 2,
-            Tab::Quota => 3,
+            Tab::Process => 1,
+            Tab::Cost => 2,
+            Tab::Config => 3,
+            Tab::Quota => 4,
         })
         .block(Block::default().borders(Borders::NONE))
         .divider("│");
@@ -736,6 +737,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
 
     match app.tab() {
         Tab::Info => widgets::info_tab::render(frame, rows[1], app),
+        Tab::Process => widgets::info_tab::render(frame, rows[1], app), // placeholder; Task 2 will implement
         Tab::Cost => widgets::cost_tab::render(frame, rows[1], app),
         Tab::Config => widgets::config_tab::render(
             frame,
