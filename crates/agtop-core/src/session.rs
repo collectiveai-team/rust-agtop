@@ -470,10 +470,22 @@ mod tests {
 
     #[test]
     fn session_state_serializes_to_lowercase_labels() {
-        assert_eq!(serde_json::to_value(SessionState::Running).unwrap(), json!("running"));
-        assert_eq!(serde_json::to_value(SessionState::Blocked).unwrap(), json!("blocked"));
-        assert_eq!(serde_json::to_value(SessionState::Idle).unwrap(), json!("idle"));
-        assert_eq!(serde_json::to_value(SessionState::Closed).unwrap(), json!("closed"));
+        assert_eq!(
+            serde_json::to_value(SessionState::Running).unwrap(),
+            json!("running")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Blocked).unwrap(),
+            json!("blocked")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Idle).unwrap(),
+            json!("idle")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Closed).unwrap(),
+            json!("closed")
+        );
     }
 
     #[test]

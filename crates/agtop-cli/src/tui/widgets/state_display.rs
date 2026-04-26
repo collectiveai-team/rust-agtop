@@ -11,7 +11,11 @@ pub fn display_state(
         return ("closed", th::STATE_CLOSED);
     }
 
-    match a.summary.state.unwrap_or(agtop_core::session::SessionState::Running) {
+    match a
+        .summary
+        .state
+        .unwrap_or(agtop_core::session::SessionState::Running)
+    {
         agtop_core::session::SessionState::Running => ("running", th::STATE_RUNNING),
         agtop_core::session::SessionState::Blocked => ("blocked", th::STATE_BLOCKED),
         agtop_core::session::SessionState::Idle => ("idle", th::STATE_IDLE),
@@ -69,7 +73,12 @@ mod tests {
     #[test]
     fn live_running_session_displays_running() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some(SessionState::Running), Some(now), Some(42), Some(Liveness::Live));
+        let a = analysis(
+            Some(SessionState::Running),
+            Some(now),
+            Some(42),
+            Some(Liveness::Live),
+        );
 
         let (label, style) = display_state(&a, now);
 
@@ -80,7 +89,12 @@ mod tests {
     #[test]
     fn live_blocked_session_displays_blocked() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some(SessionState::Blocked), Some(now), Some(42), Some(Liveness::Live));
+        let a = analysis(
+            Some(SessionState::Blocked),
+            Some(now),
+            Some(42),
+            Some(Liveness::Live),
+        );
 
         let (label, style) = display_state(&a, now);
 
@@ -91,7 +105,12 @@ mod tests {
     #[test]
     fn live_idle_session_displays_idle() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some(SessionState::Idle), Some(now), Some(42), Some(Liveness::Live));
+        let a = analysis(
+            Some(SessionState::Idle),
+            Some(now),
+            Some(42),
+            Some(Liveness::Live),
+        );
 
         let (label, style) = display_state(&a, now);
 
@@ -113,7 +132,12 @@ mod tests {
     #[test]
     fn stopped_liveness_displays_closed() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some(SessionState::Running), Some(now), Some(42), Some(Liveness::Stopped));
+        let a = analysis(
+            Some(SessionState::Running),
+            Some(now),
+            Some(42),
+            Some(Liveness::Stopped),
+        );
 
         let (label, style) = display_state(&a, now);
 
