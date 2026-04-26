@@ -588,7 +588,7 @@ struct JsonSession {
     cwd: Option<String>,
     started_at: Option<DateTime<Utc>>,
     last_active: Option<DateTime<Utc>>,
-    state: Option<String>,
+    state: Option<agtop_core::session::SessionState>,
     display_state: String,
     state_detail: Option<String>,
     model_effort: Option<String>,
@@ -637,7 +637,7 @@ impl JsonSession {
             cwd: a.summary.cwd.clone(),
             started_at: a.summary.started_at,
             last_active: a.summary.last_active,
-            state: a.summary.state.as_ref().map(|s| s.as_str().to_string()),
+            state: a.summary.state,
             display_state: display_state_label.to_string(),
             state_detail: a.summary.state_detail.clone(),
             model_effort: a.summary.model_effort.clone(),
@@ -661,7 +661,10 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals};
+    use agtop_core::session::{
+        ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals,
+    };
+    use agtop_core::Liveness;
     use std::path::PathBuf;
 
     #[test]
@@ -676,12 +679,12 @@ mod json_output_tests {
             Some("model".into()),
             Some("/tmp".into()),
             PathBuf::from("/tmp/sess.json"),
-            Some(SessionState::Closed),
+            Some(SessionState::Idle),
             Some("finish=stop".into()),
             None,
             None,
         );
-        let analysis = SessionAnalysis::new(
+        let mut analysis = SessionAnalysis::new(
             summary,
             TokenTotals::default(),
             CostBreakdown::default(),
@@ -693,11 +696,13 @@ mod json_output_tests {
             None,
             None,
         );
+        analysis.pid = Some(42);
+        analysis.liveness = Some(Liveness::Live);
 
         let json = JsonSession::from_analysis(&analysis, now);
 
-        assert_eq!(json.state.as_deref(), Some("closed"));
-        assert_eq!(json.display_state, "closed");
+        assert_eq!(json.state, Some(SessionState::Idle));
+        assert_eq!(json.display_state, "idle");
     }
 
     #[test]
