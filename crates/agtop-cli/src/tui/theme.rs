@@ -56,9 +56,10 @@ pub const COST_HIGH: Style = Style::new().fg(Color::Yellow);
 
 // ── Session state colours ──────────────────────────────────────────────────
 
-pub const STATE_WORKING: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-pub const STATE_WAITING: Style = Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD);
-pub const STATE_STALE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD);
+pub const STATE_RUNNING: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+pub const STATE_BLOCKED: Style = Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+pub const STATE_IDLE: Style = Style::new().fg(Color::Gray).add_modifier(Modifier::BOLD);
+pub const STATE_CLOSED: Style = Style::new().fg(Color::DarkGray).add_modifier(Modifier::BOLD);
 
 // ── Cost tab ─────────────────────────────────────────────────────────────
 

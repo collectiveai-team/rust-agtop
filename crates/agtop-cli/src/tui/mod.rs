@@ -827,7 +827,7 @@ mod tests {
     use crate::tui::column_config::ColumnId;
     use crate::version;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
     };
     use chrono::{TimeZone, Utc};
     use ratatui::backend::TestBackend;
@@ -854,7 +854,7 @@ mod tests {
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),
-            Some("waiting".into()),
+            Some(SessionState::Blocked),
             Some("tool approval pending".into()),
             Some("high".into()),
             Some("reasoning.effort=high".into()),
@@ -868,7 +868,7 @@ mod tests {
         s1_cost.output = 0.0075;
         s1_cost.cache_read = 0.010;
         s1_cost.total = 0.0205;
-        let s1 = SessionAnalysis::new(
+        let mut s1 = SessionAnalysis::new(
             s1_summary,
             s1_tokens,
             s1_cost,
@@ -880,6 +880,8 @@ mod tests {
             None,
             None,
         );
+        s1.pid = Some(12345);
+        s1.liveness = Some(agtop_core::process::Liveness::Live);
 
         let s2_summary = SessionSummary::new(
             ClientKind::Codex,
@@ -944,7 +946,7 @@ mod tests {
         assert!(contents.contains("Info"), "Info tab title missing");
         assert!(contents.contains("STATE"), "state header missing");
         assert!(contents.contains("EFFORT"), "effort header missing");
-        assert!(contents.contains("waiting"), "state value missing");
+        assert!(contents.contains("blocked"), "state value missing");
         assert!(contents.contains("high"), "effort value missing");
         assert!(
             contents.contains(version::display_version()),
@@ -1023,7 +1025,7 @@ mod tests {
             Some("model".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/working.json"),
-            Some("stopped".into()),
+            Some(SessionState::Closed),
             Some("finish=stop".into()),
             None,
             None,

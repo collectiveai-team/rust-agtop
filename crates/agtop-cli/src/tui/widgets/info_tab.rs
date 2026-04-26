@@ -123,7 +123,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                             "  {} tok  ${:.4}  {}",
                             compact_tokens(child_tokens),
                             child.cost.total,
-                            cs.state.as_deref().unwrap_or("-"),
+                            cs.state.as_ref().map(|s| s.as_str()).unwrap_or("-"),
                         )),
                     ]));
                 }

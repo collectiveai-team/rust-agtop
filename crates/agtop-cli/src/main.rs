@@ -637,7 +637,7 @@ impl JsonSession {
             cwd: a.summary.cwd.clone(),
             started_at: a.summary.started_at,
             last_active: a.summary.last_active,
-            state: a.summary.state.clone(),
+            state: a.summary.state.as_ref().map(|s| s.as_str().to_string()),
             display_state: display_state_label.to_string(),
             state_detail: a.summary.state_detail.clone(),
             model_effort: a.summary.model_effort.clone(),
@@ -661,7 +661,7 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
+    use agtop_core::session::{ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals};
     use std::path::PathBuf;
 
     #[test]
@@ -676,7 +676,7 @@ mod json_output_tests {
             Some("model".into()),
             Some("/tmp".into()),
             PathBuf::from("/tmp/sess.json"),
-            Some("stopped".into()),
+            Some(SessionState::Closed),
             Some("finish=stop".into()),
             None,
             None,
@@ -696,8 +696,8 @@ mod json_output_tests {
 
         let json = JsonSession::from_analysis(&analysis, now);
 
-        assert_eq!(json.state.as_deref(), Some("stopped"));
-        assert_eq!(json.display_state, "working");
+        assert_eq!(json.state.as_deref(), Some("closed"));
+        assert_eq!(json.display_state, "closed");
     }
 
     #[test]

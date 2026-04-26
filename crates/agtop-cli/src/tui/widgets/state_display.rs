@@ -3,45 +3,40 @@ use ratatui::style::Style;
 
 use crate::tui::theme as th;
 
-const WORKING_WINDOW_SECS: i64 = 30;
-/// A session reporting "waiting" that has had no activity for this long is
-/// considered stale — the agent process likely died or was killed.
-const WAITING_STALE_SECS: i64 = 300; // 5 minutes
-
 pub fn display_state(
     a: &agtop_core::session::SessionAnalysis,
-    now: DateTime<Utc>,
+    _now: DateTime<Utc>,
 ) -> (&'static str, Style) {
-    let age_secs = a
-        .summary
-        .last_active
-        .map(|ts| (now - ts).num_seconds())
-        .unwrap_or(i64::MAX);
-
-    if a.summary.state.as_deref() == Some("waiting") && age_secs <= WAITING_STALE_SECS {
-        return ("waiting", th::STATE_WAITING);
+    if a.pid.is_none() || matches!(a.liveness, Some(agtop_core::process::Liveness::Stopped)) {
+        return ("closed", th::STATE_CLOSED);
     }
 
-    let is_recent = age_secs <= WORKING_WINDOW_SECS;
-
-    if is_recent {
-        ("working", th::STATE_WORKING)
-    } else {
-        ("stale", th::STATE_STALE)
+    match a.summary.state.unwrap_or(agtop_core::session::SessionState::Running) {
+        agtop_core::session::SessionState::Running => ("running", th::STATE_RUNNING),
+        agtop_core::session::SessionState::Blocked => ("blocked", th::STATE_BLOCKED),
+        agtop_core::session::SessionState::Idle => ("idle", th::STATE_IDLE),
+        agtop_core::session::SessionState::Closed => ("closed", th::STATE_CLOSED),
+        _ => ("closed", th::STATE_CLOSED),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agtop_core::process::Liveness;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
     };
     use chrono::TimeZone;
     use std::path::PathBuf;
 
-    fn analysis(state: Option<&str>, last_active: Option<DateTime<Utc>>) -> SessionAnalysis {
-        SessionAnalysis::new(
+    fn analysis(
+        state: Option<SessionState>,
+        last_active: Option<DateTime<Utc>>,
+        pid: Option<u32>,
+        liveness: Option<Liveness>,
+    ) -> SessionAnalysis {
+        let mut a = SessionAnalysis::new(
             SessionSummary::new(
                 ClientKind::Claude,
                 None,
@@ -51,7 +46,7 @@ mod tests {
                 Some("model".into()),
                 Some("/tmp".into()),
                 PathBuf::from("/tmp/sess.jsonl"),
-                state.map(str::to_string),
+                state,
                 None,
                 None,
                 None,
@@ -65,63 +60,64 @@ mod tests {
             None,
             None,
             None,
-        )
+        );
+        a.pid = pid;
+        a.liveness = liveness;
+        a
     }
 
     #[test]
-    fn waiting_state_maps_to_waiting_style() {
+    fn live_running_session_displays_running() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now));
+        let a = analysis(Some(SessionState::Running), Some(now), Some(42), Some(Liveness::Live));
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "waiting");
-        assert_eq!(style, th::STATE_WAITING);
+        assert_eq!(label, "running");
+        assert_eq!(style, th::STATE_RUNNING);
     }
 
     #[test]
-    fn recent_non_waiting_session_maps_to_working() {
-        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 30).unwrap();
-        let a = analysis(Some("stopped"), Some(now - chrono::Duration::seconds(10)));
+    fn live_blocked_session_displays_blocked() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
+        let a = analysis(Some(SessionState::Blocked), Some(now), Some(42), Some(Liveness::Live));
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "working");
-        assert_eq!(style, th::STATE_WORKING);
+        assert_eq!(label, "blocked");
+        assert_eq!(style, th::STATE_BLOCKED);
     }
 
     #[test]
-    fn old_non_waiting_session_maps_to_stale() {
-        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 1, 0).unwrap();
-        let a = analysis(None, Some(now - chrono::Duration::seconds(45)));
+    fn live_idle_session_displays_idle() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
+        let a = analysis(Some(SessionState::Idle), Some(now), Some(42), Some(Liveness::Live));
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "stale");
-        assert_eq!(style, th::STATE_STALE);
+        assert_eq!(label, "idle");
+        assert_eq!(style, th::STATE_IDLE);
     }
 
     #[test]
-    fn waiting_state_older_than_stale_threshold_maps_to_stale() {
-        // A session stuck in "waiting" for > 5 minutes is stale (agent died).
-        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(301)));
+    fn no_pid_session_displays_closed() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
+        let a = analysis(Some(SessionState::Running), Some(now), None, None);
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "stale");
-        assert_eq!(style, th::STATE_STALE);
+        assert_eq!(label, "closed");
+        assert_eq!(style, th::STATE_CLOSED);
     }
 
     #[test]
-    fn waiting_state_within_stale_threshold_maps_to_waiting() {
-        // A session in "waiting" for < 5 minutes is still shown as waiting.
-        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(120)));
+    fn stopped_liveness_displays_closed() {
+        let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
+        let a = analysis(Some(SessionState::Running), Some(now), Some(42), Some(Liveness::Stopped));
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "waiting");
-        assert_eq!(style, th::STATE_WAITING);
+        assert_eq!(label, "closed");
+        assert_eq!(style, th::STATE_CLOSED);
     }
 }
