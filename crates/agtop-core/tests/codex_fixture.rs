@@ -13,7 +13,8 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::clients::codex::CodexClient;
-use agtop_core::{Client, ClientKind, Plan, SessionSummary};
+use agtop_core::session::{ClientKind, SessionState, SessionSummary};
+use agtop_core::{Client, Plan};
 
 // ---------------------------------------------------------------------------
 // Minimal temp-dir helper (mirrors the one in the codex unit tests)
@@ -193,7 +194,7 @@ fn codex_fixture_extracts_effort_and_waiting_state() {
         summary.model_effort_detail.as_deref(),
         Some("turn_context.effort")
     );
-    assert_eq!(summary.state.as_deref(), Some("waiting"));
+    assert_eq!(summary.state, Some(SessionState::Running));
     assert_eq!(
         summary.state_detail.as_deref(),
         Some("response_item:function_call")

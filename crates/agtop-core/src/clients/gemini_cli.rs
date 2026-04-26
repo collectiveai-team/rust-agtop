@@ -17,7 +17,9 @@ use crate::client::Client;
 use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
-use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{
+    ClientKind, CostBreakdown, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
+};
 
 #[derive(Debug)]
 pub struct GeminiCliClient {
@@ -376,7 +378,7 @@ fn parse_gemini_session(
     let mut last_updated: Option<DateTime<Utc>> = None;
     let mut model = global_model;
     let mut session_title: Option<String> = None;
-    let mut state: Option<String> = None;
+    let mut state: Option<SessionState> = None;
     let mut state_detail: Option<String> = None;
     let mut seen = 0usize;
 
@@ -492,7 +494,7 @@ fn parse_gemini_session_json(
         })
         .or(global_model);
 
-    let mut state: Option<String> = None;
+    let mut state: Option<SessionState> = None;
     let mut state_detail: Option<String> = None;
     if let Some(messages) = v.get("messages").and_then(|messages| messages.as_array()) {
         for message in messages {
@@ -536,7 +538,7 @@ fn parse_gemini_session_json(
 
 fn update_state_from_gemini_message(
     message: &serde_json::Value,
-    state: &mut Option<String>,
+    state: &mut Option<SessionState>,
     state_detail: &mut Option<String>,
 ) {
     if let Some(tool_calls) = gemini_tool_calls(message) {
@@ -544,14 +546,14 @@ fn update_state_from_gemini_message(
             .iter()
             .any(|call| call.get("status").and_then(|x| x.as_str()) != Some("success"))
         {
-            *state = Some("waiting".to_string());
+            *state = Some(SessionState::Running);
             *state_detail = Some("gemini.toolCalls.pending_or_error".to_string());
         } else if !tool_calls.is_empty() {
-            *state = Some("stopped".to_string());
+            *state = Some(SessionState::Idle);
             *state_detail = Some("gemini.toolCalls.success".to_string());
         }
     } else {
-        *state = Some("stopped".to_string());
+        *state = Some(SessionState::Idle);
         *state_detail = Some("gemini.message".to_string());
     }
 }

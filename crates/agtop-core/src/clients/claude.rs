@@ -21,7 +21,7 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
 };
 
 /// Upper bound on how many recent transcripts we scan for synthetic
@@ -248,18 +248,18 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn state_from_claude_record(v: &serde_json::Value) -> Option<(String, String)> {
+fn state_from_claude_record(v: &serde_json::Value) -> Option<(SessionState, String)> {
     match v
         .get("message")
         .and_then(|m| m.get("stop_reason"))
         .and_then(|x| x.as_str())
     {
         Some("tool_use") => Some((
-            "waiting".to_string(),
+            SessionState::Running,
             "assistant.stop_reason=tool_use".to_string(),
         )),
         Some("end_turn") => Some((
-            "stopped".to_string(),
+            SessionState::Idle,
             "assistant.stop_reason=end_turn".to_string(),
         )),
         _ => None,
@@ -406,7 +406,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut earliest: Option<DateTime<Utc>> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
-    let mut state: Option<String> = None;
+    let mut state: Option<SessionState> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
     let mut seen = 0usize;
@@ -830,14 +830,14 @@ mod tests {
     }
 
     #[test]
-    fn assistant_stop_reason_tool_use_maps_to_waiting() {
+    fn assistant_stop_reason_tool_use_maps_to_running() {
         let v = serde_json::json!({
             "message": { "stop_reason": "tool_use" }
         });
         assert_eq!(
             state_from_claude_record(&v),
             Some((
-                "waiting".to_string(),
+                SessionState::Running,
                 "assistant.stop_reason=tool_use".to_string(),
             ))
         );
@@ -1125,7 +1125,7 @@ mod tests {
         assert_eq!(child.session_id, "subagent-child");
         assert_eq!(child.model.as_deref(), Some("claude-3-5-haiku-20241022"));
         assert_eq!(child.cwd.as_deref(), Some("/tmp/subagent"));
-        assert_eq!(child.state.as_deref(), Some("stopped"));
+        assert_eq!(child.state, Some(SessionState::Idle));
         assert_eq!(
             child.state_detail.as_deref(),
             Some("assistant.stop_reason=end_turn")

@@ -25,7 +25,7 @@ use crate::clients::util::{dir_exists, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
 };
 
 const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -166,10 +166,10 @@ fn ms_to_utc(ms: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(ms).single()
 }
 
-fn state_from_opencode_message(v: &serde_json::Value) -> Option<(String, String)> {
+fn state_from_opencode_message(v: &serde_json::Value) -> Option<(SessionState, String)> {
     match v.get("finish").and_then(|x| x.as_str()) {
-        Some("tool-calls") => Some(("waiting".to_string(), "finish=tool-calls".to_string())),
-        Some("stop") => Some(("stopped".to_string(), "finish=stop".to_string())),
+        Some("tool-calls") => Some((SessionState::Running, "finish=tool-calls".to_string())),
+        Some("stop") => Some((SessionState::Idle, "finish=stop".to_string())),
         _ => None,
     }
 }
@@ -1173,7 +1173,7 @@ fn list_child_sessions_sqlite(
 fn latest_message_state_sqlite(
     conn: &rusqlite::Connection,
     session_id: &str,
-) -> (Option<String>, Option<String>) {
+) -> (Option<SessionState>, Option<String>) {
     // Only inspect the most recent *assistant* message for state.
     // User messages (tool results, question responses) do not carry a
     // `finish` field and would otherwise mask the actual assistant state.
@@ -1574,7 +1574,7 @@ fn summarize_opencode_session_json(
     })
 }
 
-fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
+fn latest_message_state_json(msg_dir: &Path) -> (Option<SessionState>, Option<String>) {
     if !dir_exists(msg_dir) {
         return (None, None);
     }
@@ -2189,11 +2189,11 @@ mod tests {
     }
 
     #[test]
-    fn finish_tool_calls_maps_to_waiting() {
+    fn finish_tool_calls_maps_to_running() {
         let v = serde_json::json!({ "finish": "tool-calls" });
         assert_eq!(
             state_from_opencode_message(&v),
-            Some(("waiting".to_string(), "finish=tool-calls".to_string()))
+            Some((SessionState::Running, "finish=tool-calls".to_string()))
         );
     }
 

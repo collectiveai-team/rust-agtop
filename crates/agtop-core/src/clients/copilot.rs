@@ -21,7 +21,8 @@ use crate::clients::util::{for_each_jsonl, mtime, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
 use crate::session::{
-    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionState, SessionSummary,
+    TokenTotals,
 };
 
 /// Quota API cache TTL.
@@ -413,7 +414,7 @@ fn parse_session_jsonl_all(
         None,
         path.to_path_buf(),
         if waiting {
-            Some("waiting".into())
+            Some(SessionState::Blocked)
         } else {
             None
         },

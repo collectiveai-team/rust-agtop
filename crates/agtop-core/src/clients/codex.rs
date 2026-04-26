@@ -24,7 +24,7 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionState, SessionSummary, TokenTotals,
 };
 
 /// Number of most-recently-modified rollout files to scan when looking
@@ -309,10 +309,10 @@ fn effort_from_turn_context(payload: &serde_json::Value) -> Option<(String, Stri
         })
 }
 
-fn state_from_response_item(payload: &serde_json::Value) -> Option<(String, String)> {
+fn state_from_response_item(payload: &serde_json::Value) -> Option<(SessionState, String)> {
     match payload.get("type").and_then(|x| x.as_str()) {
         Some("function_call") | Some("custom_tool_call") => Some((
-            "waiting".to_string(),
+            SessionState::Running,
             format!(
                 "response_item:{}",
                 payload
@@ -362,7 +362,7 @@ fn message_text_from_payload(payload: &serde_json::Value) -> Option<String> {
         })
 }
 
-fn state_from_codex_message(payload: &serde_json::Value) -> Option<(String, String)> {
+fn state_from_codex_message(payload: &serde_json::Value) -> Option<(SessionState, String)> {
     if payload.get("role").and_then(|x| x.as_str()) != Some("assistant") {
         return None;
     }
@@ -370,12 +370,12 @@ fn state_from_codex_message(payload: &serde_json::Value) -> Option<(String, Stri
     let text = message_text_from_payload(payload).unwrap_or_default();
     if phase == Some("final_answer") && text.contains('?') {
         Some((
-            "waiting".to_string(),
+            SessionState::Blocked,
             "response_item:assistant-question".to_string(),
         ))
     } else if phase == Some("final_answer") {
         Some((
-            "stopped".to_string(),
+            SessionState::Idle,
             "response_item:assistant-final".to_string(),
         ))
     } else {
@@ -590,7 +590,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut cwd: Option<String> = None;
     let mut model_effort: Option<String> = None;
     let mut model_effort_detail: Option<String> = None;
-    let mut state: Option<String> = None;
+    let mut state: Option<SessionState> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
     // `thread_name_updated` is the authoritative AI-generated title; once set
@@ -662,7 +662,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                         // clears any prior "waiting" state — the tool call completed.
                         let ty = p.get("type").and_then(|x| x.as_str()).unwrap_or("");
                         if matches!(ty, "function_call_output" | "custom_tool_call_output") {
-                            state = Some("stopped".to_string());
+                            state = Some(SessionState::Idle);
                             state_detail = Some("response_item:tool-output".to_string());
                         }
                     }

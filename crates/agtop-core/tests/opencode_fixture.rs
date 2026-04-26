@@ -12,7 +12,8 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::clients::opencode::OpenCodeClient;
-use agtop_core::{Client, ClientKind, Plan, SessionSummary};
+use agtop_core::session::{ClientKind, SessionState, SessionSummary};
+use agtop_core::{Client, Plan};
 
 // ---------------------------------------------------------------------------
 // Temp-dir helper
@@ -356,8 +357,8 @@ fn opencode_sqlite_children_follow_parent_id() {
     assert_eq!(children[1].session_id, "ses_child_a");
     assert_eq!(children[0].cwd.as_deref(), Some("/tmp/opencode-child-b"));
     assert_eq!(children[0].model.as_deref(), Some(MODEL_ID));
-    assert_eq!(children[0].state.as_deref(), Some("stopped"));
-    assert_eq!(children[1].state.as_deref(), Some("waiting"));
+    assert_eq!(children[0].state, Some(SessionState::Idle));
+    assert_eq!(children[1].state, Some(SessionState::Running));
 }
 
 // ---------------------------------------------------------------------------
