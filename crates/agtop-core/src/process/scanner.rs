@@ -2,9 +2,11 @@
 
 use std::path::PathBuf;
 
+use crate::process::ProcessMetrics;
+
 /// One candidate process that might be running an agent CLI.
 #[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Candidate {
     pub pid: u32,
     pub parent_pid: Option<u32>,
@@ -16,6 +18,9 @@ pub(crate) struct Candidate {
     pub cwd: Option<PathBuf>,
     /// Process start time, unix epoch seconds.
     pub start_time: u64,
+    /// Live resource metrics sampled when the candidate was enumerated.
+    /// `None` on `FakeScanner` fixtures unless a test explicitly sets it.
+    pub metrics: Option<ProcessMetrics>,
 }
 
 /// True if `needle` appears in `haystack` bounded on both sides by either
@@ -206,6 +211,14 @@ impl Scanner for SysinfoScanner {
             } else {
                 raw_binary
             };
+            let disk = proc.disk_usage();
+            let metrics = Some(ProcessMetrics {
+                cpu_percent: proc.cpu_usage(),
+                memory_bytes: proc.memory(),
+                virtual_memory_bytes: proc.virtual_memory(),
+                disk_read_bytes: disk.total_read_bytes,
+                disk_written_bytes: disk.total_written_bytes,
+            });
             self.candidates.push(Candidate {
                 pid: pid.as_u32(),
                 parent_pid: proc.parent().map(|p| p.as_u32()),
@@ -213,6 +226,7 @@ impl Scanner for SysinfoScanner {
                 argv,
                 cwd: proc.cwd().map(|p| p.to_path_buf()),
                 start_time: proc.start_time(),
+                metrics,
             });
         }
     }
@@ -249,6 +263,7 @@ pub(crate) mod tests {
                 argv: vec!["claude".to_string()],
                 cwd: Some(PathBuf::from("/home/test")),
                 start_time: 1700000000,
+                metrics: None,
             }],
         };
         s.refresh();

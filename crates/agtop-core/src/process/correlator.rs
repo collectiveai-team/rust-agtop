@@ -33,7 +33,7 @@ use crate::process::argv_uuid::{extract_session_uuid, is_valid_uuid};
 use crate::process::fd::FdScanner;
 use crate::process::scanner::{Candidate, Scanner};
 use crate::process::transcript_paths::expected_binaries;
-use crate::process::{Confidence, Liveness, ProcessInfo};
+use crate::process::{Confidence, Liveness, ProcessInfo, ProcessMetrics};
 use crate::session::{ClientKind, SessionSummary};
 
 /// Run one correlation pass.
@@ -81,7 +81,7 @@ pub(crate) fn correlate(
                             liveness: Liveness::Live,
                             match_confidence: Confidence::High,
                             parent_pid: c.parent_pid,
-                            metrics: None,
+                            metrics: c.metrics.clone(),
                         },
                     );
                     used_pids.insert(c.pid);
@@ -161,7 +161,7 @@ pub(crate) fn correlate(
                     liveness: Liveness::Live,
                     match_confidence: Confidence::High,
                     parent_pid: c.parent_pid,
-                    metrics: None,
+                    metrics: c.metrics.clone(),
                 },
             );
             used_pids.insert(c.pid);
@@ -185,6 +185,7 @@ pub(crate) fn correlate(
         session: &'a SessionSummary,
         pid: u32,
         parent_pid: Option<u32>,
+        metrics: Option<ProcessMetrics>,
     }
     let mut score_matches: Vec<ScoreMatch<'_>> = Vec::new();
 
@@ -263,6 +264,7 @@ pub(crate) fn correlate(
                 session,
                 pid: c.pid,
                 parent_pid: c.parent_pid,
+                metrics: c.metrics.clone(),
             });
         }
     }
@@ -323,7 +325,7 @@ pub(crate) fn correlate(
                 liveness: Liveness::Live,
                 match_confidence: Confidence::Medium,
                 parent_pid: m.parent_pid,
-                metrics: None,
+                metrics: m.metrics.clone(),
             },
         );
         used_pids.insert(m.pid);
@@ -493,6 +495,7 @@ mod tests {
             argv: vec![binary.into()],
             cwd: Some(PathBuf::from(cwd)),
             start_time: 1700000000,
+            metrics: None,
         }
     }
 
@@ -1037,5 +1040,34 @@ mod tests {
         assert!(find_uuids_in("/no/uuid/here.txt").is_empty());
         assert!(find_uuids_in("").is_empty());
         assert!(find_uuids_in("short").is_empty());
+    }
+
+    #[test]
+    fn tier_a_copies_candidate_metrics_to_process_info() {
+        use crate::process::ProcessMetrics;
+        let session = claude_session(UUID_A, &format!("/tmp/{UUID_A}.jsonl"));
+        let metrics = ProcessMetrics {
+            cpu_percent: 7.0,
+            memory_bytes: 10,
+            virtual_memory_bytes: 20,
+            disk_read_bytes: 30,
+            disk_written_bytes: 40,
+        };
+        let scanner = FakeScanner {
+            processes: vec![Candidate {
+                pid: 42,
+                parent_pid: None,
+                binary: "claude".to_string(),
+                argv: vec!["claude".to_string(), "--resume".to_string(), UUID_A.to_string()],
+                cwd: Some(std::path::PathBuf::from("/home/user/proj")),
+                start_time: Utc::now().timestamp() as u64,
+                metrics: Some(metrics.clone()),
+            }],
+        };
+        let fd_scanner = FakeFdScanner::default();
+        let out = correlate(&scanner, &fd_scanner, &[session]);
+        let info = out.get(UUID_A).expect("should have matched");
+        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(40));
+        assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(7.0));
     }
 }

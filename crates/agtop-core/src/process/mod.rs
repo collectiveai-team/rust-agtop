@@ -316,6 +316,7 @@ mod lifecycle_tests {
                 argv: vec!["claude".into()],
                 cwd: None,
                 start_time: 1700000000,
+                metrics: None,
             }],
         });
         let mut fd_map = std::collections::HashMap::new();
