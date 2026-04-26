@@ -235,6 +235,7 @@ fn run_watch(
     // Hide the cursor while redrawing to avoid flicker.
     let _ = execute!(stdout, cursor::Hide);
     let result = (|| -> Result<()> {
+        let mut correlator = agtop_core::ProcessCorrelator::new();
         while running.load(Ordering::SeqCst) {
             // Clear screen + move to top-left before each render.
             execute!(
@@ -246,7 +247,7 @@ fn run_watch(
 
             let mut analyses = analyze_all(clients, plan);
             let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
-            let info_map = agtop_core::ProcessCorrelator::new().snapshot(&summaries);
+            let info_map = correlator.snapshot(&summaries);
             agtop_core::process::attach_process_info(&info_map, &mut analyses);
             let summaries = discover_all(clients);
             render_table(&summaries, &analyses);
@@ -455,6 +456,8 @@ mod client_parse_tests {
 }
 
 fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAnalysis]) {
+    // 14 columns (10+16+10+16+4+20+18+9+9+9+8+7+6+7) + 13 × 2-space gaps
+    const TABLE_WIDTH: usize = 175;
     // Index analyses by session_id for quick lookup.
     use std::collections::HashMap;
     let by_id: HashMap<&str, &SessionAnalysis> = analyses
@@ -480,7 +483,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
         "CPU",
         "MEM"
     );
-    println!("{}", "-".repeat(184));
+    println!("{}", "-".repeat(TABLE_WIDTH));
 
     let mut printed = 0usize;
     for s in summaries {
@@ -534,7 +537,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             Some(a) => a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             None => "-".into(),
         };
-        let cpu_str = fmt::percent_1(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
+        let cpu_str = fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
         let mem_str = fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
         println!(
             "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
@@ -568,7 +571,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     // Footer totals.
     let totals = JsonTotals::from(&analyses.to_vec());
-    println!("{}", "-".repeat(184));
+    println!("{}", "-".repeat(TABLE_WIDTH));
     println!(
         "totals: {} sessions  in={}  out={}  cache={}  cost=${:.4} (billed)  incl.sessions={}",
         analyses.len(),

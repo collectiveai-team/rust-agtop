@@ -107,7 +107,7 @@ pub fn format_duration_compact(secs: u64) -> String {
 
 /// Format an optional CPU percentage with one decimal place.
 /// Returns `"-"` when the value is absent.
-pub fn percent_1(value: Option<f32>) -> String {
+pub fn format_percent(value: Option<f32>) -> String {
     value
         .map(|v| format!("{v:.1}%"))
         .unwrap_or_else(|| "-".to_string())
