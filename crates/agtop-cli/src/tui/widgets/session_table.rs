@@ -373,6 +373,21 @@ fn row_for<'a>(
                 }
                 _ => "-".into(),
             }),
+            ColumnId::Cpu => Cell::from(crate::fmt::format_percent(
+                a.process_metrics.as_ref().map(|m| m.cpu_percent),
+            )),
+            ColumnId::Memory => Cell::from(crate::fmt::compact_opt(
+                a.process_metrics.as_ref().map(|m| m.memory_bytes),
+            )),
+            ColumnId::VirtualMemory => Cell::from(crate::fmt::compact_opt(
+                a.process_metrics.as_ref().map(|m| m.virtual_memory_bytes),
+            )),
+            ColumnId::DiskRead => Cell::from(crate::fmt::compact_opt(
+                a.process_metrics.as_ref().map(|m| m.disk_read_bytes),
+            )),
+            ColumnId::DiskWritten => Cell::from(crate::fmt::compact_opt(
+                a.process_metrics.as_ref().map(|m| m.disk_written_bytes),
+            )),
             // SubscriptionLogo is injected by visible() — rendered as empty for now.
             ColumnId::SubscriptionLogo => Cell::from(""),
         })

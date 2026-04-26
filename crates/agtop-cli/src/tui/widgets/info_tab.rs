@@ -340,6 +340,26 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
                 _ => "-".into(),
             },
         ),
+        ColumnId::Cpu => kv_line(
+            "cpu",
+            crate::fmt::format_percent(a.process_metrics.as_ref().map(|m| m.cpu_percent)),
+        ),
+        ColumnId::Memory => kv_line(
+            "memory",
+            crate::fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.memory_bytes)),
+        ),
+        ColumnId::VirtualMemory => kv_line(
+            "virtual_memory",
+            crate::fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.virtual_memory_bytes)),
+        ),
+        ColumnId::DiskRead => kv_line(
+            "disk_read",
+            crate::fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_read_bytes)),
+        ),
+        ColumnId::DiskWritten => kv_line(
+            "disk_written",
+            crate::fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes)),
+        ),
         // SubscriptionLogo is injected by visible() — not displayed in info tab.
         ColumnId::SubscriptionLogo => Line::default(),
     }

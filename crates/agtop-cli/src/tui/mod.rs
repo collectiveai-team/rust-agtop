@@ -927,7 +927,9 @@ mod tests {
     /// test robust against time-zone drift.
     #[test]
     fn renders_main_layout_without_panicking() {
-        let backend = TestBackend::new(140, 20);
+        // Width increased from 140→160 to accommodate the 2 new visible columns
+        // (CPU=6, MEM=7) added in the process-metrics feature branch.
+        let backend = TestBackend::new(160, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let app = fixture_app();
         let mut state = ratatui::widgets::TableState::default();
