@@ -537,8 +537,10 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             Some(a) => a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
             None => "-".into(),
         };
-        let cpu_str = fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
-        let mem_str = fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
+        let cpu_str =
+            fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
+        let mem_str =
+            fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
         println!(
             "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
             s.client.as_str(),
@@ -732,8 +734,14 @@ mod json_output_tests {
 
         assert_eq!(json.state.as_deref(), Some("stopped"));
         assert_eq!(json.display_state, "working");
-        assert_eq!(json.process_metrics.as_ref().map(|m| m.cpu_percent), Some(3.5));
-        assert_eq!(json.process_metrics.as_ref().map(|m| m.disk_written_bytes), Some(12));
+        assert_eq!(
+            json.process_metrics.as_ref().map(|m| m.cpu_percent),
+            Some(3.5)
+        );
+        assert_eq!(
+            json.process_metrics.as_ref().map(|m| m.disk_written_bytes),
+            Some(12)
+        );
     }
 
     #[test]

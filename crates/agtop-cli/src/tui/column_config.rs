@@ -323,7 +323,10 @@ impl ColumnConfig {
         let existing_ids: Vec<ColumnId> = self.columns.iter().map(|e| e.id).collect();
         for &id in ColumnId::all() {
             if !existing_ids.contains(&id) {
-                self.columns.push(ColumnEntry { id, visible: default_visible(id) });
+                self.columns.push(ColumnEntry {
+                    id,
+                    visible: default_visible(id),
+                });
             }
         }
         self
@@ -665,13 +668,21 @@ mod cfg_client_tests {
             "normalize must not produce duplicate columns"
         );
         // New columns must be appended with their default visibility.
-        assert!(cfg.columns.iter().any(|c| c.id == ColumnId::Cpu),
-            "Cpu column must be present after normalization");
-        assert!(cfg.columns.iter().any(|c| c.id == ColumnId::Memory),
-            "Memory column must be present after normalization");
+        assert!(
+            cfg.columns.iter().any(|c| c.id == ColumnId::Cpu),
+            "Cpu column must be present after normalization"
+        );
+        assert!(
+            cfg.columns.iter().any(|c| c.id == ColumnId::Memory),
+            "Memory column must be present after normalization"
+        );
         // Cpu and Memory are visible by default; the others are hidden.
         let cpu = cfg.columns.iter().find(|c| c.id == ColumnId::Cpu).unwrap();
-        let mem = cfg.columns.iter().find(|c| c.id == ColumnId::Memory).unwrap();
+        let mem = cfg
+            .columns
+            .iter()
+            .find(|c| c.id == ColumnId::Memory)
+            .unwrap();
         assert!(cpu.visible, "Cpu should be visible by default");
         assert!(mem.visible, "Memory should be visible by default");
     }

@@ -1057,7 +1057,11 @@ mod tests {
                 pid: 42,
                 parent_pid: None,
                 binary: "claude".to_string(),
-                argv: vec!["claude".to_string(), "--resume".to_string(), UUID_A.to_string()],
+                argv: vec![
+                    "claude".to_string(),
+                    "--resume".to_string(),
+                    UUID_A.to_string(),
+                ],
                 cwd: Some(std::path::PathBuf::from("/home/user/proj")),
                 start_time: Utc::now().timestamp() as u64,
                 metrics: Some(metrics.clone()),
@@ -1066,7 +1070,10 @@ mod tests {
         let fd_scanner = FakeFdScanner::default();
         let out = correlate(&scanner, &fd_scanner, &[session]);
         let info = out.get(UUID_A).expect("should have matched");
-        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(40));
+        assert_eq!(
+            info.metrics.as_ref().map(|m| m.disk_written_bytes),
+            Some(40)
+        );
         assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(7.0));
     }
 
@@ -1094,11 +1101,20 @@ mod tests {
         };
         // fd_scanner returns the session transcript path for pid 99.
         let fd_scanner = FakeFdScanner {
-            map: [(99u32, vec![std::path::PathBuf::from(format!("/home/.claude/{UUID_A}.jsonl"))])].into(),
+            map: [(
+                99u32,
+                vec![std::path::PathBuf::from(format!(
+                    "/home/.claude/{UUID_A}.jsonl"
+                ))],
+            )]
+            .into(),
         };
         let out = correlate(&scanner, &fd_scanner, &[session]);
         let info = out.get(UUID_A).expect("should have matched via Tier B");
-        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(400));
+        assert_eq!(
+            info.metrics.as_ref().map(|m| m.disk_written_bytes),
+            Some(400)
+        );
         assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(5.0));
     }
 
@@ -1134,7 +1150,10 @@ mod tests {
         let fd_scanner = FakeFdScanner::default();
         let out = correlate(&scanner, &fd_scanner, &[session]);
         let info = out.get(UUID_A).expect("should have matched via Tier C");
-        assert_eq!(info.metrics.as_ref().map(|m| m.disk_written_bytes), Some(444));
+        assert_eq!(
+            info.metrics.as_ref().map(|m| m.disk_written_bytes),
+            Some(444)
+        );
         assert_eq!(info.metrics.as_ref().map(|m| m.cpu_percent), Some(9.0));
     }
 }

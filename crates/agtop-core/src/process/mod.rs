@@ -266,7 +266,10 @@ mod lifecycle_tests {
         assert_eq!(p.pid, Some(4242));
         assert_eq!(p.liveness, Some(Liveness::Live));
         assert_eq!(p.match_confidence, Some(Confidence::High));
-        assert_eq!(p.process_metrics.as_ref().map(|m| m.cpu_percent), Some(FAKE_CPU));
+        assert_eq!(
+            p.process_metrics.as_ref().map(|m| m.cpu_percent),
+            Some(FAKE_CPU)
+        );
         for child in &p.children {
             assert_eq!(
                 child.pid,
