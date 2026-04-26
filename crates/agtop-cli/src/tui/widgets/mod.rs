@@ -8,6 +8,7 @@ pub mod dashboard_cost;
 pub mod dashboard_plan;
 pub mod dashboard_usage;
 pub mod info_tab;
+pub mod process_tab;
 pub mod quota_bar;
 pub mod quota_tab;
 pub mod session_table;
