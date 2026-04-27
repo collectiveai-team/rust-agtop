@@ -1,0 +1,35 @@
+---
+source: crates/agtop-cli/tests/config_snapshot.rs
+assertion_line: 17
+expression: buffer_to_text(&buf)
+---
+ 󰍉 Search:
+  󰏘  ‹ Appearance ›           │Appearance
+  󱍷  Columns                  │────────────────────────────────────────
+  󰇚  Refresh                  │
+  󰣉  Clients                  │  Theme                 [ vscode-dark+ ▾ ]
+  󰥻  Keybinds                 │  True color            [ auto ▾ ]   auto / on / off
+  󰆼  Data sources             │  Mouse capture         [x]   (Shift+click for text selection)
+  󰋽  About                    │  Show version badge    [x]
+                              │  Animations (waiting pulse)[x]
+                              │  Nerd Font icons       [ ]   (requires Nerd Font in terminal)
+                              │  Header density        ( ) compact  (•) normal  ( ) detailed
+                              │
+                              │Client colors
+                              │────────────────────────────────────────
+                              │  claude-code           ████  #D97757
+                              │  codex                 ████  #00A67E
+                              │  gemini-cli            ████  #4285F4
+                              │  copilot               ████  #FFD43B
+                              │  cursor                ████  #A78BFA
+                              │  antigravity           ████  #22D3EE
+                              │  opencode              ████  #F472B6
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+ [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help

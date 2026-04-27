@@ -1,0 +1,35 @@
+---
+source: crates/agtop-cli/tests/config_snapshot.rs
+assertion_line: 17
+expression: buffer_to_text(&buf)
+---
+ / Search:
+  Appearance                  │About
+  Columns                     │────────────────────────────────────────
+  ⟳  Refresh                  │
+  Clients                     │  Version       0.3.0
+  Keybinds                    │  Git SHA       dev
+  Data sources                │  Config file   /home/rbarriga/.config/agtop/config.toml
+  ‹ About ›                   │  Repository    https://github.com/collectiveai-team/rust-agtop
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+ [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help
