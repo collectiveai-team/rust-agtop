@@ -62,25 +62,38 @@ impl SessionsTable {
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         // Map columns from default_visible into column constraints + header strings.
         let columns = column_config::default_visible_v2();
-        let mut header_cells: Vec<Cell> = Vec::with_capacity(columns.len() + 2);
+
+        // Find insertion point for ACTIVITY column: after ACTION (index in columns).
+        let action_idx = columns.iter().position(|c| *c == ColumnId::Action);
+
+        let mut header_cells: Vec<Cell> = Vec::with_capacity(columns.len() + 3);
         // State dot column has no header label.
         header_cells.push(Cell::from(""));
-        for c in &columns {
+        for (i, c) in columns.iter().enumerate() {
             header_cells.push(Cell::from(c.label()).style(
                 Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
             ));
+            // Insert ACTIVITY header after ACTION.
+            if Some(i) == action_idx {
+                header_cells.push(Cell::from("ACTIVITY").style(
+                    Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
+                ));
+            }
         }
 
         let body_rows: Vec<Row> = self
             .rows
             .iter()
-            .map(|sr| self.render_row(sr, &columns, theme))
+            .map(|sr| self.render_row(sr, &columns, action_idx, theme))
             .collect();
 
-        let mut constraints: Vec<Constraint> = Vec::with_capacity(columns.len() + 1);
+        let mut constraints: Vec<Constraint> = Vec::with_capacity(columns.len() + 2);
         constraints.push(Constraint::Length(2)); // state dot + space
-        for c in &columns {
+        for (i, c) in columns.iter().enumerate() {
             constraints.push(width_for(*c));
+            if Some(i) == action_idx {
+                constraints.push(Constraint::Length(8)); // ACTIVITY sparkline
+            }
         }
 
         let table = Table::new(body_rows, &constraints)
@@ -92,6 +105,7 @@ impl SessionsTable {
         &'a self,
         row: &'a SessionRow,
         columns: &[ColumnId],
+        action_idx: Option<usize>,
         theme: &Theme,
     ) -> Row<'a> {
         // Read state directly from core (post-normalization field).
@@ -109,7 +123,7 @@ impl SessionsTable {
         };
 
         // Build cells.
-        let mut cells: Vec<Cell> = Vec::with_capacity(columns.len() + 1);
+        let mut cells: Vec<Cell> = Vec::with_capacity(columns.len() + 2);
         // State dot — reads SessionState directly via state_style.
         cells.push(Cell::from(Line::from(state_dot::render(
             &state,
@@ -118,8 +132,16 @@ impl SessionsTable {
             theme,
         ))));
 
-        for c in columns {
+        for (i, c) in columns.iter().enumerate() {
             cells.push(self.render_cell(row, *c, &state, theme));
+            // Insert ACTIVITY sparkline after ACTION column.
+            if Some(i) == action_idx {
+                let activity = sparkline_braille::render_braille(&row.activity_samples, 8, 100.0);
+                cells.push(Cell::from(Line::from(Span::styled(
+                    activity,
+                    Style::default().fg(theme.status_success),
+                ))));
+            }
         }
 
         Row::new(cells).style(row_style)
@@ -356,5 +378,15 @@ mod tests {
         let table = SessionsTable::default();
         assert_eq!(table.sort_key, SessionSortKey::Age);
         assert_eq!(table.sort_dir, SortDir::Asc);
+    }
+
+    #[test]
+    fn activity_samples_render_to_8_braille_chars() {
+        let s = sparkline_braille::render_braille(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8, 10.0);
+        assert_eq!(s.chars().count(), 8);
+        // All chars should be in the braille block.
+        for c in s.chars() {
+            assert!((0x2800..=0x28FF).contains(&(c as u32)));
+        }
     }
 }
