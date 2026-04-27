@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod header;
+pub mod sessions;
 
 use ratatui::{layout::Rect, Frame};
 use crate::tui::theme_v2::Theme;
