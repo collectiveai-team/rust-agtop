@@ -2,6 +2,93 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+// ---------------------------------------------------------------------------
+// SessionState — canonical 6-variant domain state
+// ---------------------------------------------------------------------------
+
+/// Canonical session state. Owned by `agtop-core`; no display-layer mapping.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
+pub enum SessionState {
+    /// Agent actively producing output or executing a tool call.
+    Running,
+    /// Agent paused waiting for user response.
+    Waiting(WaitReason),
+    /// Live but anomalous — stalled past threshold or other warning condition.
+    Warning(WarningReason),
+    /// Ended with an explicit error.
+    Error(ErrorReason),
+    /// Live, ready for input, not currently working.
+    Idle,
+    /// No live process; historical/archival.
+    Closed,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitReason {
+    Input,
+    Permission,
+    Other(String),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningReason {
+    Stalled { since: chrono::DateTime<chrono::Utc> },
+    Other(String),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorReason {
+    ExitCode(i32),
+    Crash,
+    ParserDetected(String),
+}
+
+impl SessionState {
+    /// Coarse string label (matches the outer tag in serde).
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running    => "running",
+            Self::Waiting(_) => "waiting",
+            Self::Warning(_) => "warning",
+            Self::Error(_)   => "error",
+            Self::Idle       => "idle",
+            Self::Closed     => "closed",
+        }
+    }
+
+    /// Short label for narrow UI columns.
+    #[must_use]
+    pub const fn compact_label(&self) -> &'static str {
+        // Same as as_str for now — distinct only if a column needs <7 chars.
+        self.as_str()
+    }
+
+    /// True if the session is doing or could resume work without external input.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        matches!(self, Self::Running | Self::Idle | Self::Warning(_))
+    }
+
+    /// True if the session is blocked on user response.
+    #[must_use]
+    pub const fn needs_user(&self) -> bool {
+        matches!(self, Self::Waiting(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionAnalysis extension: session_state field
+// ---------------------------------------------------------------------------
+
 /// Which agent produced a session.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -243,6 +330,15 @@ pub struct SessionAnalysis {
     /// process is matched or the process has stopped.
     #[serde(default)]
     pub process_metrics: Option<crate::process::ProcessMetrics>,
+    /// Canonical domain state for this session, derived from transcript events
+    /// and liveness information. `None` when parsers haven't computed it yet
+    /// (legacy path) or during initial discovery (string-based state only).
+    #[serde(default)]
+    pub session_state: Option<SessionState>,
+    /// Latest in-flight tool call or response status, derived from session log.
+    /// `None` when the session is idle, closed, or the parser doesn't extract this.
+    #[serde(default)]
+    pub current_action: Option<String>,
 }
 
 impl SessionAnalysis {
@@ -282,6 +378,8 @@ impl SessionAnalysis {
             liveness: None,
             match_confidence: None,
             process_metrics: None,
+            session_state: None,
+            current_action: None,
         }
     }
 }
@@ -438,5 +536,96 @@ mod tests {
         let usage: PlanUsage = serde_json::from_value(raw).expect("deserialize legacy plan usage");
         assert_eq!(usage.client, ClientKind::Codex);
         assert_eq!(usage.plan_name.as_deref(), Some("plus"));
+    }
+
+    #[cfg(test)]
+    mod state_tests {
+        use super::*;
+
+        #[test]
+        fn as_str_returns_outer_kind() {
+            assert_eq!(SessionState::Running.as_str(), "running");
+            assert_eq!(SessionState::Waiting(WaitReason::Input).as_str(), "waiting");
+            assert_eq!(SessionState::Waiting(WaitReason::Permission).as_str(), "waiting");
+            assert_eq!(SessionState::Idle.as_str(), "idle");
+            assert_eq!(SessionState::Closed.as_str(), "closed");
+        }
+
+        #[test]
+        fn serialization_is_tagged() {
+            let v = SessionState::Waiting(WaitReason::Permission);
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({"kind": "waiting", "reason": "permission"})
+            );
+        }
+
+        #[test]
+        fn warning_stalled_carries_since() {
+            let t = chrono::DateTime::parse_from_rfc3339("2026-04-26T10:00:00Z").unwrap().to_utc();
+            let v = SessionState::Warning(WarningReason::Stalled { since: t });
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(json["kind"], "warning");
+            assert!(json["reason"]["stalled"]["since"].is_string());
+        }
+
+        #[test]
+        fn error_exit_code_serializes() {
+            let v = SessionState::Error(ErrorReason::ExitCode(127));
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(json["kind"], "error");
+            assert_eq!(json["reason"]["exit_code"], 127);
+        }
+
+        #[test]
+        fn deserialize_round_trips() {
+            let original = SessionState::Waiting(WaitReason::Permission);
+            let s = serde_json::to_string(&original).unwrap();
+            let back: SessionState = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, original);
+        }
+
+        #[test]
+        fn is_active_matches_expected_variants() {
+            assert!(SessionState::Running.is_active());
+            assert!(SessionState::Idle.is_active());
+            assert!(!SessionState::Waiting(WaitReason::Input).is_active());
+            assert!(!SessionState::Closed.is_active());
+        }
+
+        #[test]
+        fn session_analysis_has_current_action_field() {
+            let mut a = SessionAnalysis::new(
+                SessionSummary::new(
+                    ClientKind::Claude,
+                    None,
+                    "x".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    std::path::PathBuf::from("/tmp"),
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                TokenTotals::default(),
+                CostBreakdown::default(),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            a.current_action = Some("bash: cargo test".to_string());
+            assert_eq!(a.current_action.as_deref(), Some("bash: cargo test"));
+
+            a.current_action = None;
+            assert!(a.current_action.is_none());
+        }
     }
 }
