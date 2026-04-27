@@ -51,8 +51,9 @@ impl App {
             | Msg::CycleAggregationSort
             | Msg::ToggleAggregationSortDir
             | Msg::DrillIntoGroup(_)
-            | Msg::CloseDrillDown
-            | _ => {}
+            | Msg::CloseDrillDown => {}
+            #[allow(unreachable_patterns)]
+            _ => {}
         }
     }
 

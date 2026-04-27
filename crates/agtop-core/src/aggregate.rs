@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::session::{ClientKind, SessionAnalysis};
+use crate::session::SessionAnalysis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GroupBy {
@@ -142,7 +142,7 @@ fn build_activity_buckets(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::{CostBreakdown, SessionSummary, TokenTotals};
+    use crate::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
 
     fn now() -> DateTime<Utc> {
         DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z").unwrap().to_utc()
