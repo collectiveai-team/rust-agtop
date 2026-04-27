@@ -36,7 +36,7 @@ impl AggregationState {
         );
     }
 
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -46,7 +46,7 @@ impl AggregationState {
             ])
             .split(area);
 
-        controls::render(frame, layout[0], &self.controls, theme);
+        self.controls.render(frame, layout[0], theme);
         self.table.render(frame, layout[1], theme);
         // Footer hint
         use ratatui::{text::{Line, Span}, style::Style, widgets::Paragraph};
@@ -65,6 +65,14 @@ impl AggregationState {
         if self.drill.is_open() {
             return self.drill.handle_event(event);
         }
+        // Route mouse clicks to controls (group-by / range chips).
+        if matches!(event, AppEvent::Mouse(_)) {
+            if let Some(msg) = self.controls.handle_event(event) {
+                self.recompute();
+                return Some(msg);
+            }
+        }
+
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         let AppEvent::Key(KeyEvent { code, modifiers, .. }) = event else { return None };
         if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT { return None }
