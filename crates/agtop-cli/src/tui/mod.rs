@@ -8,6 +8,7 @@
 pub mod app;
 pub mod app_v2;
 pub mod column_config;
+pub mod screens;
 mod events;
 pub mod input;
 pub mod component;

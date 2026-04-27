@@ -1,0 +1,7 @@
+---
+source: crates/agtop-cli/tests/header_snapshot.rs
+expression: buffer_to_text(&buf)
+---
+ Procs 12   CPU  ⠀⠁⠁⠃⠃⠃⠁⠁⠁⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀   50%                                                                                 ⟳ 2s · 14:25:49
+ Mem ███████████████░░░░░ 12.0G/16G                                                                  Sessions: 8 active · 3 idle · 47 today
+ Sessions ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
