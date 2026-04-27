@@ -814,6 +814,11 @@ pub fn run_v2(
     )
     .context("spawn background refresh worker")?;
 
+    // Kick the background quota fetcher; it starts in Stop state and waits
+    // for an explicit Start command. Without this the quota panel never
+    // receives any data.
+    handle.send_quota_cmd(refresh::QuotaCmd::Start);
+
     let mut app = app_v2::App::default();
     let poll_interval = Duration::from_millis(100);
 
@@ -821,15 +826,24 @@ pub fn run_v2(
         loop {
             // 1. Drain snapshots from the background worker.
             while let Some(msg) = handle.try_recv() {
-                if let refresh::RefreshMsg::Snapshot { analyses, .. } = msg {
-                    refresh_adapter::apply_analyses(
-                        &analyses,
-                        &mut app.dashboard.header,
-                        &mut app.dashboard.sessions,
-                        &mut app.dashboard.quota,
-                        &mut app.aggregation,
-                        refresh_interval.as_secs(),
-                    );
+                match msg {
+                    refresh::RefreshMsg::Snapshot { analyses, .. } => {
+                        refresh_adapter::apply_analyses(
+                            &analyses,
+                            &mut app.dashboard.header,
+                            &mut app.dashboard.sessions,
+                            &mut app.dashboard.quota,
+                            &mut app.aggregation,
+                            refresh_interval.as_secs(),
+                        );
+                    }
+                    refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
+                        app.dashboard.quota.apply_results(&results);
+                    }
+                    refresh::RefreshMsg::QuotaError { .. }
+                    | refresh::RefreshMsg::Error { .. } => {
+                        // Silently ignore; panels retain their last good data.
+                    }
                 }
             }
 

@@ -10,6 +10,7 @@ use ratatui::{
     Frame,
 };
 
+use agtop_core::quota::ProviderResult;
 use agtop_core::session::ClientKind;
 
 use crate::tui::input::AppEvent;
@@ -246,6 +247,68 @@ impl QuotaPanel {
             }
             frame.render_widget(Paragraph::new(visible), inner);
         }
+    }
+
+    /// Convert fresh provider quota results into card models for rendering.
+    /// Filters out providers that aren't configured or that errored — those
+    /// have no usable data to display.
+    pub fn apply_results(&mut self, results: &[ProviderResult]) {
+        use agtop_core::logo::provider_id_to_client_kind;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        self.cards = results
+            .iter()
+            .filter(|r| r.configured && r.ok)
+            .filter_map(|r| {
+                let usage = r.usage.as_ref()?;
+                let all_windows: Vec<WindowModel> = usage
+                    .windows
+                    .iter()
+                    .map(|(label, w)| WindowModel {
+                        label: label.clone(),
+                        used_pct: w
+                            .used_percent
+                            .map(|p| (p / 100.0) as f32)
+                            .unwrap_or(0.0),
+                        note: w.value_label.clone(),
+                        reset_in: w.reset_at.and_then(|ms| {
+                            let diff_secs = (ms - now_ms) / 1000;
+                            if diff_secs <= 0 {
+                                return None;
+                            }
+                            let h = diff_secs / 3600;
+                            let m = (diff_secs % 3600) / 60;
+                            Some(if h > 0 {
+                                format!("resets in {h}h {m}m")
+                            } else {
+                                format!("resets in {m}m")
+                            })
+                        }),
+                    })
+                    .collect();
+                let closest = all_windows
+                    .iter()
+                    .max_by(|a, b| {
+                        a.used_pct
+                            .partial_cmp(&b.used_pct)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .cloned()
+                    .unwrap_or(WindowModel {
+                        label: "—".into(),
+                        used_pct: 0.0,
+                        note: None,
+                        reset_in: None,
+                    });
+                let client_kind =
+                    provider_id_to_client_kind(r.provider_id).unwrap_or(ClientKind::Claude);
+                Some(QuotaCardModel {
+                    client_kind,
+                    client_label: r.provider_name.to_string(),
+                    closest,
+                    all_windows,
+                })
+            })
+            .collect();
     }
 
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
