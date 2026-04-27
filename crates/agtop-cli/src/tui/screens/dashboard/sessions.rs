@@ -275,6 +275,8 @@ impl SessionsTable {
         // Build map: parent_session_id -> children (order preserved from apply_analyses).
         let mut children_map: std::collections::HashMap<String, Vec<SessionRow>> =
             std::collections::HashMap::new();
+        // Children without a parent_session_id are orphaned (should not occur with current
+        // construction paths) and are silently dropped here.
         for c in child_rows {
             if let Some(ref pid) = c.parent_session_id {
                 children_map.entry(pid.clone()).or_default().push(c);
@@ -364,6 +366,7 @@ fn sort_cmp(a: &SessionRow, b: &SessionRow, key: SessionSortKey) -> std::cmp::Or
                 .unwrap_or(0);
             ma.cmp(&mb)
         }
+        // TODO: Subscription, Model, Project sort keys not yet implemented — fall through to Equal.
         _ => std::cmp::Ordering::Equal,
     }
 }
