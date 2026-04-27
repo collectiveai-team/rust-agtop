@@ -94,12 +94,6 @@ impl TabBar {
     }
 }
 
-// Keep the old free function as a thin wrapper for any callers not yet migrated.
-pub fn render(frame: &mut Frame<'_>, area: Rect, current: ScreenId, version: &str, theme: &Theme) {
-    let mut bar = TabBar::default();
-    bar.render(frame, area, current, version, theme);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
