@@ -248,6 +248,45 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Extract the current action (latest tool call) from a set of JSONL records.
+/// Returns a human-readable label like "Bash: cargo test" or "Write: src/main.rs".
+fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
+    for rec in records.iter().rev() {
+        let Some(msg) = rec.get("message") else { continue };
+        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else { continue };
+        for block in content.iter().rev() {
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                let input = block.get("input");
+                let arg = input
+                    .and_then(|i| {
+                        i.get("command")
+                            .or_else(|| i.get("file_path"))
+                            .or_else(|| i.get("description"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| {
+                        let mut s = s.to_string();
+                        if s.len() > 40 {
+                            s.truncate(40);
+                            s.push('…');
+                        }
+                        s
+                    });
+                return Some(match arg {
+                    Some(a) => format!("{tool}: {a}"),
+                    None => tool.to_string(),
+                });
+            }
+        }
+        // Stop scanning at the first assistant message (the latest turn).
+        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+            return None;
+        }
+    }
+    None
+}
+
 fn state_from_claude_record(v: &serde_json::Value) -> Option<(String, String)> {
     match v
         .get("message")
@@ -483,6 +522,18 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
 
+    // Collect records for current_action extraction (only for running/waiting sessions).
+    let mut all_records: Vec<serde_json::Value> = Vec::new();
+    let should_extract_action = matches!(
+        summary.state.as_deref(),
+        Some("waiting") | Some("running") | None
+    );
+    if should_extract_action {
+        let _ = for_each_jsonl(path, |v| {
+            all_records.push(v.clone());
+        });
+    }
+
     // Helper to merge a FileTotals' context peak into our running max.
     let mut merge_context = |ft: &FileTotals| {
         if let (Some(pct), Some(toks), Some(win)) = (
@@ -558,7 +609,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         match_confidence: None,
         process_metrics: None,
         session_state: None,
-        current_action: None,
+        current_action: current_action_from_records(&all_records),
     })
 }
 
@@ -1134,5 +1185,36 @@ mod tests {
             Some("assistant.stop_reason=end_turn")
         );
         assert_eq!(child.data_path, child_path);
+    }
+
+    #[test]
+    fn current_action_from_records_extracts_tool_use() {
+        let records: Vec<serde_json::Value> = vec![
+            serde_json::json!({
+                "type": "user",
+                "message": {"role": "user", "content": "run tests"},
+                "timestamp": "2026-04-26T10:00:00Z"
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "Bash",
+                        "input": {"command": "cargo test", "description": "run tests"}
+                    }]
+                },
+                "timestamp": "2026-04-26T10:00:01Z"
+            }),
+        ];
+        let action = current_action_from_records(&records);
+        assert_eq!(action.as_deref(), Some("Bash: cargo test"));
+    }
+
+    #[test]
+    fn current_action_from_records_returns_none_for_empty() {
+        assert_eq!(current_action_from_records(&[]), None);
     }
 }
