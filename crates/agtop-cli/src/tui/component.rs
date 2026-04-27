@@ -1,4 +1,6 @@
 //! Component trait: every renderable, event-handling unit implements this.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 use ratatui::{layout::Rect, Frame};
 

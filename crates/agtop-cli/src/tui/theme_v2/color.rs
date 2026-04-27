@@ -1,4 +1,6 @@
 //! Terminal color-tier detection and true-color RGB → 256/16 downsampling.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 /// What level of color the terminal can render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,20 +44,15 @@ pub fn detect_with_env(
 }
 
 /// User-facing config setting that overrides detection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrueColorMode {
     /// Detect via env vars.
+    #[default]
     Auto,
     /// Force true color.
     On,
     /// Force 256-color downsampling.
     Off,
-}
-
-impl Default for TrueColorMode {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 impl TrueColorMode {

@@ -1,4 +1,6 @@
 //! State dot widget: a single cell rendering `●` (or empty) for a `SessionState`.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 //! Color, pulse, and modifier choices are delegated to `state_style`.
 
 use ratatui::{

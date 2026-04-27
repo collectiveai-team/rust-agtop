@@ -326,6 +326,7 @@ pub struct App {
     card_scroll: usize,
     /// Active theme. Initialized from the VS Code Dark+ palette.
     /// Plan 4 will wire this to a user-configurable setting.
+    #[allow(dead_code)]
     pub theme: crate::tui::theme_v2::Theme,
 }
 

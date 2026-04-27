@@ -1,4 +1,6 @@
 //! VS Code Dark+ color palette as a `Theme`.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 use ratatui::style::Color;
 

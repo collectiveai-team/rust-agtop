@@ -1,5 +1,7 @@
 //! Tracks which panel/component currently owns keyboard focus.
 //! Plans 2–4 add concrete `FocusId` variants per screen.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FocusId(pub &'static str);

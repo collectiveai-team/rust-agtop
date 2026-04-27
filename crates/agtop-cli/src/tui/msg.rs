@@ -1,4 +1,7 @@
 //! Application message bus. Components emit `Msg` from `handle_event`,
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
+
 //! the App's `update()` consumes them and mutates state.
 //!
 //! New variants are added as new screens/components are introduced.

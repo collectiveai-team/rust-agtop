@@ -1,4 +1,6 @@
 //! Per-client accent colors. Used to render client names in their brand color
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 //! across the Sessions table, Aggregation view, Usage Quota labels, and Info drawer.
 
 use agtop_core::session::ClientKind;

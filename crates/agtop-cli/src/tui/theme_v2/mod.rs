@@ -1,5 +1,7 @@
 //! New theme system (v2) — semantic tokens with true-color support.
 //! Coexists with the legacy `theme` module during migration.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 pub mod client_palette;
 pub mod color;

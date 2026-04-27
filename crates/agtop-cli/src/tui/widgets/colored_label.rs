@@ -1,4 +1,6 @@
 //! Colored label helper: render a string in a per-client (or arbitrary) color.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 use ratatui::{
     style::{Modifier, Style},

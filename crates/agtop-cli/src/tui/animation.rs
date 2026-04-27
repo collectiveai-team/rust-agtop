@@ -1,4 +1,6 @@
 //! Animation tick + brightness modulation for pulsing widgets.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
 use std::time::{Duration, Instant};
 

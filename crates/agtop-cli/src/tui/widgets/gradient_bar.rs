@@ -1,4 +1,6 @@
 //! Block-gradient progress bar. Used for memory, quota, etc.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 //! Color shifts from green → yellow → orange → red as fill increases.
 
 use ratatui::style::Color;

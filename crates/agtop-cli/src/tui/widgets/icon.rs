@@ -1,4 +1,6 @@
 //! Semantic icon registry. The single source of truth for which characters
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 //! we render where.
 //!
 //! Tier 0 (T0) is universal Unicode (always renders). Tier 2 (T2) is

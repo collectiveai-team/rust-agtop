@@ -1,4 +1,6 @@
 //! Style choices for `SessionState`. The single place where state → color/animation
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 //! decisions live in the TUI. State semantics are owned by `agtop-core`.
 
 use ratatui::style::Color;

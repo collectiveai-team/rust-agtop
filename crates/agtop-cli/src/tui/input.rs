@@ -1,6 +1,8 @@
 //! Crossterm event → AppEvent translation.
+// Foundation code for Plans 2-4; not yet wired into the existing TUI.
+#![allow(dead_code)]
 
-use crossterm::event::{Event, KeyEvent, KeyModifiers, MouseEvent};
+use crossterm::event::{Event, KeyEvent, MouseEvent};
 
 /// Domain event consumed by Components. Wraps crossterm primitives plus
 /// internal ticks (animation frame, data refresh).
@@ -34,7 +36,7 @@ impl AppEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[test]
     fn key_event_translates() {
