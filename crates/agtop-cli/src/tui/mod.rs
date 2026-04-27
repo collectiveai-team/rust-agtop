@@ -8,8 +8,14 @@
 pub mod app;
 pub mod column_config;
 mod events;
+pub mod input { pub type AppEvent = (); } // replaced in Task 11
+pub mod component;
+pub mod focus;
+pub mod animation;
+pub mod msg;
 mod refresh;
 pub mod theme;
+pub mod theme_v2;
 pub mod widgets;
 
 use std::io;
