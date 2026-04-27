@@ -4,6 +4,7 @@
 
 pub mod colored_label;
 pub mod config_tab;
+pub mod drawer;
 pub mod tab_bar;
 pub mod cost_tab;
 pub mod dashboard_cost;
