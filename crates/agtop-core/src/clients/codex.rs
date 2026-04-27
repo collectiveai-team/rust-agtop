@@ -879,6 +879,8 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         liveness: None,
         match_confidence: None,
         process_metrics: None,
+        session_state: None,
+        current_action: None,
     })
 }
 
