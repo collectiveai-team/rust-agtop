@@ -35,7 +35,7 @@ fn cards() -> Vec<QuotaCardModel> {
 #[test]
 fn quota_short_140x4_snapshot() {
     let theme = vscode_dark_plus::theme();
-    let p = QuotaPanel {
+    let mut p = QuotaPanel {
         mode: QuotaMode::Short,
         cards: cards(),
         last_area: None,
@@ -48,7 +48,7 @@ fn quota_short_140x4_snapshot() {
 #[test]
 fn quota_long_140x12_snapshot() {
     let theme = vscode_dark_plus::theme();
-    let p = QuotaPanel {
+    let mut p = QuotaPanel {
         mode: QuotaMode::Long,
         cards: cards(),
         last_area: None,

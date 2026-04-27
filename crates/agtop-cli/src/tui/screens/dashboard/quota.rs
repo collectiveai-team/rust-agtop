@@ -112,7 +112,8 @@ fn build_card_lines<'a>(card: &'a QuotaCardModel, label_width: usize, theme: &'a
 }
 
 impl QuotaPanel {
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+        self.last_area = Some(area);
         match self.mode {
             QuotaMode::Hidden => {}
             QuotaMode::Short => self.render_short(frame, area, theme),
@@ -248,7 +249,7 @@ impl QuotaPanel {
     }
 
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         match event {
             AppEvent::Key(KeyEvent { code: KeyCode::Char('u'), modifiers, .. })
@@ -269,6 +270,35 @@ impl QuotaPanel {
             {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 Some(Msg::Noop)
+            }
+            AppEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                if let Some(area) = self.last_area {
+                    if *row == area.y {
+                        let title = match self.mode {
+                            QuotaMode::Short => " Usage Quota (short)  [u]sage ",
+                            QuotaMode::Long => " Usage Quota (long)  [u]sage ",
+                            QuotaMode::Hidden => return None,
+                        };
+                        let title_start = area.x + 1; // +1 for left border
+                        if *column >= title_start {
+                            let rel = (*column - title_start) as usize;
+                            if let Some(u_pos) = title.find("[u]") {
+                                let u_end = u_pos + "[u]sage".len();
+                                if rel >= u_pos && rel < u_end {
+                                    self.mode = self.mode.cycle();
+                                    self.scroll_offset = 0;
+                                    return Some(Msg::Noop);
+                                }
+                            }
+                        }
+                    }
+                }
+                None
             }
             AppEvent::Mouse(MouseEvent {
                 kind: kind @ (MouseEventKind::ScrollDown | MouseEventKind::ScrollUp),
@@ -393,5 +423,55 @@ mod tests {
         });
         panel.handle_event(&u_key);
         assert_eq!(panel.scroll_offset, 0, "cycling mode must reset scroll offset");
+    }
+
+    #[test]
+    fn mouse_click_on_u_title_button_cycles_mode() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crate::tui::input::AppEvent;
+        use ratatui::layout::Rect;
+
+        // Title for Short: " Usage Quota (short)  [u]sage "
+        // area.x = 0, title_start = 0 + 1 = 1 (left border)
+        // "[u]" starts at index 22 in the title string
+        // So column for "[u]" = title_start + u_pos = 1 + 22 = 23
+        let title_short = " Usage Quota (short)  [u]sage ";
+        let u_pos = title_short.find("[u]").unwrap();
+
+        let mut panel = QuotaPanel::default();
+        assert_eq!(panel.mode, QuotaMode::Short);
+        panel.last_area = Some(Rect::new(0, 5, 80, 10)); // area.y = 5
+
+        let click = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1 + u_pos as u16, // title_start + u_pos
+            row: 5,                    // == area.y
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = panel.handle_event(&click);
+        assert_eq!(result, Some(Msg::Noop), "click on [u] should return Msg::Noop");
+        assert_eq!(panel.mode, QuotaMode::Long, "mode should cycle from Short to Long");
+        assert_eq!(panel.scroll_offset, 0, "scroll offset should reset on cycle");
+    }
+
+    #[test]
+    fn mouse_click_outside_u_title_button_does_nothing() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crate::tui::input::AppEvent;
+        use ratatui::layout::Rect;
+
+        let mut panel = QuotaPanel::default();
+        panel.last_area = Some(Rect::new(0, 5, 80, 10));
+
+        // Click on column 0 (before title_start=1) on the title row — should not cycle
+        let click = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = panel.handle_event(&click);
+        assert_eq!(result, None, "click outside [u] should return None");
+        assert_eq!(panel.mode, QuotaMode::Short, "mode should not change");
     }
 }
