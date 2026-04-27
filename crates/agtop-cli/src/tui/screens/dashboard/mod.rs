@@ -3,7 +3,9 @@
 #![allow(dead_code)]
 
 pub mod header;
+pub mod info_costs;
 pub mod info_drawer;
+pub mod info_general;
 pub mod info_summary;
 pub mod quota;
 pub mod sessions;
