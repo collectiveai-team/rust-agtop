@@ -1,0 +1,6 @@
+---
+source: crates/agtop-cli/tests/state_dot_snapshot.rs
+assertion_line: 53
+expression: text
+---
+● ● ● ● ●

@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "CLI for agtop: list and inspect AI coding agent sessions with token/cost estimates."
 
+[lib]
+name = "agtop_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "agtop"
 path = "src/main.rs"
