@@ -18,7 +18,7 @@
 - [x] **Phase 2 — Dashboard redesign** (`docs/superpowers/plans/2026-04-26-dashboard-redesign.md`) — 22 tasks, ~header + sessions + quota + info drawer
 - [x] **Phase 3 — Aggregation view** (`docs/superpowers/plans/2026-04-26-aggregation-view.md`) — 8 tasks, ~group-by analytics
 - [x] **Phase 4 — Config view** (`docs/superpowers/plans/2026-04-26-config-view.md`) — 14 tasks, ~settings page
-- [🚧] **Phase 5 — Final acceptance** — runs spec §8 acceptance checklist, writes summary
+- [x] **Phase 5 — Final acceptance** — runs spec §8 acceptance checklist, writes summary
 
 When all 6 boxes above are `[x]`, the pipeline is complete.
 
@@ -211,6 +211,7 @@ phase-3 done  2026-04-27T16:00:00Z agent-phase-3 Phase 3 complete. 8 tasks done.
 phase-4 start 2026-04-27T18:00:00Z agent-phase-4 Starting Phase 4 Config view: 14 tasks for VS Code-style settings page.
 phase-4 done  2026-04-27T20:00:00Z agent-phase-4 Phase 4 complete. 14 tasks done. cargo build/test(920 pass)/clippy all green. ~14 commits this phase. Head: fix(tui/config): clippy field_reassign_with_default.
 phase-5 start 2026-04-27T21:00:00Z agent-phase-5 Starting Phase 5 Final acceptance: running verification gate, acceptance criteria check, smoke test, pipeline summary.
+phase-5 done  2026-04-27T22:00:00Z agent-phase-5 Phase 5 complete. Verification gate green (920 tests pass, clippy exit 0). Acceptance: 17/23 PASS, 6 partial (AC4,AC7,AC8,AC18,AC19,AC20), 0 hard FAIL. Summary written to docs/superpowers/plans/2026-04-26-pipeline-summary.md. Branch feat/tui-redesign ready for merge. PIPELINE COMPLETE.
 ```
 
 ---
