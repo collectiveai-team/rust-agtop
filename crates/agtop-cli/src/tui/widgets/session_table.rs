@@ -390,6 +390,8 @@ fn row_for<'a>(
             )),
             // SubscriptionLogo is injected by visible() — rendered as empty for now.
             ColumnId::SubscriptionLogo => Cell::from(""),
+            // Action is a new v2 column; fallback to current_action in old table.
+            ColumnId::Action => Cell::from(a.current_action.as_deref().unwrap_or("").to_string()),
         })
         .collect();
 

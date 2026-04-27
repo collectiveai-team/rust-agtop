@@ -362,6 +362,8 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
         ),
         // SubscriptionLogo is injected by visible() — not displayed in info tab.
         ColumnId::SubscriptionLogo => Line::default(),
+        // Action is a transient field rendered in the new sessions table; not displayed in old info tab.
+        ColumnId::Action => kv_line("action", a.current_action.clone().unwrap_or_default()),
     }
 }
 

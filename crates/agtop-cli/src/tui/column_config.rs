@@ -48,6 +48,8 @@ pub enum ColumnId {
     DiskRead,
     /// Cumulative disk bytes written by the matched process.
     DiskWritten,
+    /// Current in-flight tool/action descriptor for running sessions.
+    Action,
 }
 
 impl ColumnId {
@@ -81,6 +83,7 @@ impl ColumnId {
             ColumnId::Project,
             ColumnId::SessionName,
             ColumnId::Cwd,
+            ColumnId::Action,
         ]
     }
 
@@ -114,6 +117,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => "VSZ",
             ColumnId::DiskRead => "DISK R",
             ColumnId::DiskWritten => "DISK W",
+            ColumnId::Action => "ACTION",
         }
     }
 
@@ -147,6 +151,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => "Live virtual memory of the matched process",
             ColumnId::DiskRead => "Cumulative bytes read from disk (since process start)",
             ColumnId::DiskWritten => "Cumulative bytes written to disk (since process start)",
+            ColumnId::Action => "Current in-flight tool/action descriptor for running sessions",
         }
     }
 
@@ -181,6 +186,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => Some(7),
             ColumnId::DiskRead => Some(8),
             ColumnId::DiskWritten => Some(8),
+            ColumnId::Action => Some(20),
         }
     }
 
@@ -215,6 +221,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => None,
             ColumnId::DiskRead => None,
             ColumnId::DiskWritten => None,
+            ColumnId::Action => None, // not sortable (transient string)
         }
     }
 
