@@ -1,0 +1,5 @@
+---
+source: crates/agtop-cli/tests/tab_bar_snapshot.rs
+expression: buffer_to_text(&buf)
+---
+ agtop │ [d]ashboard  [a]ggregation  [c]onfig  │  q=quit  ?=help                                                 v0.4.0
