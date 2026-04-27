@@ -4,6 +4,7 @@
 
 pub mod header;
 pub mod info_drawer;
+pub mod info_summary;
 pub mod quota;
 pub mod sessions;
 
