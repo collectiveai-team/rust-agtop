@@ -54,29 +54,53 @@ impl std::fmt::Display for ClientKind {
     }
 }
 
-/// Coarse session activity state.
+/// Live-aware session activity state.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
-    /// Agent process is doing work. Tool calls and tool responses are running.
+    /// Live session is actively doing work or has active child work.
     Running,
-    /// Agent process explicitly requires user action.
-    Blocked,
-    /// Agent process is alive but has finished the current work/turn.
+    /// Live session has completed the current turn and is ready for input.
     Idle,
-    /// No agent process is associated with the session.
+    /// Live session is explicitly waiting for a user answer or choice.
+    AwaitingInput,
+    /// Live session is explicitly waiting for tool/sandbox/filesystem approval.
+    AwaitingPermission,
+    /// Live in-progress session has no observable progress past the threshold.
+    Stalled,
+    /// No live process/runtime association exists for this session.
     Closed,
+    /// Evidence is missing, unsupported, or contradictory.
+    Unknown,
 }
 
 impl SessionState {
+    /// Returns the canonical snake_case string representation (matches serde serialization).
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Running => "running",
-            Self::Blocked => "blocked",
             Self::Idle => "idle",
+            Self::AwaitingInput => "awaiting_input",
+            Self::AwaitingPermission => "awaiting_permission",
+            Self::Stalled => "stalled",
             Self::Closed => "closed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Returns a short display label suitable for constrained-width UIs (e.g. TUI columns).
+    #[must_use]
+    pub const fn compact_label(self) -> &'static str {
+        match self {
+            Self::Running => "run",
+            Self::Idle => "idle",
+            Self::AwaitingInput => "input",
+            Self::AwaitingPermission => "permit",
+            Self::Stalled => "stalled",
+            Self::Closed => "closed",
+            Self::Unknown => "?",
         }
     }
 }
@@ -469,34 +493,10 @@ mod tests {
     }
 
     #[test]
-    fn session_state_serializes_to_lowercase_labels() {
-        assert_eq!(
-            serde_json::to_value(SessionState::Running).unwrap(),
-            json!("running")
-        );
-        assert_eq!(
-            serde_json::to_value(SessionState::Blocked).unwrap(),
-            json!("blocked")
-        );
-        assert_eq!(
-            serde_json::to_value(SessionState::Idle).unwrap(),
-            json!("idle")
-        );
-        assert_eq!(
-            serde_json::to_value(SessionState::Closed).unwrap(),
-            json!("closed")
-        );
-    }
-
-    #[test]
     fn session_state_deserializes_lowercase_labels() {
         assert_eq!(
             serde_json::from_value::<SessionState>(json!("running")).unwrap(),
             SessionState::Running
-        );
-        assert_eq!(
-            serde_json::from_value::<SessionState>(json!("blocked")).unwrap(),
-            SessionState::Blocked
         );
         assert_eq!(
             serde_json::from_value::<SessionState>(json!("idle")).unwrap(),
@@ -506,5 +506,54 @@ mod tests {
             serde_json::from_value::<SessionState>(json!("closed")).unwrap(),
             SessionState::Closed
         );
+    }
+}
+
+#[cfg(test)]
+mod session_state_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn session_state_serializes_to_stable_json_labels() {
+        assert_eq!(
+            serde_json::to_value(SessionState::Running).unwrap(),
+            json!("running")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Idle).unwrap(),
+            json!("idle")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::AwaitingInput).unwrap(),
+            json!("awaiting_input")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::AwaitingPermission).unwrap(),
+            json!("awaiting_permission")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Stalled).unwrap(),
+            json!("stalled")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Closed).unwrap(),
+            json!("closed")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionState::Unknown).unwrap(),
+            json!("unknown")
+        );
+    }
+
+    #[test]
+    fn session_state_has_stable_compact_labels() {
+        assert_eq!(SessionState::Running.compact_label(), "run");
+        assert_eq!(SessionState::Idle.compact_label(), "idle");
+        assert_eq!(SessionState::AwaitingInput.compact_label(), "input");
+        assert_eq!(SessionState::AwaitingPermission.compact_label(), "permit");
+        assert_eq!(SessionState::Stalled.compact_label(), "stalled");
+        assert_eq!(SessionState::Closed.compact_label(), "closed");
+        assert_eq!(SessionState::Unknown.compact_label(), "?");
     }
 }

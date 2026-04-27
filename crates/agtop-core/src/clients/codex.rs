@@ -311,18 +311,45 @@ fn effort_from_turn_context(payload: &serde_json::Value) -> Option<(String, Stri
 
 fn state_from_response_item(payload: &serde_json::Value) -> Option<(SessionState, String)> {
     match payload.get("type").and_then(|x| x.as_str()) {
-        Some("function_call") | Some("custom_tool_call") => Some((
-            SessionState::Running,
-            format!(
-                "response_item:{}",
-                payload
-                    .get("type")
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("call")
-            ),
-        )),
+        Some("function_call") | Some("custom_tool_call") => {
+            let ty = payload
+                .get("type")
+                .and_then(|x| x.as_str())
+                .unwrap_or("call");
+            if codex_call_requires_escalation(payload) {
+                Some((
+                    SessionState::AwaitingPermission,
+                    format!("response_item:{ty}:require_escalated"),
+                ))
+            } else {
+                Some((SessionState::Running, format!("response_item:{ty}")))
+            }
+        }
         _ => None,
     }
+}
+
+fn codex_call_requires_escalation(payload: &serde_json::Value) -> bool {
+    let Some(arguments) = payload.get("arguments") else {
+        return false;
+    };
+    if arguments
+        .get("sandbox_permissions")
+        .and_then(|x| x.as_str())
+        == Some("require_escalated")
+    {
+        return true;
+    }
+    arguments
+        .as_str()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| {
+            v.get("sandbox_permissions")
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        })
+        .as_deref()
+        == Some("require_escalated")
 }
 
 fn text_from_codex_content(content: &serde_json::Value) -> Option<String> {
@@ -367,13 +394,7 @@ fn state_from_codex_message(payload: &serde_json::Value) -> Option<(SessionState
         return None;
     }
     let phase = payload.get("phase").and_then(|x| x.as_str());
-    let text = message_text_from_payload(payload).unwrap_or_default();
-    if phase == Some("final_answer") && text.contains('?') {
-        Some((
-            SessionState::Blocked,
-            "response_item:assistant-question".to_string(),
-        ))
-    } else if phase == Some("final_answer") {
+    if phase == Some("final_answer") {
         Some((
             SessionState::Idle,
             "response_item:assistant-final".to_string(),
@@ -993,6 +1014,41 @@ mod tests {
     #[test]
     fn base64url_decode_rejects_garbage() {
         assert!(base64url_decode("!!!").is_none());
+    }
+
+    #[test]
+    fn response_item_escalated_function_call_maps_to_awaiting_permission() {
+        let payload = serde_json::json!({
+            "type": "function_call",
+            "name": "exec_command",
+            "arguments": r#"{"cmd":"cp /tmp/joke.txt /home/joke.txt","sandbox_permissions":"require_escalated","justification":"Allow writing outside workspace?"}"#,
+        });
+
+        assert_eq!(
+            state_from_response_item(&payload),
+            Some((
+                SessionState::AwaitingPermission,
+                "response_item:function_call:require_escalated".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn final_answer_question_text_alone_does_not_map_to_blocked() {
+        let payload = serde_json::json!({
+            "type": "message",
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "Do you want me to continue?"}],
+        });
+
+        assert_eq!(
+            state_from_codex_message(&payload),
+            Some((
+                SessionState::Idle,
+                "response_item:assistant-final".to_string(),
+            ))
+        );
     }
 
     // --- plan_usage end-to-end tests ---

@@ -71,6 +71,7 @@ impl Client for ClaudeClient {
             .unwrap_or(self.projects_root.as_path());
         let subscription = read_credentials_plan(claude_dir).1;
         let history_titles = read_history_titles(claude_dir);
+        let runtime_states = read_runtime_states(claude_dir);
         let mut out = Vec::new();
         let projects = match fs::read_dir(&self.projects_root) {
             Ok(r) => r,
@@ -107,6 +108,7 @@ impl Client for ClaudeClient {
                         if s.session_title.is_none() {
                             s.session_title = history_titles.get(&s.session_id).cloned();
                         }
+                        apply_runtime_state(&mut s, &runtime_states);
                         out.push(s)
                     }
                     Ok(_) => continue, // skip empty/abandoned sessions
@@ -225,6 +227,54 @@ fn read_history_titles(claude_dir: &Path) -> HashMap<String, String> {
     out
 }
 
+fn read_runtime_states(claude_dir: &Path) -> HashMap<String, String> {
+    let sessions_dir = claude_dir.join("sessions");
+    let mut out = HashMap::new();
+    let Ok(entries) = fs::read_dir(sessions_dir) else {
+        return out;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e != "json").unwrap_or(true) {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            continue;
+        };
+        if v.get("status").and_then(|x| x.as_str()) != Some("waiting") {
+            continue;
+        }
+        let Some(session_id) = v.get("sessionId").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let waiting_for = v
+            .get("waitingFor")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("unknown");
+        out.insert(session_id.to_string(), waiting_for.to_string());
+    }
+
+    out
+}
+
+fn apply_runtime_state(summary: &mut SessionSummary, runtime_states: &HashMap<String, String>) {
+    let Some(waiting_for) = runtime_states.get(&summary.session_id) else {
+        return;
+    };
+    let state = if waiting_for.starts_with("approve ") {
+        SessionState::AwaitingPermission
+    } else {
+        SessionState::AwaitingInput
+    };
+    summary.state = Some(state);
+    summary.state_detail = Some(format!("claude.runtime.status=waiting:{waiting_for}"));
+}
+
 /// Extract a flat text body from a Claude assistant message record.
 /// Returns `None` if no text parts are present.
 fn extract_message_text(v: &serde_json::Value) -> Option<String> {
@@ -249,6 +299,29 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
 }
 
 fn state_from_claude_record(v: &serde_json::Value) -> Option<(SessionState, String)> {
+    if let Some(content) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|x| x.as_array())
+    {
+        for part in content {
+            if part.get("type").and_then(|x| x.as_str()) == Some("permission_request") {
+                return Some((
+                    SessionState::AwaitingPermission,
+                    "assistant.content=permission_request".to_string(),
+                ));
+            }
+            if part.get("type").and_then(|x| x.as_str()) == Some("tool_use")
+                && part.get("name").and_then(|x| x.as_str()) == Some("AskUserQuestion")
+            {
+                return Some((
+                    SessionState::AwaitingInput,
+                    "assistant.tool_use=AskUserQuestion".to_string(),
+                ));
+            }
+        }
+    }
+
     match v
         .get("message")
         .and_then(|m| m.get("stop_reason"))
@@ -840,6 +913,84 @@ mod tests {
                 SessionState::Running,
                 "assistant.stop_reason=tool_use".to_string(),
             ))
+        );
+    }
+
+    #[test]
+    fn assistant_ask_user_question_tool_use_maps_to_awaiting_input() {
+        let v = serde_json::json!({
+            "message": {
+                "stop_reason": "tool_use",
+                "content": [{
+                    "type": "tool_use",
+                    "name": "AskUserQuestion"
+                }]
+            }
+        });
+
+        assert_eq!(
+            state_from_claude_record(&v),
+            Some((
+                SessionState::AwaitingInput,
+                "assistant.tool_use=AskUserQuestion".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn assistant_permission_request_part_maps_to_awaiting_permission() {
+        let v = serde_json::json!({
+            "message": {
+                "stop_reason": "tool_use",
+                "content": [{"type": "permission_request"}]
+            }
+        });
+
+        assert_eq!(
+            state_from_claude_record(&v),
+            Some((
+                SessionState::AwaitingPermission,
+                "assistant.content=permission_request".to_string(),
+            ))
+        );
+    }
+
+    #[test]
+    fn list_sessions_maps_waiting_runtime_metadata_to_blocked() {
+        let (_td, projects_root) = make_fake_claude_home();
+        let claude_dir = projects_root.parent().unwrap();
+        let session_id = "02742fb3-d98e-4fa2-8184-2fddd7ee544d";
+        let transcript = projects_root
+            .join("proj")
+            .join(format!("{session_id}.jsonl"));
+        write_jsonl(
+            &transcript,
+            &[
+                r#"{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-opus-4","content":[{"type":"tool_use","name":"Write"}],"stop_reason":"tool_use"}}"#,
+            ],
+        );
+        let sessions_dir = claude_dir.join("sessions");
+        fs::create_dir_all(&sessions_dir).unwrap();
+        let mut f = fs::File::create(sessions_dir.join("123.json")).unwrap();
+        f.write_all(
+            format!(
+                r#"{{"pid":123,"sessionId":"{session_id}","status":"waiting","waitingFor":"approve Write"}}"#
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+
+        let client = ClaudeClient {
+            projects_root,
+            discover_cache: std::sync::Mutex::default(),
+        };
+
+        let sessions = client.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].state, Some(SessionState::AwaitingPermission));
+        assert_eq!(
+            sessions[0].state_detail.as_deref(),
+            Some("claude.runtime.status=waiting:approve Write")
         );
     }
 

@@ -292,6 +292,7 @@ pub fn spawn(
                     let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
                     let info_map = correlator.snapshot(&summaries);
                     agtop_core::process::attach_process_info(&info_map, &mut analyses);
+                    agtop_core::resolve_session_states(&mut analyses, Utc::now());
 
                     RefreshMsg::Snapshot {
                         generation,
@@ -486,9 +487,15 @@ fn cached_analyze_all(
                             project_cache.get(&key).and_then(|v| v.clone());
                     }
                 }
-                // Note: children are cached with the parent; if only a child's
-                // last_active changes while the parent's is stable, the stale
-                // child data is served until the parent itself is re-analyzed.
+                if let Some(client) = clients.iter().find(|c| c.kind() == summary.client) {
+                    refresh_children(
+                        client.as_ref(),
+                        clients,
+                        summary,
+                        plan,
+                        &mut cached_analysis,
+                    );
+                }
                 out.push(cached_analysis);
                 continue;
             }
@@ -509,45 +516,7 @@ fn cached_analyze_all(
                     analysis.project_name = project_cache.get(&key).and_then(|v| v.clone());
                 }
 
-                match client.children(summary) {
-                    Ok(child_summaries) => {
-                        for child_summary in &child_summaries {
-                            let child_client = clients
-                                .iter()
-                                .find(|candidate| candidate.kind() == child_summary.client);
-                            let child_client = match child_client {
-                                Some(client) => client,
-                                None => {
-                                    tracing::debug!(
-                                        child = child_summary.session_id.as_str(),
-                                        "no client for child session"
-                                    );
-                                    continue;
-                                }
-                            };
-                            match child_client.analyze(child_summary, plan) {
-                                Ok(child_analysis) => {
-                                    analysis.children.push(child_analysis);
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        child = child_summary.session_id.as_str(),
-                                        error = %e,
-                                        "child analyze failed, skipping"
-                                    );
-                                }
-                            }
-                        }
-                        analysis.subagent_file_count = child_summaries.len();
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            parent = summary.session_id.as_str(),
-                            error = %e,
-                            "children() failed, treating as empty"
-                        );
-                    }
-                }
+                refresh_children(client.as_ref(), clients, summary, plan, &mut analysis);
 
                 cache.insert(
                     summary.session_id.clone(),
@@ -564,6 +533,46 @@ fn cached_analyze_all(
     }
 
     (out, cache, project_cache)
+}
+
+fn refresh_children(
+    client: &dyn Client,
+    clients: &[Arc<dyn Client>],
+    summary: &agtop_core::session::SessionSummary,
+    plan: agtop_core::pricing::Plan,
+    analysis: &mut SessionAnalysis,
+) {
+    analysis.children.clear();
+    match client.children(summary) {
+        Ok(child_summaries) => {
+            for child_summary in &child_summaries {
+                let Some(child_client) = clients
+                    .iter()
+                    .find(|candidate| candidate.kind() == child_summary.client)
+                else {
+                    tracing::debug!(
+                        child = child_summary.session_id.as_str(),
+                        "no client for child session"
+                    );
+                    continue;
+                };
+                match child_client.analyze(child_summary, plan) {
+                    Ok(child_analysis) => analysis.children.push(child_analysis),
+                    Err(e) => tracing::debug!(
+                        child = child_summary.session_id.as_str(),
+                        error = %e,
+                        "child analyze failed, skipping"
+                    ),
+                }
+            }
+            analysis.subagent_file_count = child_summaries.len();
+        }
+        Err(e) => tracing::warn!(
+            parent = summary.session_id.as_str(),
+            error = %e,
+            "children() failed, treating as empty"
+        ),
+    }
 }
 
 #[cfg(test)]

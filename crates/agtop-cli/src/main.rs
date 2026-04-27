@@ -159,6 +159,7 @@ fn main() -> Result<()> {
         let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
         let info_map = agtop_core::ProcessCorrelator::new().snapshot(&summaries);
         agtop_core::process::attach_process_info(&info_map, &mut analyses);
+        agtop_core::resolve_session_states(&mut analyses, Utc::now());
         let out = JsonOutput {
             plan: cli.plan.clone(),
             sessions: analyses.iter().map(JsonSession::from).collect(),
@@ -703,6 +704,43 @@ mod json_output_tests {
 
         assert_eq!(json.state, Some(SessionState::Idle));
         assert_eq!(json.display_state, "idle");
+    }
+
+    #[test]
+    fn json_session_reports_closed_after_resolution_for_non_live_session() {
+        let now = Utc::now();
+        let summary = SessionSummary::new(
+            ClientKind::OpenCode,
+            None,
+            "sess".into(),
+            Some(now - chrono::Duration::minutes(10)),
+            Some(now - chrono::Duration::minutes(10)),
+            Some("model".into()),
+            Some("/tmp".into()),
+            PathBuf::from("/tmp/sess.json"),
+            Some(SessionState::Idle),
+            Some("finish=stop".into()),
+            None,
+            None,
+        );
+        let mut analyses = vec![SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )];
+
+        agtop_core::resolve_session_states(&mut analyses, now);
+        let json = JsonSession::from_analysis(&analyses[0], now);
+
+        assert_eq!(json.state, Some(SessionState::Closed));
+        assert_eq!(json.display_state, "closed");
     }
 
     #[test]

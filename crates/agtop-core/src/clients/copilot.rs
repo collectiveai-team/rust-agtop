@@ -414,7 +414,7 @@ fn parse_session_jsonl_all(
         None,
         path.to_path_buf(),
         if waiting {
-            Some(SessionState::Blocked)
+            Some(SessionState::AwaitingInput)
         } else {
             None
         },

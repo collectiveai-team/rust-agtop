@@ -14,13 +14,18 @@ pub fn display_state(
     match a
         .summary
         .state
-        .unwrap_or(agtop_core::session::SessionState::Running)
+        .unwrap_or(agtop_core::session::SessionState::Unknown)
     {
-        agtop_core::session::SessionState::Running => ("running", th::STATE_RUNNING),
-        agtop_core::session::SessionState::Blocked => ("blocked", th::STATE_BLOCKED),
+        agtop_core::session::SessionState::Running => ("run", th::STATE_RUNNING),
         agtop_core::session::SessionState::Idle => ("idle", th::STATE_IDLE),
+        agtop_core::session::SessionState::AwaitingInput => ("input", th::STATE_AWAITING_INPUT),
+        agtop_core::session::SessionState::AwaitingPermission => {
+            ("permit", th::STATE_AWAITING_PERMISSION)
+        }
+        agtop_core::session::SessionState::Stalled => ("stalled", th::STATE_STALLED),
         agtop_core::session::SessionState::Closed => ("closed", th::STATE_CLOSED),
-        _ => ("closed", th::STATE_CLOSED),
+        agtop_core::session::SessionState::Unknown => ("?", th::STATE_UNKNOWN),
+        _ => ("?", th::STATE_UNKNOWN),
     }
 }
 
@@ -71,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn live_running_session_displays_running() {
+    fn live_running_session_displays_run() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
         let a = analysis(
             Some(SessionState::Running),
@@ -82,15 +87,15 @@ mod tests {
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "running");
+        assert_eq!(label, "run");
         assert_eq!(style, th::STATE_RUNNING);
     }
 
     #[test]
-    fn live_blocked_session_displays_blocked() {
+    fn live_awaiting_permission_session_displays_permit() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
         let a = analysis(
-            Some(SessionState::Blocked),
+            Some(SessionState::AwaitingPermission),
             Some(now),
             Some(42),
             Some(Liveness::Live),
@@ -98,8 +103,8 @@ mod tests {
 
         let (label, style) = display_state(&a, now);
 
-        assert_eq!(label, "blocked");
-        assert_eq!(style, th::STATE_BLOCKED);
+        assert_eq!(label, "permit");
+        assert_eq!(style, th::STATE_AWAITING_PERMISSION);
     }
 
     #[test]

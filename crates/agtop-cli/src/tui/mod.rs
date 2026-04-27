@@ -835,13 +835,13 @@ mod tests {
 
     /// Tiny fixture: two sessions, Claude + Codex.
     ///
-    /// `s1_last` uses `Utc::now()` so the "waiting" state check always
+    /// `s1_last` uses `Utc::now()` so the "permit" state check always
     /// falls within `WAITING_STALE_SECS` regardless of when the test runs.
     fn fixture_app() -> App {
         let ts_started = Utc.with_ymd_and_hms(2026, 1, 1, 10, 0, 0).unwrap();
         let ts_last = Utc.with_ymd_and_hms(2026, 1, 1, 10, 30, 0).unwrap();
-        // Use a recent timestamp for the waiting session so `display_state`
-        // returns "waiting" rather than "stale" (sessions inactive for
+        // Use a recent timestamp for the permit session so `display_state`
+        // returns "permit" rather than "stale" (sessions inactive for
         // > WAITING_STALE_SECS are classified as stale even if waiting).
         let s1_last = Utc::now();
 
@@ -854,7 +854,7 @@ mod tests {
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),
-            Some(SessionState::Blocked),
+            Some(SessionState::AwaitingPermission),
             Some("tool approval pending".into()),
             Some("high".into()),
             Some("reasoning.effort=high".into()),
@@ -946,7 +946,7 @@ mod tests {
         assert!(contents.contains("Info"), "Info tab title missing");
         assert!(contents.contains("STATE"), "state header missing");
         assert!(contents.contains("EFFORT"), "effort header missing");
-        assert!(contents.contains("blocked"), "state value missing");
+        assert!(contents.contains("permit"), "state value missing");
         assert!(contents.contains("high"), "effort value missing");
         assert!(
             contents.contains(version::display_version()),

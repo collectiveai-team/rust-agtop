@@ -22,6 +22,8 @@ pub mod process;
 pub mod project;
 pub mod quota;
 pub mod session;
+pub mod state_resolution;
+pub use state_resolution::resolve_session_states;
 
 // Flat re-exports for the most commonly used public API items.
 // Consumers may also access sub-modules directly (e.g. `agtop_core::pricing::lookup`).

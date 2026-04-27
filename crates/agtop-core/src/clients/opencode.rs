@@ -102,6 +102,32 @@ impl Client for OpenCodeClient {
                 .retain_paths(&live_paths);
         }
 
+        // Apply pending permission requests to Running OpenCode sessions whose
+        // state_detail contains a running tool call.  The stub returns an empty
+        // list, so this is currently a no-op; future live-server integration
+        // replaces pending_opencode_permission_requests() with real data.
+        let permission_requests = pending_opencode_permission_requests();
+        if !permission_requests.is_empty() {
+            for summary in out.iter_mut() {
+                if summary.state != Some(SessionState::Running) {
+                    continue;
+                }
+                let (msg_id, call_id) = match summary.state_detail.as_deref() {
+                    Some(d) if d.contains("opencode.tool=") => (
+                        parse_detail_message_id(d).map(str::to_string),
+                        parse_detail_call_id(d).map(str::to_string),
+                    ),
+                    _ => continue,
+                };
+                apply_opencode_permission_requests(
+                    summary,
+                    &permission_requests,
+                    msg_id.as_deref(),
+                    call_id.as_deref(),
+                );
+            }
+        }
+
         Ok(out)
     }
 
@@ -174,6 +200,36 @@ fn state_from_opencode_message(v: &serde_json::Value) -> Option<(SessionState, S
     }
 }
 
+fn state_from_opencode_part(v: &serde_json::Value) -> Option<(SessionState, String)> {
+    if v.get("type").and_then(|x| x.as_str()) != Some("tool")
+        || v.pointer("/state/status").and_then(|x| x.as_str()) != Some("running")
+    {
+        return None;
+    }
+
+    let tool = v.get("tool").and_then(|x| x.as_str())?;
+    if tool == "question" {
+        return Some((
+            SessionState::AwaitingInput,
+            format!("opencode.tool={tool}:running"),
+        ));
+    }
+    if matches!(tool, "write" | "edit" | "bash" | "task") {
+        return Some((
+            SessionState::Running,
+            format!("opencode.tool={tool}:running"),
+        ));
+    }
+    None
+}
+
+/// Returns the call ID embedded in a running tool part, if present.
+fn call_id_from_part(v: &serde_json::Value) -> Option<&str> {
+    v.get("callID")
+        .or_else(|| v.get("id"))
+        .and_then(|x| x.as_str())
+}
+
 fn is_opencode_pending_placeholder(v: &serde_json::Value) -> bool {
     if v.get("finish").is_some() {
         return false;
@@ -212,6 +268,58 @@ fn is_opencode_pending_placeholder(v: &serde_json::Value) -> bool {
 fn read_json(path: &Path) -> Result<serde_json::Value> {
     let text = fs::read_to_string(path)?;
     Ok(serde_json::from_str(&text)?)
+}
+
+// ---------------------------------------------------------------------------
+// Permission request matching
+// ---------------------------------------------------------------------------
+
+/// Returns pending OpenCode permission requests from a live source.
+///
+/// This is a stub that always returns an empty list.  In the future it may
+/// query the running OpenCode server's permission-request endpoint.  The
+/// empty return value is intentional: it prevents generic running tool parts
+/// (write/edit/bash/task) from being incorrectly promoted to
+/// `AwaitingPermission` without an explicit, correlated permission request.
+fn pending_opencode_permission_requests() -> Vec<serde_json::Value> {
+    Vec::new()
+}
+
+/// Applies pending OpenCode permission requests to a session summary.
+///
+/// A request matches when its `sessionID` equals `summary.session_id` **and**
+/// its `tool.messageID` / `tool.callID` match the IDs embedded in the current
+/// `state_detail` (extracted via `latest_message_id` / `latest_call_id`).
+/// When a match is found the summary state is promoted to `AwaitingPermission`.
+fn apply_opencode_permission_requests(
+    summary: &mut SessionSummary,
+    requests: &[serde_json::Value],
+    latest_message_id: Option<&str>,
+    latest_call_id: Option<&str>,
+) {
+    let matched = requests.iter().any(|request| {
+        request.get("sessionID").and_then(|v| v.as_str()) == Some(summary.session_id.as_str())
+            && request.pointer("/tool/messageID").and_then(|v| v.as_str()) == latest_message_id
+            && request.pointer("/tool/callID").and_then(|v| v.as_str()) == latest_call_id
+    });
+    if matched {
+        summary.state = Some(SessionState::AwaitingPermission);
+        summary.state_detail = Some("opencode.permission=pending".to_string());
+    }
+}
+
+/// Parse `message=<id>` from a state detail string.
+fn parse_detail_message_id(detail: &str) -> Option<&str> {
+    detail
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("message="))
+}
+
+/// Parse `call=<id>` from a state detail string.
+fn parse_detail_call_id(detail: &str) -> Option<&str> {
+    detail
+        .split_whitespace()
+        .find_map(|tok| tok.strip_prefix("call="))
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,37 +1285,80 @@ fn latest_message_state_sqlite(
     // Only inspect the most recent *assistant* message for state.
     // User messages (tool results, question responses) do not carry a
     // `finish` field and would otherwise mask the actual assistant state.
-    let rows: Vec<String> = match conn
+    let rows: Vec<(String, String)> = match conn
         .prepare(
-            "SELECT data FROM message \
+            "SELECT id, data FROM message \
              WHERE session_id = ?1 \
-               AND json_extract(data, '$.role') = 'assistant' \
-             ORDER BY time_created DESC LIMIT 2",
+                AND json_extract(data, '$.role') = 'assistant' \
+              ORDER BY time_created DESC LIMIT 2",
         )
         .and_then(|mut stmt| {
-            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
-                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            stmt.query_map(rusqlite::params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
         }) {
         Ok(rows) => rows,
         Err(_) => return (None, None),
     };
 
-    let mut parsed = rows
-        .iter()
-        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok());
+    let mut parsed = rows.iter().filter_map(|(id, data)| {
+        serde_json::from_str::<serde_json::Value>(data)
+            .ok()
+            .map(|value| (id.as_str(), value))
+    });
 
-    let Some(latest) = parsed.next() else {
+    let Some((latest_id, latest)) = parsed.next() else {
         return (None, None);
     };
+    if let Some((state, detail)) = latest_message_part_state_sqlite(conn, latest_id, session_id) {
+        return (Some(state), Some(detail));
+    }
     if is_opencode_pending_placeholder(&latest) {
         return parsed
             .next()
-            .and_then(|value| state_from_opencode_message(&value))
+            .and_then(|(_, value)| state_from_opencode_message(&value))
             .map_or((None, None), |(state, detail)| (Some(state), Some(detail)));
     }
 
     state_from_opencode_message(&latest)
         .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
+}
+
+fn latest_message_part_state_sqlite(
+    conn: &rusqlite::Connection,
+    message_id: &str,
+    session_id: &str,
+) -> Option<(SessionState, String)> {
+    let rows: Vec<String> = conn
+        .prepare(
+            "SELECT data FROM part \
+             WHERE session_id = ?1 AND message_id = ?2 \
+             ORDER BY time_created DESC",
+        )
+        .ok()?
+        .query_map(rusqlite::params![session_id, message_id], |row| {
+            row.get::<_, String>(0)
+        })
+        .ok()?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    rows.iter()
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok())
+        .find_map(|value| {
+            let (state, base_detail) = state_from_opencode_part(&value)?;
+            // For running tool parts, embed message/call IDs so the
+            // permission-request matcher can correlate against live requests.
+            let call_id = call_id_from_part(&value);
+            let detail = match call_id {
+                Some(cid) => {
+                    format!("{base_detail} message={message_id} call={cid}")
+                }
+                None => format!("{base_detail} message={message_id}"),
+            };
+            Some((state, detail))
+        })
 }
 
 fn first_message_identity_sqlite(
@@ -2565,5 +2716,178 @@ mod tests {
 
         let got = resolve_subscription(&subscriptions, None, Some("openai/gpt-5.4"));
         assert_eq!(got.as_deref(), Some("ChatGPT Plus"));
+    }
+
+    #[test]
+    fn latest_message_state_sqlite_maps_running_question_part_to_awaiting_input() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "msg_question",
+                "ses_test",
+                10i64,
+                10i64,
+                serde_json::json!({
+                    "role": "assistant",
+                    "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "prt_question",
+                "msg_question",
+                "ses_test",
+                11i64,
+                11i64,
+                serde_json::json!({
+                    "type": "tool",
+                    "tool": "question",
+                    "state": {"status": "running"}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_message_state_sqlite(&conn, "ses_test"),
+            (
+                Some(SessionState::AwaitingInput),
+                Some("opencode.tool=question:running message=msg_question".to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn latest_message_state_sqlite_keeps_running_write_part_running() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute(
+            "CREATE TABLE message (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "CREATE TABLE part (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                time_created INTEGER NOT NULL,
+                time_updated INTEGER NOT NULL,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "msg_write",
+                "ses_test",
+                10i64,
+                10i64,
+                serde_json::json!({
+                    "role": "assistant",
+                    "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "prt_write",
+                "msg_write",
+                "ses_test",
+                11i64,
+                11i64,
+                serde_json::json!({
+                    "type": "tool",
+                    "tool": "write",
+                    "state": {"status": "running", "input": {"filePath": "/etc/joke.txt"}}
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            latest_message_state_sqlite(&conn, "ses_test"),
+            (
+                Some(SessionState::Running),
+                Some("opencode.tool=write:running message=msg_write".to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn opencode_permission_request_maps_matching_tool_to_awaiting_permission() {
+        let mut summary = SessionSummary::new(
+            ClientKind::OpenCode,
+            None,
+            "ses_test".to_string(),
+            None,
+            None,
+            None,
+            None,
+            PathBuf::from("/tmp/opencode.db"),
+            Some(SessionState::Running),
+            Some("opencode.tool=write:running message=msg1 call=call1".to_string()),
+            None,
+            None,
+        );
+        let requests = vec![serde_json::json!({
+            "sessionID": "ses_test",
+            "permission": "edit",
+            "tool": {"messageID": "msg1", "callID": "call1"}
+        })];
+
+        apply_opencode_permission_requests(&mut summary, &requests, Some("msg1"), Some("call1"));
+
+        assert_eq!(summary.state, Some(SessionState::AwaitingPermission));
+        assert_eq!(
+            summary.state_detail.as_deref(),
+            Some("opencode.permission=pending")
+        );
     }
 }
