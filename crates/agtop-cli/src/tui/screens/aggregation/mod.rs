@@ -2,6 +2,10 @@
 // Foundation code for Plan 3.
 #![allow(dead_code)]
 
+pub mod controls;
+pub mod table;
+pub mod drilldown;
+
 use ratatui::{layout::Rect, widgets::Paragraph, Frame};
 use crate::tui::theme_v2::Theme;
 
