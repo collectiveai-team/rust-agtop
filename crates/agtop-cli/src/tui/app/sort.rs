@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Sort state and sort-key logic for the session table.
 
 use agtop_core::session::{SessionAnalysis, TokenTotals};

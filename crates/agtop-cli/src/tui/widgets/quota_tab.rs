@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Classic mode — Quota tab body.
 
 use ratatui::{

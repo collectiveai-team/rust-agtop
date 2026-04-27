@@ -56,6 +56,7 @@ use refresh::{RefreshHandle, RefreshMsg};
 
 /// Geometry of the last-rendered frame. Written by [`render`], read by
 /// the event loop to map mouse coordinates to UI regions.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct UiLayout {
     /// The full table widget area (including its border).
@@ -107,6 +108,7 @@ struct UiLayout {
 /// Run the interactive TUI. Blocks until the user quits or the terminal
 /// raises an IO error. On exit, the terminal is returned to its
 /// previous state regardless of success/failure.
+#[allow(dead_code)]
 fn decode_svg(data: &[u8]) -> Option<image::DynamicImage> {
     let tree = resvg::usvg::Tree::from_data(data, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
@@ -126,6 +128,7 @@ fn decode_svg(data: &[u8]) -> Option<image::DynamicImage> {
     Some(image::DynamicImage::ImageRgba8(buf))
 }
 
+#[allow(dead_code)]
 pub fn run(
     clients: Vec<Arc<dyn Client>>,
     enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
@@ -202,6 +205,7 @@ pub fn run(
     result
 }
 
+#[allow(dead_code)]
 fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -271,6 +275,7 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
 
 /// Translate a crossterm mouse event into an App mutation. All geometry
 /// is sourced from the `UiLayout` captured during the previous render.
+#[allow(dead_code)]
 fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
     match event.kind {
         // ── Scroll wheel ──────────────────────────────────────────────────
@@ -454,6 +459,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
 
 /// Return true when `(col, row)` falls inside `rect` (all inclusive of
 /// the border).
+#[allow(dead_code)]
 #[inline]
 fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
@@ -462,6 +468,7 @@ fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
 /// Compose the full UI: header + session table + bottom tabs + footer.
 /// Also writes the geometry of key areas into `layout` so the event
 /// loop can do mouse hit-testing without re-computing the split.
+#[allow(dead_code)]
 fn render(
     frame: &mut Frame<'_>,
     app: &App,
@@ -589,6 +596,7 @@ pub const LOGO_WIDTH: u16 = 3;
 /// re-run the protocol's `render` on every frame. Cells embed any
 /// transmit/escape data the protocol needs to emit; ratatui's diff
 /// suppresses repeats when the cells are stable.
+#[allow(dead_code)]
 fn render_logo_to_cells(proto: &ratatui_image::protocol::Protocol) -> Vec<ratatui::buffer::Cell> {
     use ratatui::widgets::Widget;
     use ratatui_image::Image;
@@ -761,6 +769,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     }
 }
 
+#[allow(dead_code)]
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let (text, style) = match app.mode() {
         InputMode::Filter => (
@@ -812,17 +821,14 @@ pub fn run_v2(
         loop {
             // 1. Drain snapshots from the background worker.
             while let Some(msg) = handle.try_recv() {
-                match msg {
-                    refresh::RefreshMsg::Snapshot { analyses, .. } => {
-                        refresh_adapter::apply_analyses(
-                            &analyses,
-                            &mut app.dashboard.header,
-                            &mut app.dashboard.sessions,
-                            &mut app.dashboard.quota,
-                            refresh_interval.as_secs(),
-                        );
-                    }
-                    _ => {}
+                if let refresh::RefreshMsg::Snapshot { analyses, .. } = msg {
+                    refresh_adapter::apply_analyses(
+                        &analyses,
+                        &mut app.dashboard.header,
+                        &mut app.dashboard.sessions,
+                        &mut app.dashboard.quota,
+                        refresh_interval.as_secs(),
+                    );
                 }
             }
 

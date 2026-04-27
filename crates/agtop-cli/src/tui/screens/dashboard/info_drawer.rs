@@ -15,8 +15,16 @@ use crate::tui::msg::Msg;
 use crate::tui::theme_v2::Theme;
 use crate::tui::widgets::drawer::{self, Anchor};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DrawerVis {
+    #[default]
+    Closed,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InfoTab {
+    #[default]
     Summary,
     General,
     Costs,
@@ -36,9 +44,6 @@ impl InfoTab {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DrawerVis { Open, Closed }
-
 #[derive(Debug, Default)]
 pub struct InfoDrawer {
     pub vis: DrawerVis,
@@ -46,9 +51,6 @@ pub struct InfoDrawer {
     /// Selected session id from the table; the drawer reads its content from this.
     pub selected_session_id: Option<String>,
 }
-
-impl Default for DrawerVis { fn default() -> Self { Self::Closed } }
-impl Default for InfoTab  { fn default() -> Self { Self::Summary } }
 
 impl InfoDrawer {
     pub fn render(&self, frame: &mut Frame<'_>, parent: Rect, theme: &Theme) {

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 use std::collections::BTreeMap;
 
 use chrono::{Datelike, Local};

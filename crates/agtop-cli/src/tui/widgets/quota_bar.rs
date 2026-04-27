@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Shared bar-rendering helpers for the quota pane.
 
 use agtop_core::quota::QuotaError;

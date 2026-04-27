@@ -29,8 +29,8 @@ impl Default for App {
             show_help: false,
             running: true,
             dashboard: DashboardState::default(),
-            aggregation: AggregationState::default(),
-            config: ConfigState::default(),
+            aggregation: Default::default(),
+            config: Default::default(),
         }
     }
 }

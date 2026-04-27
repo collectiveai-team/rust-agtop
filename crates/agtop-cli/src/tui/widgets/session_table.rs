@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Top half of the TUI: the session list table.
 //!
 //! Pure rendering — all business logic (sort / filter / selection)

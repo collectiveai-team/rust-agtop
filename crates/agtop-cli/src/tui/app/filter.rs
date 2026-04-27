@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Text-filter predicate for the session table.
 
 use agtop_core::session::SessionAnalysis;

@@ -219,7 +219,7 @@ impl SessionsTable {
         match self.sort_key {
             SessionSortKey::Age => {
                 self.rows.sort_by_key(|r| {
-                    r.analysis.summary.last_active.unwrap_or_else(|| chrono::DateTime::<chrono::Utc>::MIN_UTC)
+                    r.analysis.summary.last_active.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
                 });
                 if self.sort_dir == SortDir::Desc { self.rows.reverse() }
             }
@@ -493,8 +493,10 @@ mod tests {
     #[test]
     fn down_moves_selection_forward() {
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-        let mut t = SessionsTable::default();
-        t.rows = vec![mock_row("a"), mock_row("b"), mock_row("c")];
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
+            ..SessionsTable::default()
+        };
         t.state.select(Some(0));
         let ev = AppEvent::Key(KeyEvent {
             code: KeyCode::Down,
@@ -509,8 +511,10 @@ mod tests {
     #[test]
     fn up_wraps_from_zero() {
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-        let mut t = SessionsTable::default();
-        t.rows = vec![mock_row("a"), mock_row("b"), mock_row("c")];
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
+            ..SessionsTable::default()
+        };
         t.state.select(Some(0));
         let ev = AppEvent::Key(KeyEvent {
             code: KeyCode::Up,

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! "Process" tab: live OS resource metrics for the selected session.
 
 use ratatui::{

@@ -23,6 +23,7 @@ pub mod state_dot;
 pub mod state_style;
 
 /// Right-aligned key–value row used by Info and Process tabs.
+#[allow(dead_code)]
 pub(super) fn kv_line(key: &'static str, value: String) -> ratatui::prelude::Line<'static> {
     use crate::tui::theme as th;
     use ratatui::prelude::*;

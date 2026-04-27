@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 use chrono::{DateTime, Utc};
 use ratatui::style::Style;
 

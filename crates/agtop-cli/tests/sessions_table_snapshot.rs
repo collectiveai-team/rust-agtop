@@ -120,9 +120,11 @@ fn fixture() -> Vec<SessionRow> {
 #[test]
 fn sessions_table_140x12_snapshot() {
     let theme = vscode_dark_plus::theme();
-    let mut table = SessionsTable::default();
-    table.rows = fixture();
-    table.animations_enabled = false; // deterministic for snapshot
+    let mut table = SessionsTable {
+        rows: fixture(),
+        animations_enabled: false, // deterministic for snapshot
+        ..SessionsTable::default()
+    };
     table.apply_sort();
     let buf = render_to_buffer(140, 12, |f| table.render(f, Rect::new(0, 0, 140, 12), &theme));
     insta::assert_snapshot!("sessions_table_140x12", buffer_to_text(&buf));

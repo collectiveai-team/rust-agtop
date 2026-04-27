@@ -17,8 +17,9 @@ use crate::tui::msg::Msg;
 use crate::tui::theme_v2::{client_palette, Theme};
 use crate::tui::widgets::gradient_bar;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum QuotaMode {
+    #[default]
     Short,
     Long,
     Hidden,
@@ -42,9 +43,7 @@ impl QuotaMode {
     }
 }
 
-impl Default for QuotaMode {
-    fn default() -> Self { Self::Short }
-}
+
 
 /// One client's closest-to-limit window (short mode) or full set of windows (long mode).
 #[derive(Debug, Clone)]

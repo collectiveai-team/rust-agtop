@@ -3,6 +3,8 @@
 //! This module deliberately has zero ratatui/crossterm imports. Every
 //! piece of logic here — sorting, filtering, selection clamping, input
 //! mode transitions — is driven by plain method calls and tested
+// Legacy code retained for existing tests. New entry point uses app_v2.
+#![allow(dead_code, unused)]
 //! without a terminal backend. The rendering layer in
 //! [`super::widgets`] consumes an [`App`] snapshot via shared refs.
 

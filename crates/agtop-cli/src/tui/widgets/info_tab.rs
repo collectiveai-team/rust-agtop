@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! "Info" tab: static metadata for the selected session.
 
 use chrono::{DateTime, Local, Utc};

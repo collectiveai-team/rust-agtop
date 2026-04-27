@@ -3,6 +3,8 @@
 //! We keep the crossterm dependency confined to this file. The event
 //! loop calls [`apply_key`] with a decoded [`KeyEvent`]; downstream
 //! logic is handled by mutating [`super::app::App`] via its public
+// Legacy event handling retained for existing tests. New entry uses app_v2.
+#![allow(dead_code, unused)]
 //! methods. This split means we can build a message-free test by
 //! constructing synthetic `KeyEvent`s without ever touching the real
 //! terminal.

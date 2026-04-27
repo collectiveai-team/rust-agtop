@@ -35,9 +35,10 @@ fn cards() -> Vec<QuotaCardModel> {
 #[test]
 fn quota_short_140x4_snapshot() {
     let theme = vscode_dark_plus::theme();
-    let mut p = QuotaPanel::default();
-    p.mode = QuotaMode::Short;
-    p.cards = cards();
+    let p = QuotaPanel {
+        mode: QuotaMode::Short,
+        cards: cards(),
+    };
     let buf = render_to_buffer(140, 4, |f| p.render(f, Rect::new(0, 0, 140, 4), &theme));
     insta::assert_snapshot!("quota_short_140x4", buffer_to_text(&buf));
 }
@@ -45,9 +46,10 @@ fn quota_short_140x4_snapshot() {
 #[test]
 fn quota_long_140x12_snapshot() {
     let theme = vscode_dark_plus::theme();
-    let mut p = QuotaPanel::default();
-    p.mode = QuotaMode::Long;
-    p.cards = cards();
+    let p = QuotaPanel {
+        mode: QuotaMode::Long,
+        cards: cards(),
+    };
     let buf = render_to_buffer(140, 12, |f| p.render(f, Rect::new(0, 0, 140, 12), &theme));
     insta::assert_snapshot!("quota_long_140x12", buffer_to_text(&buf));
 }
