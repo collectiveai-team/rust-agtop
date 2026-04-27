@@ -56,13 +56,15 @@ pub fn apply_analyses(
             activity_samples: vec![],
             depth: 0,
             parent_session_id: None,
+            is_last_child: false,
         });
         // Insert children unless this parent is collapsed.
         if !a.children.is_empty() && !sessions.collapsed.contains(&a.summary.session_id) {
             let mut children: Vec<&SessionAnalysis> = a.children.iter().collect();
             // Sort children by started_at descending (newest first).
             children.sort_by(|x, y| y.summary.started_at.cmp(&x.summary.started_at));
-            for child in children {
+            let last_idx = children.len().saturating_sub(1);
+            for (i, child) in children.into_iter().enumerate() {
                 let child_kind = child.summary.client;
                 flat_rows.push(SessionRow {
                     analysis: child.clone(),
@@ -71,6 +73,7 @@ pub fn apply_analyses(
                     activity_samples: vec![],
                     depth: 1,
                     parent_session_id: Some(a.summary.session_id.clone()),
+                    is_last_child: i == last_idx,
                 });
             }
         }
@@ -531,6 +534,91 @@ mod tests {
         apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
 
         assert_eq!(sessions.rows.len(), 1, "collapsed parent hides children");
+    }
+
+    #[test]
+    fn last_child_is_marked_is_last_child_true() {
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
+        use agtop_core::process::Liveness;
+        use chrono::Utc;
+
+        // Helper to build a child SessionAnalysis with a unique id.
+        let mk_child = |id: &str| {
+            let summary = SessionSummary::new(
+                ClientKind::Claude,
+                None,
+                id.to_string(),
+                None,
+                Some(Utc::now()),
+                None,
+                None,
+                std::path::PathBuf::from(format!("/tmp/{id}.jsonl")),
+                None,
+                None,
+                None,
+                None,
+            );
+            SessionAnalysis::new(
+                summary,
+                TokenTotals::default(),
+                CostBreakdown::default(),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+
+        let mut parent = analysis("multi-child-parent");
+        parent.liveness = Some(Liveness::Live);
+        // Children sorted by started_at desc inside apply_analyses; we use
+        // identical timestamps so the order is preserved as inserted.
+        parent.children = vec![mk_child("c1"), mk_child("c2"), mk_child("c3")];
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        // Mark parent as known + expanded so children render.
+        sessions.known_parents.insert("multi-child-parent".to_string());
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(
+            &[parent],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
+
+        // 1 parent + 3 children = 4 rows.
+        assert_eq!(sessions.rows.len(), 4);
+        assert_eq!(sessions.rows[0].depth, 0);
+        // Parent row is never a tree-leaf glyph holder.
+        assert!(
+            !sessions.rows[0].is_last_child,
+            "parent (depth 0) is_last_child must be false"
+        );
+        // Among the three children, exactly one — the LAST in render order — is_last_child.
+        let child_rows: Vec<&SessionRow> =
+            sessions.rows.iter().filter(|r| r.depth == 1).collect();
+        assert_eq!(child_rows.len(), 3);
+        assert!(
+            !child_rows[0].is_last_child,
+            "first child must not be last"
+        );
+        assert!(
+            !child_rows[1].is_last_child,
+            "middle child must not be last"
+        );
+        assert!(
+            child_rows[2].is_last_child,
+            "last child must be is_last_child = true"
+        );
     }
 
     #[test]

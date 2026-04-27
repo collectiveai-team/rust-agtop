@@ -55,6 +55,7 @@ fn mk(
         activity_samples: samples,
         depth: 0,
         parent_session_id: None,
+        is_last_child: false,
     }
 }
 

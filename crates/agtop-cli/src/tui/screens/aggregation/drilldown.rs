@@ -38,6 +38,7 @@ impl DrillDown {
                 activity_samples: vec![],
                 depth: 0,
                 parent_session_id: None,
+                is_last_child: false,
             })
             .collect();
         self.table.apply_sort();

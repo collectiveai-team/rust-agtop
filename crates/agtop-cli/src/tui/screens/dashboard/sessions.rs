@@ -34,6 +34,9 @@ pub struct SessionRow {
     pub depth: u8,
     /// Session ID of the parent, if this is a child row (depth == 1).
     pub parent_session_id: Option<String>,
+    /// True if this is the last child of its parent (renders `└──` instead of `├──`).
+    /// Always false for parent (depth == 0) rows.
+    pub is_last_child: bool,
 }
 
 #[derive(Debug)]
@@ -137,9 +140,9 @@ impl SessionsTable {
             .collect();
 
         let mut constraints: Vec<Constraint> = Vec::with_capacity(columns.len() + 2);
-        // State-dot column: 4 cells wide so depth=0 toggle (▶/▼ + space) and
-        // depth=1 indent (2 spaces) both leave room for the dot.
-        constraints.push(Constraint::Length(4));
+        // State-dot column: 5 cells wide. depth=0 needs 2 (▶ + space) + dot + space;
+        // depth=1 needs 4 for the tree glyph (`├── ` / `└── `) + dot.
+        constraints.push(Constraint::Length(5));
         for (i, c) in columns.iter().enumerate() {
             constraints.push(width_for(*c));
             if Some(i) == activity_after {
@@ -194,8 +197,21 @@ impl SessionsTable {
             };
             Cell::from(Line::from(vec![toggle, dot_span]))
         } else if row.depth == 1 {
-            // Indent child rows.
-            Cell::from(Line::from(vec![Span::raw("  "), dot_span]))
+            // Indent child rows with filetree glyphs:
+            //   ├── for non-last children
+            //   └── for the last child of a parent
+            let glyph = if row.is_last_child {
+                Span::styled(
+                    "└── ",
+                    Style::default().fg(theme.fg_muted),
+                )
+            } else {
+                Span::styled(
+                    "├── ",
+                    Style::default().fg(theme.fg_muted),
+                )
+            };
+            Cell::from(Line::from(vec![glyph, dot_span]))
         } else {
             Cell::from(Line::from(vec![dot_span]))
         };
@@ -781,6 +797,7 @@ mod tests {
             activity_samples: vec![],
             depth: 0,
             parent_session_id: None,
+            is_last_child: false,
         }
     }
 
@@ -868,6 +885,61 @@ mod tests {
         });
         t.handle_event(&ev);
         assert_eq!(t.state.selected(), Some(1), "scroll inside table must advance selection");
+    }
+
+    #[test]
+    fn depth_one_row_renders_tree_glyph_in_first_cell() {
+        use crate::tui::theme_v2::vscode_dark_plus;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let theme = vscode_dark_plus::theme();
+        let mut parent = mock_row("parent01");
+        // Pretend the parent has at least one child so the toggle (▶/▼) renders.
+        parent.analysis.children = vec![parent.analysis.clone()];
+
+        let mut child_a = mock_row("childAAA");
+        child_a.depth = 1;
+        child_a.parent_session_id = Some("parent01".into());
+        child_a.is_last_child = false; // mid child
+
+        let mut child_b = mock_row("childBBB");
+        child_b.depth = 1;
+        child_b.parent_session_id = Some("parent01".into());
+        child_b.is_last_child = true; // last child
+
+        let mut t = SessionsTable {
+            rows: vec![parent, child_a, child_b],
+            ..SessionsTable::default()
+        };
+
+        let mut term = Terminal::new(TestBackend::new(160, 10)).unwrap();
+        term.draw(|f| t.render(f, ratatui::layout::Rect::new(0, 0, 160, 10), &theme))
+            .unwrap();
+
+        let buf = term.backend().buffer().clone();
+        // Header is row 0; data rows start at y=1. Order: parent, child_a, child_b.
+        // Read leftmost ~10 cells of each child row and assert tree glyph presence.
+        let read_row_prefix = |y: u16, len: usize| -> String {
+            let mut s = String::new();
+            for x in 0..(len as u16) {
+                let cell = &buf[(x, y)];
+                s.push_str(cell.symbol());
+            }
+            s
+        };
+
+        let mid_prefix = read_row_prefix(2, 12);
+        let last_prefix = read_row_prefix(3, 12);
+
+        assert!(
+            mid_prefix.contains("├──"),
+            "mid child must render with `├──` glyph; got: {mid_prefix:?}"
+        );
+        assert!(
+            last_prefix.contains("└──"),
+            "last child must render with `└──` glyph; got: {last_prefix:?}"
+        );
     }
 
     #[test]
