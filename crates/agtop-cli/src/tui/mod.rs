@@ -827,6 +827,7 @@ pub fn run_v2(
                         &mut app.dashboard.header,
                         &mut app.dashboard.sessions,
                         &mut app.dashboard.quota,
+                        &mut app.aggregation,
                         refresh_interval.as_secs(),
                     );
                 }

@@ -78,7 +78,7 @@ impl App {
         // Then route to active screen.
         match self.current {
             ScreenId::Dashboard => self.dashboard.handle_event(event),
-            ScreenId::Aggregation => None,
+            ScreenId::Aggregation => self.aggregation.handle_event(event),
             ScreenId::Config => None,
         }
     }

@@ -7,6 +7,7 @@
 
 use agtop_core::session::SessionState;
 
+use crate::tui::screens::aggregation::AggregationState;
 use crate::tui::screens::dashboard::{
     header::HeaderModel,
     quota::QuotaPanel,
@@ -19,6 +20,7 @@ pub fn apply_analyses(
     header: &mut HeaderModel,
     sessions: &mut SessionsTable,
     _quota: &mut QuotaPanel,
+    aggregation: &mut AggregationState,
     refresh_secs: u64,
 ) {
     // --- Sessions ---
@@ -71,4 +73,8 @@ pub fn apply_analyses(
         if header.cpu_history.len() > 30 { header.cpu_history.remove(0); }
         header.mem_used_bytes = total_mem;
     }
+
+    // --- Aggregation ---
+    aggregation.sessions = analyses.to_vec();
+    aggregation.recompute();
 }
