@@ -33,12 +33,10 @@ impl AggregationTable {
         if !self.groups.is_empty() {
             let total_sessions: usize = self.groups.iter().map(|g| g.session_count).sum();
             let total_tokens: u64 = self.groups.iter().map(|g| g.total_tokens).sum();
-            let total_cost: Option<f64> = self.groups.iter().fold(Some(0.0), |acc, g| {
-                match (acc, g.total_cost) {
-                    (Some(a), Some(c)) => Some(a + c),
-                    _ => None,
-                }
-            });
+            let total_cost: Option<f64> = self
+                .groups
+                .iter()
+                .try_fold(0.0_f64, |acc, g| g.total_cost.map(|c| acc + c));
             rows.push(Row::new(vec![
                 Cell::from(Span::styled("TOTAL", Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD))),
                 Cell::from(format!("{total_sessions}")),
@@ -97,7 +95,11 @@ fn format_tokens(t: u64) -> String {
 }
 
 fn format_relative(t: chrono::DateTime<chrono::Utc>) -> String {
-    let d = chrono::Utc::now() - t;
+    format_relative_from(t, chrono::Utc::now())
+}
+
+pub fn format_relative_from(t: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> String {
+    let d = now - t;
     if d.num_seconds() < 60 { "just now".into() }
     else if d.num_minutes() < 60 { format!("{}m ago", d.num_minutes()) }
     else if d.num_hours() < 24 { format!("{}h ago", d.num_hours()) }

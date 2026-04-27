@@ -163,10 +163,18 @@ mod tests {
             None,
             None,
         );
-        let mut tok = TokenTotals::default();
-        tok.input = tokens;
-        let mut c = CostBreakdown::default();
-        c.total = cost;
+        #[allow(clippy::field_reassign_with_default)]
+        let tok = {
+            let mut t = TokenTotals::default();
+            t.input = tokens;
+            t
+        };
+        #[allow(clippy::field_reassign_with_default)]
+        let c = {
+            let mut cb = CostBreakdown::default();
+            cb.total = cost;
+            cb
+        };
         SessionAnalysis::new(summary, tok, c, None, 0, None, None, None, None, None)
     }
 
