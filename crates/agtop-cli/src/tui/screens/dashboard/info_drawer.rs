@@ -4,7 +4,7 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
     Frame,
@@ -12,8 +12,10 @@ use ratatui::{
 
 use crate::tui::input::AppEvent;
 use crate::tui::msg::Msg;
+use crate::tui::screens::dashboard::sessions::SessionRow;
 use crate::tui::theme_v2::Theme;
 use crate::tui::widgets::drawer::{self, Anchor};
+use super::{info_costs, info_general, info_process, info_summary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DrawerVis {
@@ -48,32 +50,82 @@ impl InfoTab {
 pub struct InfoDrawer {
     pub vis: DrawerVis,
     pub tab: InfoTab,
-    /// Selected session id from the table; the drawer reads its content from this.
-    pub selected_session_id: Option<String>,
+    /// Selected session row from the table; drives all tab bodies.
+    pub selected_row: Option<SessionRow>,
+    /// Last area occupied by the drawer (set during render). Used to block
+    /// click-through to the sessions table behind the drawer.
+    pub last_area: Option<Rect>,
 }
 
 impl InfoDrawer {
-    pub fn render(&self, frame: &mut Frame<'_>, parent: Rect, theme: &Theme) {
-        if self.vis == DrawerVis::Closed { return; }
+    /// Sync the selected row from the sessions table. Call after every
+    /// selection change.
+    pub fn set_row(&mut self, row: Option<SessionRow>) {
+        self.selected_row = row;
+    }
+
+    /// Convenience accessor for the selected session id (for the drawer title).
+    fn selected_session_id(&self) -> Option<&str> {
+        self.selected_row
+            .as_ref()
+            .map(|r| r.analysis.summary.session_id.as_str())
+    }
+
+    pub fn render(&mut self, frame: &mut Frame<'_>, parent: Rect, theme: &Theme) {
+        if self.vis == DrawerVis::Closed {
+            self.last_area = None;
+            return;
+        }
         let area = drawer::rect_for(parent, Anchor::BottomRight, 0.5, 0.6);
-        let title = format!(
-            " Session: {id}  [1] Summary  [2] General  [3] Costs  [4] Process ",
-            id = self.selected_session_id.as_deref().unwrap_or("—"),
-        );
+        self.last_area = Some(area);
+
+        let id_str = self.selected_session_id().unwrap_or("—");
+        let tabs_full  = " [1] Summary  [2] General  [3] Costs  [4] Process ";
+        let tabs_short = " [1]Sum [2]Gen [3]Cost [4]Proc ";
+        let id_part = format!(" Session: {id_str} ");
+        let tabs_part = if (area.width as usize) >= id_part.len() + tabs_full.len() {
+            tabs_full
+        } else {
+            tabs_short
+        };
+        let title = format!("{id_part}{tabs_part}");
         let inner = drawer::render_chrome(frame, area, &title, theme);
-        // Tab body — content wired in Tasks 15-18.
-        match self.tab {
-            InfoTab::Summary => {
-                frame.render_widget(Paragraph::new("(Summary content — wired in Task 18)"), inner);
+
+        // Tab body — dispatch to real content modules when a row is selected;
+        // show a friendly placeholder otherwise.
+        match (self.tab, self.selected_row.as_ref()) {
+            (InfoTab::Summary, Some(row)) => {
+                use agtop_core::session::SessionState;
+                let state = row
+                    .analysis
+                    .session_state
+                    .clone()
+                    .unwrap_or(SessionState::Closed);
+                let model = info_summary::SummaryModel {
+                    analysis: &row.analysis,
+                    client_label: &row.client_label,
+                    client_kind: row.client_kind,
+                    state: &state,
+                    recent_turns: vec![],
+                    nerd_font: false,
+                };
+                info_summary::render(frame, inner, &model, theme);
             }
-            InfoTab::General | InfoTab::Costs | InfoTab::Process => {
+            (InfoTab::General, Some(row)) => {
+                info_general::render(frame, inner, &row.analysis, theme);
+            }
+            (InfoTab::Costs, Some(row)) => {
+                info_costs::render(frame, inner, &row.analysis, theme);
+            }
+            (InfoTab::Process, Some(row)) => {
+                info_process::render(frame, inner, &row.analysis, &[], theme);
+            }
+            (_, None) => {
                 frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        Span::styled(
-                            format!("[{}] active", self.tab.label()),
-                            Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD),
-                        ),
-                    ])),
+                    Paragraph::new(Line::from(Span::styled(
+                        "No session selected — press j/k or click a row",
+                        Style::default().fg(theme.fg_muted),
+                    ))),
                     inner,
                 );
             }

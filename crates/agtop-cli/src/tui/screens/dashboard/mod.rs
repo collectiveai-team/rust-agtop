@@ -54,15 +54,48 @@ impl DashboardState {
     }
 
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
-        // Dispatch order: drawer (when open) > quota > sessions > nothing.
-        if self.info.vis == info_drawer::DrawerVis::Open {
-            if let Some(m) = self.info.handle_event(event) { return Some(m); }
-        } else {
-            // 'i' opens the drawer even when closed.
-            if let Some(m) = self.info.handle_event(event) { return Some(m); }
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        // Dispatch order: drawer (always — handles 'i' open and tab keys when open)
+        // > quota > sessions > nothing.
+        if let Some(m) = self.info.handle_event(event) {
+            return Some(m);
         }
-        if let Some(m) = self.quota.handle_event(event) { return Some(m); }
-        if let Some(m) = self.sessions.handle_event(event) { return Some(m); }
+        // When the drawer is open, swallow left-clicks that fall inside its
+        // rendered area so they never reach the sessions table behind it.
+        if self.info.vis == info_drawer::DrawerVis::Open {
+            if let AppEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                row,
+                column,
+                ..
+            }) = event
+            {
+                if let Some(area) = self.info.last_area {
+                    let inside = *column >= area.x
+                        && *column < area.x + area.width
+                        && *row >= area.y
+                        && *row < area.y + area.height;
+                    if inside {
+                        return Some(Msg::Noop);
+                    }
+                }
+            }
+        }
+        if let Some(m) = self.quota.handle_event(event) {
+            return Some(m);
+        }
+        if let Some(m) = self.sessions.handle_event(event) {
+            // Sync the drawer's selected row whenever the table selection changes.
+            let row = self
+                .sessions
+                .state
+                .selected()
+                .and_then(|i| self.sessions.rows.get(i))
+                .cloned();
+            self.info.set_row(row);
+            return Some(m);
+        }
         None
     }
 }
