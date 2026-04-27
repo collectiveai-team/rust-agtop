@@ -324,6 +324,9 @@ pub struct App {
     /// Horizontal scroll offset for the Classic Quota tab card row.
     /// Leftmost visible card index.
     card_scroll: usize,
+    /// Active theme. Initialized from the VS Code Dark+ palette.
+    /// Plan 4 will wire this to a user-configurable setting.
+    pub theme: crate::tui::theme_v2::Theme,
 }
 
 impl Default for App {
@@ -367,6 +370,7 @@ impl App {
             selected_provider: 0,
             model_scroll: 0,
             card_scroll: 0,
+            theme: crate::tui::theme_v2::vscode_dark_plus::theme(),
         }
     }
 
