@@ -2,7 +2,6 @@
 //!
 //! Renders: ` agtop ─── [d]ashboard [a]ggregation [c]onfig  q=quit ?=help  vX.Y.Z `
 //! Active view is wrapped in `accent.primary` color + bold; inactive views in `fg.muted`.
-#![allow(dead_code)]
 
 use ratatui::{
     layout::Rect,
@@ -136,8 +135,14 @@ mod tests {
         term.draw(|f| bar.render(f, Rect::new(0, 0, 120, 1), ScreenId::Dashboard, "0.4.0", &theme))
             .unwrap();
         // " agtop " (7) + "│ " (2) = 9 chars before first tab.
-        // "[d]ashboard" is 11 chars wide, x = 9..19.
+        // "[d]ashboard" is 11 chars wide, x = 9..=19.
         assert_eq!(bar.hit_test(14, 0), Some(ScreenId::Dashboard));
+        // "[a]ggregation" starts at 9+11+2=22.
+        assert_eq!(bar.hit_test(22, 0), Some(ScreenId::Aggregation));
+        // "[c]onfig" starts at 22+13+2=37.
+        assert_eq!(bar.hit_test(37, 0), Some(ScreenId::Config));
+        // Inter-tab gap (column 20-21 are trailing spaces after dashboard tab).
+        assert_eq!(bar.hit_test(20, 0), None);
         // Before any tab.
         assert_eq!(bar.hit_test(2, 0), None);
     }
