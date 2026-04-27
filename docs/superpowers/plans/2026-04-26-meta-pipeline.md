@@ -16,7 +16,7 @@
 - [x] **Phase 0 — Worktree bootstrap** — verifies/creates worktree, dispatches Agent 1
 - [x] **Phase 1 — Foundation** (`docs/superpowers/plans/2026-04-26-foundation.md`) — 22 tasks, ~core normalization + theme + widgets
 - [x] **Phase 2 — Dashboard redesign** (`docs/superpowers/plans/2026-04-26-dashboard-redesign.md`) — 22 tasks, ~header + sessions + quota + info drawer
-- [ ] **Phase 3 — Aggregation view** (`docs/superpowers/plans/2026-04-26-aggregation-view.md`) — 8 tasks, ~group-by analytics
+- [🚧] **Phase 3 — Aggregation view** (`docs/superpowers/plans/2026-04-26-aggregation-view.md`) — 8 tasks, ~group-by analytics
 - [ ] **Phase 4 — Config view** (`docs/superpowers/plans/2026-04-26-config-view.md`) — 14 tasks, ~settings page
 - [ ] **Phase 5 — Final acceptance** — runs spec §8 acceptance checklist, writes summary
 
@@ -206,6 +206,7 @@ phase-1 start 2026-04-27T08:00:00Z agent-phase-1 Starting Phase 1 Foundation: 22
 phase-1 done  2026-04-27T07:55:34Z agent-phase-1 Phase 1 complete. 22 tasks done. cargo build/test/clippy all green. ~21 commits this phase. Head: 59229f5 fix(tui): add allow(dead_code) to foundation modules.
 phase-2 start 2026-04-27T10:00:00Z agent-phase-2 Starting Phase 2 Dashboard redesign: 22 tasks for header + sessions + quota + info drawer.
 phase-2 done  2026-04-27T12:30:00Z agent-phase-2 Phase 2 complete. 22 tasks done. cargo build/test/clippy all green. ~22 commits this phase. Head: fix(tui): add allow(dead_code) to legacy modules; fix clippy warnings.
+phase-3 start 2026-04-27T14:00:00Z agent-phase-3 Starting Phase 3 Aggregation view: 8 tasks for group-by analytics.
 ```
 
 ---
