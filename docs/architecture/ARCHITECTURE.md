@@ -96,6 +96,24 @@ Single source of truth: `widgets::icon::Icon` enum. No raw codepoints in widget 
 3. Wire view-switch keymap in the App's global handler.
 4. Add a section to this document.
 
+## Config view
+
+A full-screen page (`c` key) with the VS Code Settings layout:
+sidebar (~22%) + scrollable detail (~78%) + top search bar.
+
+7 sections:
+- Appearance — theme, true color, mouse capture, animations, version badge, header density, status/client color customization
+- Columns — sessions table column visibility + reorder
+- Refresh — refresh interval, stalled threshold, pause-on-idle
+- Clients — per-client enable + custom session paths
+- Keybinds — read-only reference table
+- Data sources — per-client session source paths + status
+- About — version, build, links
+
+All settings persist immediately via the existing config layer.
+Section-specific Msgs (`SetThemeName`, `ToggleColumnVisibility`, etc.) flow
+through `App::update` and call `save_config`.
+
 ## Testing
 
 - Unit tests live next to code.
