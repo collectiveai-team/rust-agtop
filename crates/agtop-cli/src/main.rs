@@ -194,7 +194,7 @@ fn main() -> Result<()> {
         // Default: launch the TUI. Any rendering error is bubbled up
         // after the terminal has been restored (tui::run guarantees
         // teardown on both success and failure paths).
-        tui::run(
+        tui::run_v2(
             clients,
             enabled_initial,
             plan,

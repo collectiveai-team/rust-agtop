@@ -780,6 +780,98 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
 }
 
 // ---------------------------------------------------------------------------
+// App v2 entry point (Plan 2 migration)
+// ---------------------------------------------------------------------------
+
+/// Run the new App v2 TUI. Uses the new screen-dispatch loop.
+/// Data wiring to the refresh worker is completed in Task 21.
+pub fn run_v2(
+    clients: Vec<Arc<dyn Client>>,
+    enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
+    plan: Plan,
+    refresh_interval: Duration,
+    _start_dashboard: bool,
+) -> Result<()> {
+    let mut terminal = setup_terminal().context("set up terminal for TUI (v2)")?;
+    install_panic_hook();
+
+    let enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
+    let mut handle = refresh::spawn(
+        clients,
+        std::sync::Arc::clone(&enabled_arc),
+        plan,
+        refresh_interval,
+    )
+    .context("spawn background refresh worker")?;
+
+    let mut app = app_v2::App::default();
+    let poll_interval = Duration::from_millis(100);
+
+    let result = (|| -> Result<()> {
+        loop {
+            // 1. Drain snapshots (data wiring completed in Task 21).
+            while let Some(msg) = handle.try_recv() {
+                match msg {
+                    refresh::RefreshMsg::Snapshot { analyses, .. } => {
+                        // Populate sessions table with live data.
+                        use screens::dashboard::sessions::SessionRow;
+                        app.dashboard.sessions.rows = analyses
+                            .iter()
+                            .filter_map(|a| {
+                                let kind = a.summary.client;
+                                let label = kind.as_str().to_string();
+                                Some(SessionRow {
+                                    analysis: a.clone(),
+                                    client_kind: kind,
+                                    client_label: label,
+                                    activity_samples: vec![],
+                                })
+                            })
+                            .collect();
+                        app.dashboard.sessions.apply_sort();
+                        // Update header counts.
+                        let active = analyses.iter()
+                            .filter(|a| a.session_state.as_ref().map(|s| s.is_active()).unwrap_or(false))
+                            .count();
+                        let idle = analyses.iter()
+                            .filter(|a| matches!(a.session_state, Some(agtop_core::session::SessionState::Idle)))
+                            .count();
+                        app.dashboard.header.sessions_active = active;
+                        app.dashboard.header.sessions_idle = idle;
+                        app.dashboard.header.sessions_today = analyses.len();
+                        app.dashboard.header.clock = chrono::Local::now().format("%H:%M:%S").to_string();
+                    }
+                    _ => {}
+                }
+            }
+
+            // 2. Render.
+            terminal.draw(|f| app.render(f, f.area()))?;
+
+            if !app.running {
+                break;
+            }
+
+            // 3. Poll for events.
+            if event::poll(poll_interval)? {
+                let raw = event::read()?;
+                if let Some(ev) = input::AppEvent::from_crossterm(raw) {
+                    if let Some(msg) = app.handle_event(&ev) {
+                        let should_quit = matches!(msg, msg::Msg::Quit);
+                        app.update(msg);
+                        if should_quit { break; }
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    restore_terminal(&mut terminal).ok();
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Terminal setup / teardown
 // ---------------------------------------------------------------------------
 
