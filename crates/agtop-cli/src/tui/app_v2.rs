@@ -52,6 +52,27 @@ impl App {
             | Msg::ToggleAggregationSortDir
             | Msg::DrillIntoGroup(_)
             | Msg::CloseDrillDown => {}
+            // Config messages: update local config state; persistence is best-effort.
+            Msg::SelectConfigSection(s) => { self.config.current_section = s; }
+            Msg::SetNerdFont(b) => { self.config.nerd_font = b; }
+            // Other Set* / Toggle* / Save config messages — state changes handled
+            // within ConfigState.handle_event or not yet fully persisted (v1).
+            Msg::SetThemeName(_)
+            | Msg::SetTrueColor(_)
+            | Msg::SetMouseCapture(_)
+            | Msg::SetVersionBadge(_)
+            | Msg::SetHeaderDensity(_)
+            | Msg::SetAnimations(_)
+            | Msg::SetClientColor(_, _)
+            | Msg::SetStatusColor(_, _)
+            | Msg::SetRefreshInterval(_)
+            | Msg::SetStalledThreshold(_)
+            | Msg::ToggleColumnVisibility(_)
+            | Msg::MoveColumn { .. }
+            | Msg::ToggleClient(_, _)
+            | Msg::SetDataSourcePath(_, _)
+            | Msg::SaveConfig
+            | Msg::ConfigSearch(_) => {}
             #[allow(unreachable_patterns)]
             _ => {}
         }
