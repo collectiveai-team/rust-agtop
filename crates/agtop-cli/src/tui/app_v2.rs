@@ -79,7 +79,7 @@ impl App {
         match self.current {
             ScreenId::Dashboard => self.dashboard.handle_event(event),
             ScreenId::Aggregation => self.aggregation.handle_event(event),
-            ScreenId::Config => None,
+            ScreenId::Config => self.config.handle_event(event),
         }
     }
 }
