@@ -29,7 +29,7 @@ pub struct DashboardState {
 }
 
 impl DashboardState {
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         let quota_rows = match self.quota.mode {
             quota::QuotaMode::Hidden => 0,
             quota::QuotaMode::Short => 4,
