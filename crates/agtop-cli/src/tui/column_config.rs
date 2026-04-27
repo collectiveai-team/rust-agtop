@@ -231,6 +231,31 @@ impl ColumnId {
     }
 }
 
+/// Returns the spec'd default visible column set for the new Plan 2 sessions table.
+///
+/// Note: The state DOT is not a separate ColumnId — it's rendered by the sessions
+/// table component as a fixed leading cell. The textual STATE column remains
+/// available but hidden by default.
+#[must_use]
+pub fn default_visible_v2() -> Vec<ColumnId> {
+    vec![
+        ColumnId::Session,
+        ColumnId::Age,
+        ColumnId::Action,
+        // ACTIVITY (sparkline) is rendered by the table component as a
+        // dedicated visualization cell, not via ColumnId.
+        ColumnId::Client,
+        ColumnId::Subscription,
+        ColumnId::Model,
+        ColumnId::Cpu,
+        ColumnId::Memory,
+        ColumnId::Tokens,
+        ColumnId::Cost,
+        ColumnId::Project,
+        ColumnId::SessionName,
+    ]
+}
+
 /// Returns the default visibility for a column in a fresh or migrated config.
 fn default_visible(id: ColumnId) -> bool {
     matches!(
@@ -734,5 +759,17 @@ mod cfg_client_tests {
                 id
             );
         }
+    }
+
+    #[test]
+    fn default_visible_matches_spec() {
+        let v = default_visible_v2();
+        assert_eq!(v.first(), Some(&ColumnId::Session));
+        assert!(v.contains(&ColumnId::Action));
+        assert!(v.contains(&ColumnId::Client));
+        assert!(v.contains(&ColumnId::Subscription));
+        assert!(v.contains(&ColumnId::Cost));
+        // STATE column is hidden by default — should NOT appear.
+        assert!(!v.contains(&ColumnId::State));
     }
 }
