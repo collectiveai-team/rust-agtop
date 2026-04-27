@@ -38,7 +38,11 @@ impl QuotaMode {
     pub fn rows_needed(self) -> u16 {
         match self {
             Self::Short => 4,
-            Self::Long => 12,
+            // Long mode: 15 rows fits a typical 4-window provider card
+            // (header + 4 windows + spacer = 6 lines) plus chrome and
+            // overflow hint, with room for at least two providers on a
+            // 2-column 80+ wide terminal.
+            Self::Long => 15,
             Self::Hidden => 0,
         }
     }
@@ -394,6 +398,18 @@ impl QuotaPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_mode_min_height_is_at_least_15_rows() {
+        // Increase the Long-mode panel height so multi-window providers
+        // (Codex / Claude with weekly + 5h + opus etc.) have enough space
+        // before scrolling kicks in. Bumped from 12 → 15 (+3 rows).
+        assert!(
+            QuotaMode::Long.rows_needed() >= 15,
+            "Long mode must allocate at least 15 rows; got {}",
+            QuotaMode::Long.rows_needed()
+        );
+    }
 
     #[test]
     fn cycle_short_long_hidden_short() {

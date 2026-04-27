@@ -30,17 +30,13 @@ pub struct DashboardState {
 
 impl DashboardState {
     pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-        let quota_rows = match self.quota.mode {
-            quota::QuotaMode::Hidden => 0,
-            quota::QuotaMode::Short => 4,
-            quota::QuotaMode::Long => 12,
-        };
+        let quota_rows = self.quota.mode.rows_needed();
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),               // header
                 Constraint::Min(0),                  // sessions
-                Constraint::Length(quota_rows as u16),
+                Constraint::Length(quota_rows),
             ])
             .split(area);
 
@@ -149,7 +145,7 @@ mod overlay_tests {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(0),
-                Constraint::Length(12),
+                Constraint::Length(state.quota.mode.rows_needed()),
             ])
             .split(Rect::new(0, 0, total_w, total_h));
         let sessions_area = layout[1];
