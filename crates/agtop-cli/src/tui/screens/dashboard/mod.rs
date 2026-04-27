@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod header;
+pub mod quota;
 pub mod sessions;
 
 use ratatui::{layout::Rect, Frame};
