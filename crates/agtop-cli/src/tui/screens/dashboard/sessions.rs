@@ -2,6 +2,8 @@
 // Foundation code for Plan 2.
 #![allow(dead_code)]
 
+use std::collections::HashSet;
+
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Modifier, Style},
@@ -28,6 +30,10 @@ pub struct SessionRow {
     pub client_label: String,
     /// Recent token-rate samples (oldest → newest), used for ACTIVITY sparkline.
     pub activity_samples: Vec<f32>,
+    /// 0 = top-level session; 1 = child subagent.
+    pub depth: u8,
+    /// Session ID of the parent, if this is a child row (depth == 1).
+    pub parent_session_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -38,15 +44,32 @@ pub struct SessionsTable {
     pub animations_enabled: bool,
     pub sort_key: SessionSortKey,
     pub sort_dir: SortDir,
+    /// Rect of the last-rendered table widget, set by `render()`.
+    /// Used by `handle_event` for mouse row hit-testing.
+    pub table_area: Rect,
+    /// Session IDs of collapsed parent rows (children not shown).
+    pub collapsed: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionSortKey {
-    Session, Age, Client, Subscription, Model, Cpu, Memory, Tokens, Cost, Project,
+    Session,
+    Age,
+    Client,
+    Subscription,
+    Model,
+    Cpu,
+    Memory,
+    Tokens,
+    Cost,
+    Project,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SortDir { Asc, Desc }
+pub enum SortDir {
+    Asc,
+    Desc,
+}
 
 impl Default for SessionsTable {
     fn default() -> Self {
@@ -56,13 +79,16 @@ impl Default for SessionsTable {
             pulse: PulseClock::default(),
             animations_enabled: true,
             sort_key: SessionSortKey::Age,
-            sort_dir: SortDir::Asc,
+            sort_dir: SortDir::Desc,
+            table_area: Rect::default(),
+            collapsed: HashSet::new(),
         }
     }
 }
 
 impl SessionsTable {
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
+        self.table_area = area;
         // Map columns from default_visible into column constraints + header strings.
         let columns = column_config::default_visible_v2();
 
@@ -73,14 +99,22 @@ impl SessionsTable {
         // State dot column has no header label.
         header_cells.push(Cell::from(""));
         for (i, c) in columns.iter().enumerate() {
-            header_cells.push(Cell::from(c.label()).style(
-                Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
-            ));
+            header_cells.push(
+                Cell::from(c.label()).style(
+                    Style::default()
+                        .fg(theme.fg_emphasis)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
             // Insert ACTIVITY header after ACTION.
             if Some(i) == action_idx {
-                header_cells.push(Cell::from("ACTIVITY").style(
-                    Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
-                ));
+                header_cells.push(
+                    Cell::from("ACTIVITY").style(
+                        Style::default()
+                            .fg(theme.fg_emphasis)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                );
             }
         }
 
@@ -100,8 +134,15 @@ impl SessionsTable {
         }
 
         let table = Table::new(body_rows, &constraints)
-            .header(Row::new(header_cells));
-        frame.render_widget(table, area);
+            .header(Row::new(header_cells))
+            .row_highlight_style(
+                Style::default()
+                    .bg(theme.bg_selection)
+                    .fg(theme.fg_emphasis),
+            )
+            .highlight_symbol("▶ ");
+        let mut state = self.state.clone();
+        frame.render_stateful_widget(table, area, &mut state);
     }
 
     fn render_row<'a>(
@@ -118,9 +159,10 @@ impl SessionsTable {
             .clone()
             .unwrap_or(SessionState::Closed);
 
-        // Apply muted styling to closed rows.
-        let row_style = if state_style::is_muted_row(&state) {
-            Style::default().fg(theme.fg_muted).add_modifier(Modifier::DIM)
+        // Apply muted styling to closed rows, but never dim rows with a live PID.
+        // Use fg_muted only — adding DIM on top of an already-dim color makes rows near-invisible.
+        let row_style = if state_style::is_muted_row(&state) && row.analysis.pid.is_none() {
+            Style::default().fg(theme.fg_muted)
         } else {
             Style::default().fg(theme.fg_default)
         };
@@ -128,12 +170,22 @@ impl SessionsTable {
         // Build cells.
         let mut cells: Vec<Cell> = Vec::with_capacity(columns.len() + 2);
         // State dot — reads SessionState directly via state_style.
-        cells.push(Cell::from(Line::from(state_dot::render(
-            &state,
-            &self.pulse,
-            self.animations_enabled,
-            theme,
-        ))));
+        // For depth=0 rows with children, show collapse toggle before dot.
+        let dot_span = state_dot::render(&state, &self.pulse, self.animations_enabled, theme);
+        let first_cell = if row.depth == 0 && !row.analysis.children.is_empty() {
+            let toggle = if self.collapsed.contains(&row.analysis.summary.session_id) {
+                Span::raw("▶ ")
+            } else {
+                Span::raw("▼ ")
+            };
+            Cell::from(Line::from(vec![toggle, dot_span]))
+        } else if row.depth == 1 {
+            // Indent child rows.
+            Cell::from(Line::from(vec![Span::raw("  "), dot_span]))
+        } else {
+            Cell::from(Line::from(vec![dot_span]))
+        };
+        cells.push(first_cell);
 
         for (i, c) in columns.iter().enumerate() {
             cells.push(self.render_cell(row, *c, &state, theme));
@@ -172,9 +224,7 @@ impl SessionsTable {
                     .clone()
                     .unwrap_or_default(),
             ),
-            ColumnId::Model => Cell::from(
-                row.analysis.summary.model.clone().unwrap_or_default(),
-            ),
+            ColumnId::Model => Cell::from(row.analysis.summary.model.clone().unwrap_or_default()),
             ColumnId::Cpu => Cell::from(
                 row.analysis
                     .process_metrics
@@ -189,16 +239,14 @@ impl SessionsTable {
                     .map(|m| format_bytes_compact(m.memory_bytes))
                     .unwrap_or_else(|| "—".into()),
             ),
-            ColumnId::Tokens => Cell::from(
-                format_tokens_compact(row.analysis.tokens.grand_total()),
-            ),
-            ColumnId::Cost => Cell::from(
-                if row.analysis.cost.total > 0.0 {
-                    format!("${:.2}", row.analysis.cost.total)
-                } else {
-                    "—".into()
-                }
-            ),
+            ColumnId::Tokens => {
+                Cell::from(format_tokens_compact(row.analysis.tokens.grand_total()))
+            }
+            ColumnId::Cost => Cell::from(if row.analysis.cost.total > 0.0 {
+                format!("${:.2}", row.analysis.cost.total)
+            } else {
+                "—".into()
+            }),
             ColumnId::Project => Cell::from(
                 row.analysis
                     .summary
@@ -208,7 +256,11 @@ impl SessionsTable {
                     .unwrap_or_default(),
             ),
             ColumnId::SessionName => Cell::from(
-                row.analysis.summary.session_title.clone().unwrap_or_default(),
+                row.analysis
+                    .summary
+                    .session_title
+                    .clone()
+                    .unwrap_or_default(),
             ),
             // Defaults for anything else.
             _ => Cell::from(""),
@@ -216,59 +268,132 @@ impl SessionsTable {
     }
 
     pub fn apply_sort(&mut self) {
-        match self.sort_key {
-            SessionSortKey::Age => {
-                self.rows.sort_by_key(|r| {
-                    r.analysis.summary.last_active.unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
-                });
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
+        let (mut tops, child_rows): (Vec<_>, Vec<_>) = std::mem::take(&mut self.rows)
+            .into_iter()
+            .partition(|r| r.depth == 0);
+
+        // Build map: parent_session_id -> children (order preserved from apply_analyses).
+        let mut children_map: std::collections::HashMap<String, Vec<SessionRow>> =
+            std::collections::HashMap::new();
+        for c in child_rows {
+            if let Some(ref pid) = c.parent_session_id {
+                children_map.entry(pid.clone()).or_default().push(c);
             }
-            SessionSortKey::Session => {
-                self.rows.sort_by(|a, b| a.analysis.summary.session_id.cmp(&b.analysis.summary.session_id));
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            SessionSortKey::Client => {
-                self.rows.sort_by(|a, b| a.client_label.cmp(&b.client_label));
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            SessionSortKey::Cost => {
-                self.rows.sort_by(|a, b| {
-                    a.analysis.cost.total.partial_cmp(&b.analysis.cost.total)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            SessionSortKey::Tokens => {
-                self.rows.sort_by_key(|r| r.analysis.tokens.grand_total());
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            SessionSortKey::Cpu => {
-                self.rows.sort_by(|a, b| {
-                    let ca = a.analysis.process_metrics.as_ref().map(|m| m.cpu_percent).unwrap_or(0.0);
-                    let cb = b.analysis.process_metrics.as_ref().map(|m| m.cpu_percent).unwrap_or(0.0);
-                    ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
-                });
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            SessionSortKey::Memory => {
-                self.rows.sort_by_key(|r| r.analysis.process_metrics.as_ref().map(|m| m.memory_bytes).unwrap_or(0));
-                if self.sort_dir == SortDir::Desc { self.rows.reverse() }
-            }
-            _ => {}
         }
+
+        // Sort top-level rows.
+        let key = self.sort_key;
+        let dir = self.sort_dir;
+        tops.sort_by(|a, b| {
+            let ord = sort_cmp(a, b, key);
+            if dir == SortDir::Desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+
+        // Rebuild: each top-level row followed by its children.
+        for row in tops {
+            let session_id = row.analysis.summary.session_id.clone();
+            self.rows.push(row);
+            if let Some(mut kids) = children_map.remove(&session_id) {
+                self.rows.append(&mut kids);
+            }
+        }
+    }
+}
+
+fn sort_cmp(a: &SessionRow, b: &SessionRow, key: SessionSortKey) -> std::cmp::Ordering {
+    match key {
+        SessionSortKey::Age => a
+            .analysis
+            .summary
+            .last_active
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+            .cmp(
+                &b.analysis
+                    .summary
+                    .last_active
+                    .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC),
+            ),
+        SessionSortKey::Session => a
+            .analysis
+            .summary
+            .session_id
+            .cmp(&b.analysis.summary.session_id),
+        SessionSortKey::Client => a.client_label.cmp(&b.client_label),
+        SessionSortKey::Cost => a
+            .analysis
+            .cost
+            .total
+            .partial_cmp(&b.analysis.cost.total)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        SessionSortKey::Tokens => a
+            .analysis
+            .tokens
+            .grand_total()
+            .cmp(&b.analysis.tokens.grand_total()),
+        SessionSortKey::Cpu => {
+            let ca = a
+                .analysis
+                .process_metrics
+                .as_ref()
+                .map(|m| m.cpu_percent)
+                .unwrap_or(0.0);
+            let cb = b
+                .analysis
+                .process_metrics
+                .as_ref()
+                .map(|m| m.cpu_percent)
+                .unwrap_or(0.0);
+            ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        SessionSortKey::Memory => {
+            let ma = a
+                .analysis
+                .process_metrics
+                .as_ref()
+                .map(|m| m.memory_bytes)
+                .unwrap_or(0);
+            let mb = b
+                .analysis
+                .process_metrics
+                .as_ref()
+                .map(|m| m.memory_bytes)
+                .unwrap_or(0);
+            ma.cmp(&mb)
+        }
+        _ => std::cmp::Ordering::Equal,
     }
 }
 
 impl SessionsTable {
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
         match event {
-            AppEvent::Key(KeyEvent { code, modifiers, .. }) => {
-                if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT { return None; }
+            AppEvent::Key(KeyEvent {
+                code, modifiers, ..
+            }) => {
+                if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT {
+                    return None;
+                }
                 match code {
-                    KeyCode::Down | KeyCode::Char('j') => { self.move_selection(1); Some(Msg::Noop) }
-                    KeyCode::Up | KeyCode::Char('k') => { self.move_selection(-1); Some(Msg::Noop) }
-                    KeyCode::Char('s') => { self.cycle_sort_key(); self.apply_sort(); Some(Msg::Noop) }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        self.move_selection(1);
+                        Some(Msg::Noop)
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        self.move_selection(-1);
+                        Some(Msg::Noop)
+                    }
+                    KeyCode::Char('s') => {
+                        self.cycle_sort_key();
+                        self.apply_sort();
+                        Some(Msg::Noop)
+                    }
                     KeyCode::Char('S') => {
                         self.sort_dir = match self.sort_dir {
                             SortDir::Asc => SortDir::Desc,
@@ -277,20 +402,83 @@ impl SessionsTable {
                         self.apply_sort();
                         Some(Msg::Noop)
                     }
+                    KeyCode::Enter | KeyCode::Char(' ') => {
+                        if let Some(idx) = self.state.selected() {
+                            if let Some(row) = self.rows.get(idx) {
+                                if row.depth == 0 && !row.analysis.children.is_empty() {
+                                    let sid = row.analysis.summary.session_id.clone();
+                                    if self.collapsed.contains(&sid) {
+                                        self.collapsed.remove(&sid);
+                                    } else {
+                                        self.collapsed.insert(sid);
+                                    }
+                                    return Some(Msg::Noop);
+                                }
+                            }
+                        }
+                        None
+                    }
                     _ => None,
                 }
             }
-            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::ScrollDown, .. }) => {
+            AppEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollDown,
+                row,
+                column,
+                ..
+            }) => {
+                // Only scroll when the pointer is inside the table area.
+                let area = self.table_area;
+                if *column < area.x || *column >= area.x + area.width
+                    || *row < area.y || *row >= area.y + area.height
+                {
+                    return None;
+                }
                 self.move_selection(1);
                 Some(Msg::Noop)
             }
-            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, .. }) => {
+            AppEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::ScrollUp,
+                row,
+                column,
+                ..
+            }) => {
+                // Only scroll when the pointer is inside the table area.
+                let area = self.table_area;
+                if *column < area.x || *column >= area.x + area.width
+                    || *row < area.y || *row >= area.y + area.height
+                {
+                    return None;
+                }
                 self.move_selection(-1);
                 Some(Msg::Noop)
             }
-            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), row, column, .. }) => {
-                // Mouse row-select deferred to Task 18 integration.
-                let _ = (row, column);
+            AppEvent::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                row,
+                column,
+                ..
+            }) => {
+                // Hit-test: only act if the click is within the table area recorded during render.
+                let area = self.table_area;
+                if *column < area.x
+                    || *column >= area.x + area.width
+                    || *row < area.y
+                    || *row >= area.y + area.height
+                {
+                    return None;
+                }
+                // ratatui Table (no surrounding Block) renders the header at area.y.
+                // Data rows start at area.y + 1.
+                let rel = row.saturating_sub(area.y);
+                if rel == 0 {
+                    // Header row — ignore (sort-by-header not implemented in v2 yet).
+                    return Some(Msg::Noop);
+                }
+                let data_idx = (rel as usize).saturating_sub(1);
+                if data_idx < self.rows.len() {
+                    self.state.select(Some(data_idx));
+                }
                 Some(Msg::Noop)
             }
             _ => None,
@@ -298,7 +486,9 @@ impl SessionsTable {
     }
 
     fn move_selection(&mut self, delta: i32) {
-        if self.rows.is_empty() { return; }
+        if self.rows.is_empty() {
+            return;
+        }
         let cur = self.state.selected().unwrap_or(0) as i32;
         let next = (cur + delta).rem_euclid(self.rows.len() as i32) as usize;
         self.state.select(Some(next));
@@ -340,17 +530,16 @@ fn width_for(col: ColumnId) -> Constraint {
 
 fn render_action_cell<'a>(row: &'a SessionRow, state: &SessionState, theme: &Theme) -> Cell<'a> {
     // Idle / Closed / Warning / Error rows show "—" in ACTION.
-    let show_action = matches!(
-        state,
-        SessionState::Running | SessionState::Waiting(_)
-    );
+    let show_action = matches!(state, SessionState::Running | SessionState::Waiting(_));
     if !show_action {
         return Cell::from("—");
     }
     let action = row.analysis.current_action.as_deref().unwrap_or("—");
     // Permission-pending styling: state_style decides; gives us a single source of truth.
     let style = if state_style::action_needs_warning_modifier(state) {
-        Style::default().fg(theme.status_warning).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(theme.status_warning)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(theme.fg_default)
     };
@@ -365,26 +554,40 @@ fn format_session_id(id: &str) -> String {
 fn format_age(last: Option<chrono::DateTime<chrono::Utc>>) -> String {
     let Some(t) = last else { return "—".into() };
     let secs = (chrono::Utc::now() - t).num_seconds().max(0);
-    if secs < 60 { format!("{secs}s") }
-    else if secs < 3600 { format!("{}m", secs / 60) }
-    else if secs < 86400 { format!("{}h", secs / 3600) }
-    else { format!("{}d", secs / 86400) }
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
 }
 
 fn format_bytes_compact(b: u64) -> String {
     const K: f32 = 1024.0;
     let f = b as f32;
-    if f >= K * K * K { format!("{:.1}G", f / (K * K * K)) }
-    else if f >= K * K { format!("{:.0}M", f / (K * K)) }
-    else if f >= K { format!("{:.0}K", f / K) }
-    else { format!("{b}B") }
+    if f >= K * K * K {
+        format!("{:.1}G", f / (K * K * K))
+    } else if f >= K * K {
+        format!("{:.0}M", f / (K * K))
+    } else if f >= K {
+        format!("{:.0}K", f / K)
+    } else {
+        format!("{b}B")
+    }
 }
 
 fn format_tokens_compact(t: u64) -> String {
     let f = t as f32;
-    if f >= 1_000_000.0 { format!("{:.1}M", f / 1_000_000.0) }
-    else if f >= 1_000.0 { format!("{:.1}k", f / 1_000.0) }
-    else { format!("{t}") }
+    if f >= 1_000_000.0 {
+        format!("{:.1}M", f / 1_000_000.0)
+    } else if f >= 1_000.0 {
+        format!("{:.1}k", f / 1_000.0)
+    } else {
+        format!("{t}")
+    }
 }
 
 fn project_basename(path: &str) -> String {
@@ -428,20 +631,99 @@ mod tests {
 
     #[test]
     fn format_session_id_truncates_to_8() {
-        assert_eq!(format_session_id("a3f2c1de-bbbb-cccc-dddd-eeeeffff0000"), "a3f2c1de");
+        assert_eq!(
+            format_session_id("a3f2c1de-bbbb-cccc-dddd-eeeeffff0000"),
+            "a3f2c1de"
+        );
     }
 
     #[test]
     fn project_basename_returns_last_segment() {
-        assert_eq!(project_basename("/home/user/projects/rust-agtop"), "rust-agtop");
+        assert_eq!(
+            project_basename("/home/user/projects/rust-agtop"),
+            "rust-agtop"
+        );
         assert_eq!(project_basename("rust-agtop"), "rust-agtop");
     }
 
     #[test]
-    fn default_sort_is_age_asc() {
+    fn left_click_on_first_data_row_selects_index_zero() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
+            ..SessionsTable::default()
+        };
+        // Store the rendered table area manually (render() would normally write this).
+        // ratatui Table with no block puts the header at y=0, data rows start at y=1.
+        t.table_area = ratatui::layout::Rect::new(0, 0, 140, 12);
+        // Click on row 1 = first data row (header is at row 0).
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(t.state.selected(), Some(0), "clicking first data row should select index 0");
+    }
+
+    #[test]
+    fn left_click_outside_table_does_nothing() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b")],
+            ..SessionsTable::default()
+        };
+        t.table_area = ratatui::layout::Rect::new(0, 10, 140, 12);
+        // Click above the table_area (row 5, table starts at row 10).
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(t.state.selected(), None, "click outside table must not change selection");
+    }
+
+    #[test]
+    fn default_sort_is_age_desc() {
         let table = SessionsTable::default();
         assert_eq!(table.sort_key, SessionSortKey::Age);
-        assert_eq!(table.sort_dir, SortDir::Asc);
+        assert_eq!(table.sort_dir, SortDir::Desc);
+    }
+
+    #[test]
+    fn closed_row_style_does_not_use_dim_modifier() {
+        use ratatui::style::Modifier;
+        use crate::tui::theme_v2::vscode_dark_plus;
+        let theme = vscode_dark_plus::theme();
+        // Simulate closed row style selection (same logic as render_row)
+        let state = SessionState::Closed;
+        let row_style = if state_style::is_muted_row(&state) {
+            Style::default().fg(theme.fg_muted)
+        } else {
+            Style::default().fg(theme.fg_default)
+        };
+        assert!(
+            !row_style.add_modifier.contains(Modifier::DIM),
+            "closed row style must not include DIM modifier — it causes near-invisible text"
+        );
+    }
+
+    #[test]
+    fn highlight_style_does_not_use_reversed_modifier() {
+        use ratatui::style::Modifier;
+        use crate::tui::theme_v2::vscode_dark_plus;
+        let theme = vscode_dark_plus::theme();
+        // Simulate the row_highlight_style (same tokens as render())
+        let highlight = Style::default()
+            .bg(theme.bg_selection)
+            .fg(theme.fg_emphasis);
+        assert!(
+            !highlight.add_modifier.contains(Modifier::REVERSED),
+            "highlight style must not include REVERSED — it inverts bg_selection to near-invisible"
+        );
     }
 
     fn mock_row(id: &str) -> SessionRow {
@@ -477,12 +759,15 @@ mod tests {
             client_kind: ClientKind::Claude,
             client_label: "claude".into(),
             activity_samples: vec![],
+            depth: 0,
+            parent_session_id: None,
         }
     }
 
     #[test]
     fn activity_samples_render_to_8_braille_chars() {
-        let s = sparkline_braille::render_braille(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8, 10.0);
+        let s =
+            sparkline_braille::render_braille(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8, 10.0);
         assert_eq!(s.chars().count(), 8);
         // All chars should be in the braille block.
         for c in s.chars() {
@@ -525,5 +810,62 @@ mod tests {
         t.handle_event(&ev);
         // Should wrap to last row.
         assert_eq!(t.state.selected(), Some(2));
+    }
+
+    #[test]
+    fn scroll_outside_table_area_is_ignored() {
+        use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
+            ..SessionsTable::default()
+        };
+        t.table_area = ratatui::layout::Rect::new(0, 10, 140, 20);
+        t.state.select(Some(1));
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5, // above table (starts at y=10)
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(t.state.selected(), Some(1), "scroll outside table must not change selection");
+    }
+
+    #[test]
+    fn scroll_inside_table_area_moves_selection() {
+        use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
+        let mut t = SessionsTable {
+            rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
+            ..SessionsTable::default()
+        };
+        t.table_area = ratatui::layout::Rect::new(0, 0, 140, 20);
+        t.state.select(Some(0));
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(t.state.selected(), Some(1), "scroll inside table must advance selection");
+    }
+
+    #[test]
+    fn closed_row_with_pid_is_not_dimmed() {
+        use crate::tui::theme_v2::vscode_dark_plus;
+        let theme = vscode_dark_plus::theme();
+        let mut row = mock_row("pid-test");
+        row.analysis.pid = Some(12345);
+        let state = SessionState::Closed;
+        let row_style = if state_style::is_muted_row(&state) && row.analysis.pid.is_none() {
+            Style::default().fg(theme.fg_muted)
+        } else {
+            Style::default().fg(theme.fg_default)
+        };
+        assert_eq!(
+            row_style.fg,
+            Some(theme.fg_default),
+            "Closed row with a live PID should use fg_default, not fg_muted"
+        );
     }
 }

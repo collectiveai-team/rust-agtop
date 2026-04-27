@@ -53,6 +53,8 @@ fn mk(
         client_kind: client,
         client_label: label.into(),
         activity_samples: samples,
+        depth: 0,
+        parent_session_id: None,
     }
 }
 
@@ -126,6 +128,53 @@ fn sessions_table_140x12_snapshot() {
         ..SessionsTable::default()
     };
     table.apply_sort();
-    let buf = render_to_buffer(140, 12, |f| table.render(f, Rect::new(0, 0, 140, 12), &theme));
+    let buf = render_to_buffer(140, 12, |f| {
+        table.render(f, Rect::new(0, 0, 140, 12), &theme)
+    });
     insta::assert_snapshot!("sessions_table_140x12", buffer_to_text(&buf));
+}
+
+#[test]
+fn sessions_table_renders_selected_row_highlight() {
+    let theme = vscode_dark_plus::theme();
+    let mut table = SessionsTable {
+        rows: fixture(),
+        animations_enabled: false,
+        ..SessionsTable::default()
+    };
+    table.state.select(Some(1));
+
+    let buf = render_to_buffer(140, 12, |f| {
+        table.render(f, Rect::new(0, 0, 140, 12), &theme)
+    });
+
+    // The highlight is now bg_selection + fg_emphasis (no REVERSED).
+    // Check that at least one cell on the selected row has bg == theme.bg_selection.
+    let selected_row_y = 2;
+    let highlighted = (0..buf.area.width).any(|x| {
+        buf[(x, selected_row_y)].style().bg == Some(theme.bg_selection)
+    });
+    assert!(
+        highlighted,
+        "selected row should render with bg_selection background as visible highlight"
+    );
+}
+
+#[test]
+fn sessions_table_default_sort_shows_recent_sessions_first() {
+    let mut table = SessionsTable {
+        rows: fixture(),
+        ..SessionsTable::default()
+    };
+
+    table.apply_sort();
+
+    assert_eq!(
+        table
+            .rows
+            .first()
+            .map(|row| row.analysis.summary.session_id.as_str()),
+        Some("c2d4f6a1"),
+        "default dashboard sort should put the most recently active session first"
+    );
 }

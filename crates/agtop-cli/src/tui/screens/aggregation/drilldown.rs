@@ -36,6 +36,8 @@ impl DrillDown {
                 client_kind: s.summary.client,
                 client_label: s.summary.client.as_str().to_string(),
                 activity_samples: vec![],
+                depth: 0,
+                parent_session_id: None,
             })
             .collect();
         self.table.apply_sort();

@@ -29,19 +29,37 @@ pub fn apply_analyses(
     let normalized: Vec<SessionAnalysis> = analyses.iter().map(normalize_analysis).collect();
 
     // --- Sessions ---
-    sessions.rows = normalized
-        .iter()
-        .map(|a| {
-            let kind = a.summary.client;
-            let label = kind.as_str().to_string();
-            SessionRow {
-                analysis: a.clone(),
-                client_kind: kind,
-                client_label: label,
-                activity_samples: vec![],
+    let mut flat_rows: Vec<SessionRow> = Vec::new();
+    for a in &normalized {
+        let kind = a.summary.client;
+        let label = kind.as_str().to_string();
+        flat_rows.push(SessionRow {
+            analysis: a.clone(),
+            client_kind: kind,
+            client_label: label.clone(),
+            activity_samples: vec![],
+            depth: 0,
+            parent_session_id: None,
+        });
+        // Insert children unless this parent is collapsed.
+        if !a.children.is_empty() && !sessions.collapsed.contains(&a.summary.session_id) {
+            let mut children: Vec<&SessionAnalysis> = a.children.iter().collect();
+            // Sort children by started_at descending (newest first).
+            children.sort_by(|x, y| y.summary.started_at.cmp(&x.summary.started_at));
+            for child in children {
+                let child_kind = child.summary.client;
+                flat_rows.push(SessionRow {
+                    analysis: child.clone(),
+                    client_kind: child_kind,
+                    client_label: child_kind.as_str().to_string(),
+                    activity_samples: vec![],
+                    depth: 1,
+                    parent_session_id: Some(a.summary.session_id.clone()),
+                });
             }
-        })
-        .collect();
+        }
+    }
+    sessions.rows = flat_rows;
     sessions.apply_sort();
 
     // --- Header counts ---
@@ -280,6 +298,82 @@ mod tests {
             sessions.rows[0].analysis.session_state,
             Some(SessionState::Idle)
         ));
+    }
+
+    #[test]
+    fn children_appear_as_depth_1_rows_after_parent() {
+        use agtop_core::session::{SessionAnalysis, SessionSummary, TokenTotals, CostBreakdown, ClientKind};
+        use agtop_core::process::Liveness;
+        use chrono::Utc;
+
+        let mut parent = analysis("parent-1");
+        parent.liveness = Some(Liveness::Live);
+
+        let child_summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "child-1".to_string(),
+            None,
+            Some(Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/child.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let child = SessionAnalysis::new(
+            child_summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None, 0, None, None, None, None, None,
+        );
+        parent.children = vec![child];
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
+
+        assert_eq!(sessions.rows.len(), 2, "parent + 1 child = 2 rows");
+        assert_eq!(sessions.rows[0].depth, 0, "parent is depth 0");
+        assert_eq!(sessions.rows[1].depth, 1, "child is depth 1");
+        assert_eq!(
+            sessions.rows[1].parent_session_id.as_deref(),
+            Some("parent-1"),
+            "child parent_session_id must point to parent"
+        );
+    }
+
+    #[test]
+    fn collapsed_parent_hides_children() {
+        use agtop_core::session::{SessionAnalysis, SessionSummary, TokenTotals, CostBreakdown, ClientKind};
+        use agtop_core::process::Liveness;
+        use chrono::Utc;
+
+        let mut parent = analysis("parent-collapsed");
+        parent.liveness = Some(Liveness::Live);
+        let child_summary = SessionSummary::new(
+            ClientKind::Claude, None, "child-collapsed".to_string(), None,
+            Some(Utc::now()), None, None, std::path::PathBuf::from("/tmp/c.jsonl"),
+            None, None, None, None,
+        );
+        let child = SessionAnalysis::new(
+            child_summary, TokenTotals::default(), CostBreakdown::default(),
+            None, 0, None, None, None, None, None,
+        );
+        parent.children = vec![child];
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        sessions.collapsed.insert("parent-collapsed".to_string());
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
+
+        assert_eq!(sessions.rows.len(), 1, "collapsed parent hides children");
     }
 
     #[test]
