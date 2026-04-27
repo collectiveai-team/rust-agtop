@@ -44,6 +44,15 @@ impl App {
             Msg::Escape => self.show_help = false,
             Msg::Quit => self.running = false,
             Msg::Noop => {}
+            // Aggregation messages are handled within AggregationState.handle_event;
+            // the app-level update is a no-op for them.
+            Msg::SetGroupBy(_)
+            | Msg::SetTimeRange(_)
+            | Msg::CycleAggregationSort
+            | Msg::ToggleAggregationSortDir
+            | Msg::DrillIntoGroup(_)
+            | Msg::CloseDrillDown
+            | _ => {}
         }
     }
 

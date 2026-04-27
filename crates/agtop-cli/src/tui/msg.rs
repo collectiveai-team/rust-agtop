@@ -20,6 +20,18 @@ pub enum Msg {
     Quit,
     /// No-op (placeholder when an event is handled but state doesn't change).
     Noop,
+    /// Aggregation screen: change group-by dimension.
+    SetGroupBy(agtop_core::aggregate::GroupBy),
+    /// Aggregation screen: change time range.
+    SetTimeRange(agtop_core::aggregate::TimeRange),
+    /// Aggregation screen: cycle sort column.
+    CycleAggregationSort,
+    /// Aggregation screen: toggle sort direction.
+    ToggleAggregationSortDir,
+    /// Aggregation screen: drill into a group.
+    DrillIntoGroup(String),
+    /// Aggregation screen: close drill-down overlay.
+    CloseDrillDown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
