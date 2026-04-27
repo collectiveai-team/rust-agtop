@@ -156,28 +156,72 @@ fn normalize_analysis(analysis: &SessionAnalysis) -> SessionAnalysis {
     analysis
 }
 
+/// Window during which an un-correlated session is considered "actively working"
+/// based on `last_active`. Mirrors v1's `WORKING_WINDOW_SECS` for parity.
+const RUNNING_WINDOW: chrono::Duration = chrono::Duration::seconds(30);
+/// Threshold past which a session with no liveness AND no recent activity is
+/// considered fully closed (rather than just "stalled").
+const CLOSED_AFTER: chrono::Duration = chrono::Duration::minutes(5);
+/// "waiting" sessions older than this are treated as stalled / dead.
+const WAITING_STALE: chrono::Duration = chrono::Duration::minutes(5);
+
 fn derive_state(analysis: &SessionAnalysis) -> SessionState {
+    // Confirmed dead by the OS scanner.
     if matches!(analysis.liveness, Some(Liveness::Stopped)) {
         return SessionState::Closed;
     }
 
-    if !matches!(analysis.liveness, Some(Liveness::Live)) {
-        return SessionState::Closed;
+    let parser_state = analysis.summary.state.as_deref();
+    let now = chrono::Utc::now();
+    let age = analysis
+        .summary
+        .last_active
+        .map(|t| now.signed_duration_since(t));
+
+    // Path A: OS scanner confirmed Live — trust the parser/recency more
+    // aggressively (a Live process is presumed running unless explicitly
+    // marked otherwise).
+    if matches!(analysis.liveness, Some(Liveness::Live)) {
+        return match parser_state {
+            Some("waiting") => SessionState::Waiting(WaitReason::Input),
+            Some("idle") => SessionState::Idle,
+            Some("stopped" | "closed") => SessionState::Closed,
+            _ => {
+                if let Some(a) = age {
+                    if a >= CLOSED_AFTER {
+                        return SessionState::Warning(WarningReason::Stalled {
+                            since: analysis.summary.last_active.unwrap(),
+                        });
+                    }
+                }
+                SessionState::Running
+            }
+        };
     }
 
-    match analysis.summary.state.as_deref() {
-        Some("waiting") => SessionState::Waiting(WaitReason::Input),
-        Some("idle") => SessionState::Idle,
+    // Path B: liveness is None — correlator did not match this session
+    // (heuristic miss, /proc permission, container/sandbox isolation, ...).
+    // Fall back to v1-style recency classification so a very-recent session
+    // does not render as Closed merely because the OS scan missed it. See
+    // `crates/agtop-cli/src/tui/widgets/state_display.rs::display_state`
+    // for the v1 implementation we mirror here.
+    match parser_state {
+        Some("waiting") => match age {
+            Some(a) if a < WAITING_STALE => SessionState::Waiting(WaitReason::Input),
+            _ => SessionState::Closed,
+        },
+        Some("idle") => match age {
+            Some(a) if a < CLOSED_AFTER => SessionState::Idle,
+            _ => SessionState::Closed,
+        },
         Some("stopped" | "closed") => SessionState::Closed,
-        _ => {
-            if let Some(last) = analysis.summary.last_active {
-                let stalled_after = chrono::Duration::minutes(5);
-                if chrono::Utc::now().signed_duration_since(last) >= stalled_after {
-                    return SessionState::Warning(WarningReason::Stalled { since: last });
-                }
-            }
-            SessionState::Running
-        }
+        _ => match age {
+            Some(a) if a < RUNNING_WINDOW => SessionState::Running,
+            Some(a) if a < CLOSED_AFTER => SessionState::Warning(WarningReason::Stalled {
+                since: analysis.summary.last_active.unwrap(),
+            }),
+            _ => SessionState::Closed,
+        },
     }
 }
 
@@ -283,7 +327,14 @@ mod tests {
 
     #[test]
     fn historical_session_without_parser_state_stays_closed() {
-        let (header, sessions) = apply_one(analysis("historical"));
+        // A session with NO liveness AND NO recent activity is closed.
+        // Updated semantics: derive_state now falls back to recency-based
+        // classification when liveness is None (mirrors v1 behavior). A
+        // truly historical session (last_active well in the past) still
+        // resolves to Closed via the recency fallback.
+        let mut a = analysis("historical");
+        a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::hours(2));
+        let (header, sessions) = apply_one(a);
 
         assert_eq!(header.sessions_active, 0);
         assert_eq!(header.sessions_idle, 0);
@@ -291,6 +342,77 @@ mod tests {
             sessions.rows[0].analysis.session_state,
             Some(SessionState::Closed)
         ));
+    }
+
+    #[test]
+    fn unmatched_recent_session_is_running_not_closed() {
+        // ROOT-CAUSE FIX for state-dot bug: when the OS-process correlator
+        // fails to match a session (heuristic miss, /proc permission, etc.),
+        // `liveness` stays None. v1 ignored liveness entirely and used
+        // recent-activity classification. v2 must do the same fallback so
+        // very-recent sessions don't render as Closed.
+        let mut a = analysis("unmatched-but-active");
+        a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(5));
+        // No liveness, no parser state.
+        a.liveness = None;
+        a.summary.state = None;
+
+        let (header, sessions) = apply_one(a);
+
+        assert!(
+            matches!(
+                sessions.rows[0].analysis.session_state,
+                Some(SessionState::Running)
+            ),
+            "unmatched session with last_active in last 30s must render as Running, not Closed (got {:?})",
+            sessions.rows[0].analysis.session_state
+        );
+        assert_eq!(
+            header.sessions_active, 1,
+            "unmatched-but-recent session must count as active for the header"
+        );
+    }
+
+    #[test]
+    fn unmatched_waiting_session_renders_as_waiting() {
+        // Parser said state = "waiting". Without liveness, v2 must still
+        // honor that — same as v1's display_state.
+        let mut a = analysis("unmatched-waiting");
+        a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
+        a.liveness = None;
+        a.summary.state = Some("waiting".into());
+
+        let (_header, sessions) = apply_one(a);
+
+        assert!(
+            matches!(
+                sessions.rows[0].analysis.session_state,
+                Some(SessionState::Waiting(_))
+            ),
+            "unmatched session with parser-reported waiting state must render as Waiting (got {:?})",
+            sessions.rows[0].analysis.session_state
+        );
+    }
+
+    #[test]
+    fn unmatched_stale_session_renders_as_warning_stalled() {
+        // Recent enough to not be "ancient/closed", but past the
+        // 30-second working window → Stalled warning, not Closed.
+        let mut a = analysis("unmatched-stalled");
+        a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(120));
+        a.liveness = None;
+        a.summary.state = None;
+
+        let (_header, sessions) = apply_one(a);
+
+        assert!(
+            matches!(
+                sessions.rows[0].analysis.session_state,
+                Some(SessionState::Warning(_))
+            ),
+            "unmatched session with last_active 2m ago must render as Warning(Stalled), not Closed (got {:?})",
+            sessions.rows[0].analysis.session_state
+        );
     }
 
     #[test]
