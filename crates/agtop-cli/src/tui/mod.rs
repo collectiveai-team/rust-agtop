@@ -6,6 +6,7 @@
 //! methods; all rendering through [`widgets`].
 
 pub mod app;
+pub mod app_v2;
 pub mod column_config;
 mod events;
 pub mod input;
