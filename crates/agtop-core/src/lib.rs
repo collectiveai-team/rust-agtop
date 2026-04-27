@@ -11,6 +11,7 @@
 //! Higher-level helpers ([`discover_all`], [`analyze_all`]) fan out across
 //! every registered client and return aggregated results.
 
+pub mod aggregate;
 pub mod client;
 pub mod clients;
 pub mod error;
