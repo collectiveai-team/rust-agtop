@@ -2,6 +2,8 @@
 // Foundation code for Plan 2.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
+
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -10,7 +12,7 @@ use ratatui::{
     Frame,
 };
 
-use agtop_core::quota::ProviderResult;
+use agtop_core::quota::{ProviderId, ProviderResult};
 use agtop_core::session::ClientKind;
 
 use crate::tui::input::AppEvent;
@@ -57,6 +59,33 @@ pub struct QuotaCardModel {
     pub client_label: String,
     pub closest: WindowModel,
     pub all_windows: Vec<WindowModel>,
+    /// Lifecycle status used to drive the "stale"/"error" decorations in
+    /// the rendered card. Defaults to `Ok` for fresh successful fetches.
+    pub status: CardStatus,
+}
+
+/// Per-card lifecycle status. Drives the long-mode banner that distinguishes
+/// fresh / stale-with-cached-data / outright-failed providers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CardStatus {
+    /// Fresh, successful fetch. No banner.
+    Ok,
+    /// The most recent fetch failed but a previous successful fetch is
+    /// being shown instead. `last_ok_ms` is the epoch-ms of that
+    /// successful fetch; `current_error` is the new error to surface.
+    Stale {
+        last_ok_ms: i64,
+        current_error: String,
+    },
+    /// No cached data is available — the provider has only ever errored
+    /// since the panel was created. The string is the error to render.
+    Error(String),
+}
+
+impl Default for CardStatus {
+    fn default() -> Self {
+        Self::Ok
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +104,84 @@ pub struct QuotaPanel {
     pub last_area: Option<Rect>,
     /// Scroll offset for Long mode (lines scrolled from top).
     pub scroll_offset: usize,
+    /// Most-recent successful card per provider, keyed by `ProviderId`.
+    /// Stored as `(fetched_at_ms, card)` so we can re-render a stale-but-
+    /// useful view when a subsequent fetch fails. Survives across calls
+    /// to `apply_results` so transient errors don't blow away the panel.
+    pub last_good: HashMap<ProviderId, (i64, QuotaCardModel)>,
+}
+
+fn client_kind_for(id: ProviderId) -> ClientKind {
+    use agtop_core::logo::provider_id_to_client_kind;
+    provider_id_to_client_kind(id).unwrap_or(ClientKind::Claude)
+}
+
+/// Build a fresh QuotaCardModel from a successful ProviderResult.
+/// Returns None only if the result has no usage payload (which should
+/// never happen for `ok` results but we don't want to panic).
+fn build_card_from_ok(r: &ProviderResult, now_ms: i64) -> Option<QuotaCardModel> {
+    let usage = r.usage.as_ref()?;
+    let all_windows: Vec<WindowModel> = usage
+        .windows
+        .iter()
+        .map(|(label, w)| WindowModel {
+            label: label.clone(),
+            used_pct: w
+                .used_percent
+                .map(|p| (p / 100.0) as f32)
+                .unwrap_or(0.0),
+            note: w.value_label.clone(),
+            reset_in: w.reset_at.and_then(|ms| {
+                let diff_secs = (ms - now_ms) / 1000;
+                if diff_secs <= 0 {
+                    return None;
+                }
+                let h = diff_secs / 3600;
+                let m = (diff_secs % 3600) / 60;
+                Some(if h > 0 {
+                    format!("resets in {h}h {m}m")
+                } else {
+                    format!("resets in {m}m")
+                })
+            }),
+        })
+        .collect();
+    let closest = all_windows
+        .iter()
+        .max_by(|a, b| {
+            a.used_pct
+                .partial_cmp(&b.used_pct)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
+        .unwrap_or(WindowModel {
+            label: "—".into(),
+            used_pct: 0.0,
+            note: None,
+            reset_in: None,
+        });
+    Some(QuotaCardModel {
+        client_kind: client_kind_for(r.provider_id),
+        client_label: r.provider_name.to_string(),
+        closest,
+        all_windows,
+        status: CardStatus::Ok,
+    })
+}
+
+/// Format a millisecond-epoch timestamp as a relative "Nm ago" / "Nh ago"
+/// string. Used for stale-card banners.
+fn format_age_ms(ms: i64, now_ms: i64) -> String {
+    let secs = ((now_ms - ms) / 1000).max(0);
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
 }
 
 fn build_card_lines<'a>(card: &'a QuotaCardModel, label_width: usize, theme: &'a Theme) -> Vec<Line<'static>> {
@@ -85,6 +192,30 @@ fn build_card_lines<'a>(card: &'a QuotaCardModel, label_width: usize, theme: &'a
             .fg(client_palette::color_for(card.client_kind))
             .add_modifier(Modifier::BOLD),
     )));
+
+    // Status banner for non-Ok cards: shown immediately after the header
+    // so it sits above the (possibly stale) usage bars.
+    match &card.status {
+        CardStatus::Ok => {}
+        CardStatus::Stale {
+            last_ok_ms,
+            current_error,
+        } => {
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let ago = format_age_ms(*last_ok_ms, now_ms);
+            lines.push(Line::from(Span::styled(
+                format!("  ⚠ stale: last fetched {ago} · {current_error}"),
+                Style::default().fg(theme.status_warning),
+            )));
+        }
+        CardStatus::Error(msg) => {
+            lines.push(Line::from(Span::styled(
+                format!("  ⚠ {msg}"),
+                Style::default().fg(theme.status_error),
+            )));
+        }
+    }
+
     for w in &card.all_windows {
         let (filled, color, empty) = gradient_bar::render_bar(w.used_pct, 18, theme);
         let mut spans: Vec<Span<'static>> = vec![
@@ -259,65 +390,64 @@ impl QuotaPanel {
     }
 
     /// Convert fresh provider quota results into card models for rendering.
-    /// Filters out providers that aren't configured or that errored — those
-    /// have no usable data to display.
+    ///
+    /// Behavior per `ProviderResult`:
+    ///   * Not configured        → omit (no card).
+    ///   * Configured + ok       → fresh card; cached as last_good.
+    ///   * Configured + errored  → if cached last_good present, render
+    ///                             that card with `CardStatus::Stale`;
+    ///                             otherwise render an error placeholder
+    ///                             with `CardStatus::Error`.
+    ///
+    /// Cached last_good entries persist across calls so transient fetch
+    /// failures don't blow the user-visible panel away.
     pub fn apply_results(&mut self, results: &[ProviderResult]) {
-        use agtop_core::logo::provider_id_to_client_kind;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        self.cards = results
-            .iter()
-            .filter(|r| r.configured && r.ok)
-            .filter_map(|r| {
-                let usage = r.usage.as_ref()?;
-                let all_windows: Vec<WindowModel> = usage
-                    .windows
-                    .iter()
-                    .map(|(label, w)| WindowModel {
-                        label: label.clone(),
-                        used_pct: w
-                            .used_percent
-                            .map(|p| (p / 100.0) as f32)
-                            .unwrap_or(0.0),
-                        note: w.value_label.clone(),
-                        reset_in: w.reset_at.and_then(|ms| {
-                            let diff_secs = (ms - now_ms) / 1000;
-                            if diff_secs <= 0 {
-                                return None;
-                            }
-                            let h = diff_secs / 3600;
-                            let m = (diff_secs % 3600) / 60;
-                            Some(if h > 0 {
-                                format!("resets in {h}h {m}m")
-                            } else {
-                                format!("resets in {m}m")
-                            })
-                        }),
-                    })
-                    .collect();
-                let closest = all_windows
-                    .iter()
-                    .max_by(|a, b| {
-                        a.used_pct
-                            .partial_cmp(&b.used_pct)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .cloned()
-                    .unwrap_or(WindowModel {
-                        label: "—".into(),
-                        used_pct: 0.0,
-                        note: None,
-                        reset_in: None,
+        let mut new_cards: Vec<QuotaCardModel> = Vec::with_capacity(results.len());
+
+        for r in results {
+            if !r.configured {
+                continue;
+            }
+            if r.ok {
+                if let Some(card) = build_card_from_ok(r, now_ms) {
+                    // Update the last_good cache with this fresh card.
+                    self.last_good
+                        .insert(r.provider_id, (r.fetched_at, card.clone()));
+                    new_cards.push(card);
+                }
+            } else {
+                let err_text = r
+                    .error
+                    .as_ref()
+                    .map(|e| e.detail.clone())
+                    .unwrap_or_else(|| "unknown error".into());
+                if let Some((last_ok_ms, cached)) = self.last_good.get(&r.provider_id) {
+                    let mut stale = cached.clone();
+                    stale.status = CardStatus::Stale {
+                        last_ok_ms: *last_ok_ms,
+                        current_error: err_text,
+                    };
+                    new_cards.push(stale);
+                } else {
+                    let client_kind = client_kind_for(r.provider_id);
+                    new_cards.push(QuotaCardModel {
+                        client_kind,
+                        client_label: r.provider_name.to_string(),
+                        closest: WindowModel {
+                            label: "—".into(),
+                            used_pct: 0.0,
+                            note: None,
+                            reset_in: None,
+                        },
+                        all_windows: Vec::new(),
+                        status: CardStatus::Error(err_text),
                     });
-                let client_kind =
-                    provider_id_to_client_kind(r.provider_id).unwrap_or(ClientKind::Claude);
-                Some(QuotaCardModel {
-                    client_kind,
-                    client_label: r.provider_name.to_string(),
-                    closest,
-                    all_windows,
-                })
-            })
-            .collect();
+                }
+            }
+        }
+
+        self.cards = new_cards;
     }
 
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
@@ -418,6 +548,113 @@ impl QuotaPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ok_result_with_window(id: agtop_core::quota::ProviderId, name: &'static str, used: f64) -> agtop_core::quota::ProviderResult {
+        use agtop_core::quota::{Usage, UsageWindow};
+        use indexmap::IndexMap;
+
+        let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
+        windows.insert(
+            "5h".to_string(),
+            UsageWindow {
+                used_percent: Some(used),
+                window_seconds: None,
+                reset_at: None,
+                value_label: None,
+            },
+        );
+        let usage = Usage {
+            windows,
+            ..Usage::default()
+        };
+        agtop_core::quota::ProviderResult::ok(id, name, usage, std::collections::BTreeMap::new())
+    }
+
+    #[test]
+    fn errored_provider_with_cache_renders_stale_marker() {
+        // Sequence: a successful fetch followed by an errored fetch for the
+        // same provider must keep the card visible and mark it as stale.
+        use agtop_core::quota::{ErrorKind, ProviderId, ProviderResult, QuotaError};
+
+        let mut panel = QuotaPanel::default();
+
+        // 1) ok result populates the card and the last_good cache.
+        panel.apply_results(&[ok_result_with_window(ProviderId::Claude, "Claude", 42.0)]);
+        assert_eq!(panel.cards.len(), 1, "ok result must produce one card");
+        assert!(matches!(panel.cards[0].status, CardStatus::Ok));
+
+        // 2) Subsequent err result for the same provider — card stays
+        // visible, status flips to Stale with a snapshot of when the
+        // last-good fetch happened and the current error message.
+        let err_result = ProviderResult::err(
+            ProviderId::Claude,
+            "Claude",
+            QuotaError {
+                kind: ErrorKind::Transport,
+                detail: "connection refused".into(),
+            },
+        );
+        panel.apply_results(&[err_result]);
+        assert_eq!(
+            panel.cards.len(),
+            1,
+            "errored provider with cached last-good must remain visible"
+        );
+        match &panel.cards[0].status {
+            CardStatus::Stale { current_error, .. } => {
+                assert!(
+                    current_error.contains("connection refused"),
+                    "stale status must surface the current error message; got: {current_error:?}"
+                );
+            }
+            other => panic!("expected Stale status, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn errored_provider_without_cache_renders_error_placeholder() {
+        use agtop_core::quota::{ErrorKind, ProviderId, ProviderResult, QuotaError};
+        let mut panel = QuotaPanel::default();
+        let err = ProviderResult::err(
+            ProviderId::Codex,
+            "Codex",
+            QuotaError {
+                kind: ErrorKind::Http {
+                    status: 401,
+                    retry_after: None,
+                },
+                detail: "401 Unauthorized".into(),
+            },
+        );
+        panel.apply_results(&[err]);
+        assert_eq!(
+            panel.cards.len(),
+            1,
+            "errored provider with no cached last-good must still render a placeholder card"
+        );
+        match &panel.cards[0].status {
+            CardStatus::Error(msg) => {
+                assert!(
+                    msg.contains("401 Unauthorized"),
+                    "Error status must surface error detail; got: {msg:?}"
+                );
+            }
+            other => panic!("expected Error status, got {other:?}"),
+        }
+        assert_eq!(panel.cards[0].client_label, "Codex");
+    }
+
+    #[test]
+    fn unconfigured_provider_is_omitted() {
+        use agtop_core::quota::{ProviderId, ProviderResult};
+        let mut panel = QuotaPanel::default();
+        let r = ProviderResult::not_configured(ProviderId::Google, "Google");
+        panel.apply_results(&[r]);
+        assert!(
+            panel.cards.is_empty(),
+            "not-configured providers must not render any card"
+        );
+    }
 
     #[test]
     fn r_key_in_long_mode_emits_refresh_quota_msg() {
@@ -525,6 +762,7 @@ mod tests {
                 WindowModel { label: "5h".into(), used_pct: 0.5, note: None, reset_in: None },
                 WindowModel { label: "1d".into(), used_pct: 0.3, note: None, reset_in: None },
             ],
+            status: CardStatus::Ok,
         }).collect();
 
         let scroll_down = AppEvent::Mouse(MouseEvent {
