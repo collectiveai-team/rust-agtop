@@ -32,6 +32,25 @@ pub enum Msg {
     DrillIntoGroup(String),
     /// Aggregation screen: close drill-down overlay.
     CloseDrillDown,
+    // Config screen messages
+    SelectConfigSection(ConfigSection),
+    SetThemeName(String),
+    SetTrueColor(crate::tui::theme_v2::color::TrueColorMode),
+    SetMouseCapture(bool),
+    SetVersionBadge(bool),
+    SetHeaderDensity(HeaderDensity),
+    SetAnimations(bool),
+    SetNerdFont(bool),
+    SetClientColor(agtop_core::session::ClientKind, ratatui::style::Color),
+    SetStatusColor(StatusSlot, ratatui::style::Color),
+    SetRefreshInterval(u64),
+    SetStalledThreshold(u64),
+    ToggleColumnVisibility(crate::tui::column_config::ColumnId),
+    MoveColumn { col: crate::tui::column_config::ColumnId, dir: MoveDir },
+    ToggleClient(agtop_core::session::ClientKind, bool),
+    SetDataSourcePath(agtop_core::session::ClientKind, String),
+    SaveConfig,
+    ConfigSearch(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +58,39 @@ pub enum ScreenId {
     Dashboard,
     Aggregation,
     Config,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigSection {
+    Appearance,
+    Columns,
+    Refresh,
+    Clients,
+    Keybinds,
+    DataSources,
+    About,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeaderDensity {
+    Compact,
+    Normal,
+    Detailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusSlot {
+    Live,
+    Waiting,
+    Warning,
+    Error,
+    Idle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveDir {
+    Up,
+    Down,
 }
 
 #[cfg(test)]
