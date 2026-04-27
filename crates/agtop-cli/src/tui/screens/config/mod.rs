@@ -183,8 +183,7 @@ mod tests {
 
     #[test]
     fn search_input_appends_chars() {
-        let mut s = ConfigState::default();
-        s.focus = Focus::Search;
+        let mut s = ConfigState { focus: Focus::Search, ..Default::default() };
         s.handle_event(&k('a'));
         s.handle_event(&k('b'));
         assert_eq!(s.search, "ab");
