@@ -29,6 +29,22 @@ pub fn apply_analyses(
     let normalized: Vec<SessionAnalysis> = analyses.iter().map(normalize_analysis).collect();
 
     // --- Sessions ---
+    // Auto-collapse newly-observed parents so the tree starts collapsed by
+    // default. We track parents we've ever seen in `known_parents`; only
+    // first-time parents get auto-inserted into `collapsed`. This preserves
+    // user toggles: once they expand a parent (removing it from
+    // `collapsed`), subsequent refreshes won't re-collapse it.
+    for a in &normalized {
+        if !a.children.is_empty()
+            && !sessions.known_parents.contains(&a.summary.session_id)
+        {
+            sessions.collapsed.insert(a.summary.session_id.clone());
+        }
+        if !a.children.is_empty() {
+            sessions.known_parents.insert(a.summary.session_id.clone());
+        }
+    }
+
     let mut flat_rows: Vec<SessionRow> = Vec::new();
     for a in &normalized {
         let kind = a.summary.client;
@@ -333,6 +349,12 @@ mod tests {
 
         let mut header = HeaderModel::default();
         let mut sessions = SessionsTable::default();
+        // Mark the parent as already known + expanded so apply_analyses does
+        // not auto-collapse it (new-parent default behavior). This test
+        // verifies child row construction, not the auto-collapse policy.
+        sessions
+            .known_parents
+            .insert("parent-1".to_string());
         let mut quota = QuotaPanel::default();
         let mut aggregation = AggregationState::default();
         apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
@@ -344,6 +366,141 @@ mod tests {
             sessions.rows[1].parent_session_id.as_deref(),
             Some("parent-1"),
             "child parent_session_id must point to parent"
+        );
+    }
+
+    #[test]
+    fn new_parent_with_children_starts_collapsed() {
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
+        use agtop_core::process::Liveness;
+        use chrono::Utc;
+
+        let mut parent = analysis("brand-new-parent");
+        parent.liveness = Some(Liveness::Live);
+        let child_summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "child-of-new".to_string(),
+            None,
+            Some(Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/c.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        let child = SessionAnalysis::new(
+            child_summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        parent.children = vec![child];
+
+        let mut header = HeaderModel::default();
+        // Fresh table — parent has not been seen before.
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(
+            &[parent],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
+
+        assert_eq!(
+            sessions.rows.len(),
+            1,
+            "newly-seen parent must start collapsed (children hidden)"
+        );
+        assert!(
+            sessions
+                .collapsed
+                .contains("brand-new-parent"),
+            "new parent must be auto-added to collapsed"
+        );
+        assert!(
+            sessions
+                .known_parents
+                .contains("brand-new-parent"),
+            "parent must be marked as known"
+        );
+    }
+
+    #[test]
+    fn user_expanded_parent_stays_expanded_across_refreshes() {
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
+        use agtop_core::process::Liveness;
+        use chrono::Utc;
+
+        let mut parent = analysis("user-toggled");
+        parent.liveness = Some(Liveness::Live);
+        let child_summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "ut-child".to_string(),
+            None,
+            Some(Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/c.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        parent.children = vec![SessionAnalysis::new(
+            child_summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )];
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        // Simulate "first refresh saw parent, then user expanded it":
+        sessions.known_parents.insert("user-toggled".to_string());
+        // collapsed is empty — user opened the tree.
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(
+            &[parent],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
+
+        assert!(
+            !sessions.collapsed.contains("user-toggled"),
+            "user-expanded parent must NOT be re-collapsed on refresh"
+        );
+        assert_eq!(
+            sessions.rows.len(),
+            2,
+            "user-expanded parent must show its child"
         );
     }
 
