@@ -8,6 +8,7 @@
 pub mod app;
 pub mod app_v2;
 pub mod column_config;
+pub mod refresh_adapter;
 pub mod screens;
 mod events;
 pub mod input;
@@ -809,37 +810,17 @@ pub fn run_v2(
 
     let result = (|| -> Result<()> {
         loop {
-            // 1. Drain snapshots (data wiring completed in Task 21).
+            // 1. Drain snapshots from the background worker.
             while let Some(msg) = handle.try_recv() {
                 match msg {
                     refresh::RefreshMsg::Snapshot { analyses, .. } => {
-                        // Populate sessions table with live data.
-                        use screens::dashboard::sessions::SessionRow;
-                        app.dashboard.sessions.rows = analyses
-                            .iter()
-                            .filter_map(|a| {
-                                let kind = a.summary.client;
-                                let label = kind.as_str().to_string();
-                                Some(SessionRow {
-                                    analysis: a.clone(),
-                                    client_kind: kind,
-                                    client_label: label,
-                                    activity_samples: vec![],
-                                })
-                            })
-                            .collect();
-                        app.dashboard.sessions.apply_sort();
-                        // Update header counts.
-                        let active = analyses.iter()
-                            .filter(|a| a.session_state.as_ref().map(|s| s.is_active()).unwrap_or(false))
-                            .count();
-                        let idle = analyses.iter()
-                            .filter(|a| matches!(a.session_state, Some(agtop_core::session::SessionState::Idle)))
-                            .count();
-                        app.dashboard.header.sessions_active = active;
-                        app.dashboard.header.sessions_idle = idle;
-                        app.dashboard.header.sessions_today = analyses.len();
-                        app.dashboard.header.clock = chrono::Local::now().format("%H:%M:%S").to_string();
+                        refresh_adapter::apply_analyses(
+                            &analyses,
+                            &mut app.dashboard.header,
+                            &mut app.dashboard.sessions,
+                            &mut app.dashboard.quota,
+                            refresh_interval.as_secs(),
+                        );
                     }
                     _ => {}
                 }
