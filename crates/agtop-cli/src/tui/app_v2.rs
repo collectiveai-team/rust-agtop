@@ -15,6 +15,7 @@ pub struct App {
     pub theme: Theme,
     pub show_help: bool,
     pub running: bool,
+    pub tab_bar: tab_bar::TabBar,
 
     pub dashboard: DashboardState,
     pub aggregation: AggregationState,
@@ -28,6 +29,7 @@ impl Default for App {
             theme: theme_v2::vscode_dark_plus::theme(),
             show_help: false,
             running: true,
+            tab_bar: tab_bar::TabBar::default(),
             dashboard: DashboardState::default(),
             aggregation: Default::default(),
             config: Default::default(),
@@ -78,12 +80,12 @@ impl App {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect) {
+    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect) {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
             .split(area);
-        tab_bar::render(frame, layout[0], self.current, env!("CARGO_PKG_VERSION"), &self.theme);
+        self.tab_bar.render(frame, layout[0], self.current, env!("CARGO_PKG_VERSION"), &self.theme);
         match self.current {
             ScreenId::Dashboard => self.dashboard.render(frame, layout[1], &self.theme),
             ScreenId::Aggregation => self.aggregation.render(frame, layout[1], &self.theme),
@@ -95,6 +97,15 @@ impl App {
         // Global keymap first.
         if let AppEvent::Key(k) = event {
             if let Some(m) = self.global_keymap(*k) { return Some(m); }
+        }
+        // Tab bar mouse click: switch screen.
+        if let AppEvent::Mouse(me) = event {
+            use crossterm::event::{MouseButton, MouseEventKind};
+            if me.kind == MouseEventKind::Down(MouseButton::Left) {
+                if let Some(screen) = self.tab_bar.hit_test(me.column, me.row) {
+                    return Some(Msg::SwitchScreen(screen));
+                }
+            }
         }
         // Then route to active screen.
         match self.current {
