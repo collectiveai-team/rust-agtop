@@ -15,7 +15,7 @@
 
 - [x] **Phase 0 — Worktree bootstrap** — verifies/creates worktree, dispatches Agent 1
 - [x] **Phase 1 — Foundation** (`docs/superpowers/plans/2026-04-26-foundation.md`) — 22 tasks, ~core normalization + theme + widgets
-- [ ] **Phase 2 — Dashboard redesign** (`docs/superpowers/plans/2026-04-26-dashboard-redesign.md`) — 22 tasks, ~header + sessions + quota + info drawer
+- [🚧] **Phase 2 — Dashboard redesign** (`docs/superpowers/plans/2026-04-26-dashboard-redesign.md`) — 22 tasks, ~header + sessions + quota + info drawer
 - [ ] **Phase 3 — Aggregation view** (`docs/superpowers/plans/2026-04-26-aggregation-view.md`) — 8 tasks, ~group-by analytics
 - [ ] **Phase 4 — Config view** (`docs/superpowers/plans/2026-04-26-config-view.md`) — 14 tasks, ~settings page
 - [ ] **Phase 5 — Final acceptance** — runs spec §8 acceptance checklist, writes summary
@@ -204,6 +204,7 @@ Phase 5 is the terminal phase. Its agent ticks `[x]`, writes the final summary t
 phase-0 done 2026-04-27T07:11:55Z agent-phase-0 Worktree created at /home/rbarriga/collective.ai/projects/rust-agtop/.worktrees/tui-redesign, branch feat/tui-redesign forked from main@3dc85ff5, cargo build succeeded, dispatching Agent 1.
 phase-1 start 2026-04-27T08:00:00Z agent-phase-1 Starting Phase 1 Foundation: 22 tasks for core normalization + theme + widgets.
 phase-1 done  2026-04-27T07:55:34Z agent-phase-1 Phase 1 complete. 22 tasks done. cargo build/test/clippy all green. ~21 commits this phase. Head: 59229f5 fix(tui): add allow(dead_code) to foundation modules.
+phase-2 start 2026-04-27T10:00:00Z agent-phase-2 Starting Phase 2 Dashboard redesign: 22 tasks for header + sessions + quota + info drawer.
 ```
 
 ---
