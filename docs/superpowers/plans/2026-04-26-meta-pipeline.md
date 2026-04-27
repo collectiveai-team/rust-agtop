@@ -17,7 +17,7 @@
 - [x] **Phase 1 — Foundation** (`docs/superpowers/plans/2026-04-26-foundation.md`) — 22 tasks, ~core normalization + theme + widgets
 - [x] **Phase 2 — Dashboard redesign** (`docs/superpowers/plans/2026-04-26-dashboard-redesign.md`) — 22 tasks, ~header + sessions + quota + info drawer
 - [x] **Phase 3 — Aggregation view** (`docs/superpowers/plans/2026-04-26-aggregation-view.md`) — 8 tasks, ~group-by analytics
-- [ ] **Phase 4 — Config view** (`docs/superpowers/plans/2026-04-26-config-view.md`) — 14 tasks, ~settings page
+- [🚧] **Phase 4 — Config view** (`docs/superpowers/plans/2026-04-26-config-view.md`) — 14 tasks, ~settings page
 - [ ] **Phase 5 — Final acceptance** — runs spec §8 acceptance checklist, writes summary
 
 When all 6 boxes above are `[x]`, the pipeline is complete.
@@ -208,6 +208,7 @@ phase-2 start 2026-04-27T10:00:00Z agent-phase-2 Starting Phase 2 Dashboard rede
 phase-2 done  2026-04-27T12:30:00Z agent-phase-2 Phase 2 complete. 22 tasks done. cargo build/test/clippy all green. ~22 commits this phase. Head: fix(tui): add allow(dead_code) to legacy modules; fix clippy warnings.
 phase-3 start 2026-04-27T14:00:00Z agent-phase-3 Starting Phase 3 Aggregation view: 8 tasks for group-by analytics.
 phase-3 done  2026-04-27T16:00:00Z agent-phase-3 Phase 3 complete. 8 tasks done. cargo build/test(--test-threads=1)/clippy all green. ~12 commits this phase. Note: pre-existing flaky test (clicking_sortable_header) fails under parallel execution; passes with --test-threads=1. Head: fix(tui/aggregation): stable snapshot test with time redaction; clippy fixes.
+phase-4 start 2026-04-27T18:00:00Z agent-phase-4 Starting Phase 4 Config view: 14 tasks for VS Code-style settings page.
 ```
 
 ---
