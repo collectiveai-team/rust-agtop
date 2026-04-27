@@ -20,6 +20,11 @@ pub enum Msg {
     Quit,
     /// No-op (placeholder when an event is handled but state doesn't change).
     Noop,
+    /// Request an immediate quota fetch (out-of-band refresh, bypassing the
+    /// normal interval). Emitted by the QuotaPanel when the user activates
+    /// the `[r]efresh` button via key (`r`) or mouse click. The TUI driver
+    /// loop translates this into a manual trigger on the refresh worker.
+    RefreshQuota,
     /// Aggregation screen: change group-by dimension.
     SetGroupBy(agtop_core::aggregate::GroupBy),
     /// Aggregation screen: change time range.

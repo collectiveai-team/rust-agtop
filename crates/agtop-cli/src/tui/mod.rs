@@ -860,6 +860,12 @@ pub fn run_v2(
                 if let Some(ev) = input::AppEvent::from_crossterm(raw) {
                     if let Some(msg) = app.handle_event(&ev) {
                         let should_quit = matches!(msg, msg::Msg::Quit);
+                        // Side-effect routing for messages that need to talk
+                        // to the background refresh worker (no app-state
+                        // change, just an out-of-band wakeup).
+                        if matches!(msg, msg::Msg::RefreshQuota) {
+                            handle.trigger_manual();
+                        }
                         app.update(msg);
                         if should_quit { break; }
                     }

@@ -75,6 +75,9 @@ impl App {
             | Msg::SetDataSourcePath(_, _)
             | Msg::SaveConfig
             | Msg::ConfigSearch(_) => {}
+            // RefreshQuota is a side-effect signal handled in run_v2 (it
+            // calls RefreshHandle::trigger_manual). No app-state change here.
+            Msg::RefreshQuota => {}
             #[allow(unreachable_patterns)]
             _ => {}
         }

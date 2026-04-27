@@ -117,6 +117,11 @@ fn build_card_lines<'a>(card: &'a QuotaCardModel, label_width: usize, theme: &'a
 }
 
 impl QuotaPanel {
+    /// Title strings rendered in each mode's top border.  Centralized so
+    /// click-hit-testing in `handle_event` and rendering stay in sync.
+    const TITLE_SHORT: &'static str = " Usage Quota (short)  [u]sage ";
+    const TITLE_LONG: &'static str = " Usage Quota (long)  [u]sage  [r]efresh ";
+
     pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         self.last_area = Some(area);
         match self.mode {
@@ -130,7 +135,7 @@ impl QuotaPanel {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(
-                " Usage Quota (short)  [u]sage ",
+                Self::TITLE_SHORT,
                 Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
             ))
             .border_style(Style::default().fg(theme.border_muted));
@@ -170,7 +175,7 @@ impl QuotaPanel {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(Span::styled(
-                " Usage Quota (long)  [u]sage ",
+                Self::TITLE_LONG,
                 Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
             ))
             .border_style(Style::default().fg(theme.border_muted));
@@ -326,6 +331,11 @@ impl QuotaPanel {
                 self.scroll_offset = 0;
                 Some(Msg::Noop)
             }
+            AppEvent::Key(KeyEvent { code: KeyCode::Char('r'), modifiers, .. })
+                if modifiers.is_empty() && self.mode == QuotaMode::Long =>
+            {
+                Some(Msg::RefreshQuota)
+            }
             AppEvent::Key(KeyEvent { code: KeyCode::Char('j'), modifiers, .. })
                 if modifiers.is_empty() && self.mode == QuotaMode::Long =>
             {
@@ -347,19 +357,29 @@ impl QuotaPanel {
                 if let Some(area) = self.last_area {
                     if *row == area.y {
                         let title = match self.mode {
-                            QuotaMode::Short => " Usage Quota (short)  [u]sage ",
-                            QuotaMode::Long => " Usage Quota (long)  [u]sage ",
+                            QuotaMode::Short => Self::TITLE_SHORT,
+                            QuotaMode::Long => Self::TITLE_LONG,
                             QuotaMode::Hidden => return None,
                         };
                         let title_start = area.x + 1; // +1 for left border
                         if *column >= title_start {
                             let rel = (*column - title_start) as usize;
+                            // [u]sage button: cycle mode.
                             if let Some(u_pos) = title.find("[u]") {
                                 let u_end = u_pos + "[u]sage".len();
                                 if rel >= u_pos && rel < u_end {
                                     self.mode = self.mode.cycle();
                                     self.scroll_offset = 0;
                                     return Some(Msg::Noop);
+                                }
+                            }
+                            // [r]efresh button: only present in Long mode.
+                            if self.mode == QuotaMode::Long {
+                                if let Some(r_pos) = title.find("[r]") {
+                                    let r_end = r_pos + "[r]efresh".len();
+                                    if rel >= r_pos && rel < r_end {
+                                        return Some(Msg::RefreshQuota);
+                                    }
                                 }
                             }
                         }
@@ -398,6 +418,60 @@ impl QuotaPanel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn r_key_in_long_mode_emits_refresh_quota_msg() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let mut panel = QuotaPanel::default();
+        panel.mode = QuotaMode::Long;
+        panel.last_area = Some(Rect::new(0, 0, 80, 15));
+        let ev = AppEvent::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        let result = panel.handle_event(&ev);
+        assert_eq!(
+            result,
+            Some(Msg::RefreshQuota),
+            "[r] in Long mode must emit Msg::RefreshQuota"
+        );
+    }
+
+    #[test]
+    fn r_key_inert_in_short_mode() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let mut panel = QuotaPanel::default();
+        // Short mode (default): [r]efresh button is not exposed.
+        let ev = AppEvent::Key(KeyEvent {
+            code: KeyCode::Char('r'),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        let result = panel.handle_event(&ev);
+        assert_eq!(result, None, "[r] must be inert outside Long mode");
+    }
+
+    #[test]
+    fn click_on_r_button_in_long_mode_emits_refresh() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut panel = QuotaPanel::default();
+        panel.mode = QuotaMode::Long;
+        panel.last_area = Some(Rect::new(0, 0, 80, 15));
+        // Title in Long mode: " Usage Quota (long)  [u]sage  [r]efresh "
+        let title_long = " Usage Quota (long)  [u]sage  [r]efresh ";
+        let r_pos = title_long.find("[r]").expect("title must contain [r]");
+        let click = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1 + r_pos as u16, // border (+1) + offset
+            row: 0,                    // == area.y
+            modifiers: KeyModifiers::NONE,
+        });
+        let result = panel.handle_event(&click);
+        assert_eq!(result, Some(Msg::RefreshQuota));
+    }
 
     #[test]
     fn long_mode_min_height_is_at_least_15_rows() {
