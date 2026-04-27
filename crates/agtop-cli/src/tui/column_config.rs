@@ -238,12 +238,17 @@ impl ColumnId {
 /// available but hidden by default.
 #[must_use]
 pub fn default_visible_v2() -> Vec<ColumnId> {
+    // Note: ACTION column intentionally omitted — its content was rarely
+    // populated and its presence wasted horizontal space. The
+    // `ColumnId::Action` variant and `render_action_cell()` helper remain
+    // available for users who add it back via config.
+    //
+    // ACTIVITY (sparkline) is rendered by the table component as a
+    // dedicated visualization cell, not via ColumnId; the table inserts it
+    // after the CLIENT column.
     vec![
         ColumnId::Session,
         ColumnId::Age,
-        ColumnId::Action,
-        // ACTIVITY (sparkline) is rendered by the table component as a
-        // dedicated visualization cell, not via ColumnId.
         ColumnId::Client,
         ColumnId::Subscription,
         ColumnId::Model,
@@ -765,7 +770,8 @@ mod cfg_client_tests {
     fn default_visible_matches_spec() {
         let v = default_visible_v2();
         assert_eq!(v.first(), Some(&ColumnId::Session));
-        assert!(v.contains(&ColumnId::Action));
+        // ACTION column intentionally omitted from default view.
+        assert!(!v.contains(&ColumnId::Action));
         assert!(v.contains(&ColumnId::Client));
         assert!(v.contains(&ColumnId::Subscription));
         assert!(v.contains(&ColumnId::Cost));

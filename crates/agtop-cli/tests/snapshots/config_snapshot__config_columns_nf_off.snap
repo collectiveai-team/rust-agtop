@@ -9,8 +9,7 @@ expression: buffer_to_text(&buf)
   Clients                     │
   Keybinds                    │▌ [x]  SESSION
   Data sources                │  [x]  AGE
-  About                       │  [x]  ACTION
-                              │  [x]  CLIENT
+  About                       │  [x]  CLIENT
                               │  [x]  SUB
                               │  [x]  MODEL
                               │  [x]  CPU
@@ -31,4 +30,5 @@ expression: buffer_to_text(&buf)
                               │  [ ]  OUT
                               │  [ ]  CACHE
                               │  [ ]  TOOLS
+                              │  [ ]  AGENT
  [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help

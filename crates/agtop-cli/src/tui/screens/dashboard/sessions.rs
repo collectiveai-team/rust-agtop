@@ -49,6 +49,12 @@ pub struct SessionsTable {
     pub table_area: Rect,
     /// Session IDs of collapsed parent rows (children not shown).
     pub collapsed: HashSet<String>,
+    /// Session IDs of parents we have seen at least once. New parents
+    /// (not yet in this set) are auto-inserted into `collapsed` on first
+    /// observation so the tree starts collapsed; once the user toggles a
+    /// parent open, removing it from `collapsed` sticks even if subsequent
+    /// refreshes see the same parent again.
+    pub known_parents: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +88,7 @@ impl Default for SessionsTable {
             sort_dir: SortDir::Desc,
             table_area: Rect::default(),
             collapsed: HashSet::new(),
+            known_parents: HashSet::new(),
         }
     }
 }
@@ -92,8 +99,13 @@ impl SessionsTable {
         // Map columns from default_visible into column constraints + header strings.
         let columns = column_config::default_visible_v2();
 
-        // Find insertion point for ACTIVITY column: after ACTION (index in columns).
-        let action_idx = columns.iter().position(|c| *c == ColumnId::Action);
+        // Insertion point for ACTIVITY sparkline: after CLIENT. (Previously
+        // inserted after ACTION, but ACTION was removed from the default view.)
+        // Falls back to ACTION if a user re-enables it.
+        let activity_after = columns
+            .iter()
+            .position(|c| *c == ColumnId::Action)
+            .or_else(|| columns.iter().position(|c| *c == ColumnId::Client));
 
         let mut header_cells: Vec<Cell> = Vec::with_capacity(columns.len() + 3);
         // State dot column has no header label.
@@ -106,8 +118,8 @@ impl SessionsTable {
                         .add_modifier(Modifier::BOLD),
                 ),
             );
-            // Insert ACTIVITY header after ACTION.
-            if Some(i) == action_idx {
+            // Insert ACTIVITY header after the configured anchor column.
+            if Some(i) == activity_after {
                 header_cells.push(
                     Cell::from("ACTIVITY").style(
                         Style::default()
@@ -121,14 +133,16 @@ impl SessionsTable {
         let body_rows: Vec<Row> = self
             .rows
             .iter()
-            .map(|sr| self.render_row(sr, &columns, action_idx, theme))
+            .map(|sr| self.render_row(sr, &columns, activity_after, theme))
             .collect();
 
         let mut constraints: Vec<Constraint> = Vec::with_capacity(columns.len() + 2);
-        constraints.push(Constraint::Length(2)); // state dot + space
+        // State-dot column: 4 cells wide so depth=0 toggle (▶/▼ + space) and
+        // depth=1 indent (2 spaces) both leave room for the dot.
+        constraints.push(Constraint::Length(4));
         for (i, c) in columns.iter().enumerate() {
             constraints.push(width_for(*c));
-            if Some(i) == action_idx {
+            if Some(i) == activity_after {
                 constraints.push(Constraint::Length(8)); // ACTIVITY sparkline
             }
         }
@@ -149,7 +163,7 @@ impl SessionsTable {
         &'a self,
         row: &'a SessionRow,
         columns: &[ColumnId],
-        action_idx: Option<usize>,
+        activity_after: Option<usize>,
         theme: &Theme,
     ) -> Row<'a> {
         // Read state directly from core (post-normalization field).
@@ -189,8 +203,8 @@ impl SessionsTable {
 
         for (i, c) in columns.iter().enumerate() {
             cells.push(self.render_cell(row, *c, &state, theme));
-            // Insert ACTIVITY sparkline after ACTION column.
-            if Some(i) == action_idx {
+            // Insert ACTIVITY sparkline after the configured anchor column.
+            if Some(i) == activity_after {
                 let activity = sparkline_braille::render_braille(&row.activity_samples, 8, 100.0);
                 cells.push(Cell::from(Line::from(Span::styled(
                     activity,
@@ -405,7 +419,10 @@ impl SessionsTable {
                         self.apply_sort();
                         Some(Msg::Noop)
                     }
-                    KeyCode::Enter | KeyCode::Char(' ') => {
+                    // Toggle subagent tree collapse with `t`. Enter/Space are
+                    // reserved for future actions (e.g. opening the info drawer).
+                    // TODO: double-click to toggle tree.
+                    KeyCode::Char('t') => {
                         if let Some(idx) = self.state.selected() {
                             if let Some(row) = self.rows.get(idx) {
                                 if row.depth == 0 && !row.analysis.children.is_empty() {
