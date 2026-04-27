@@ -12,6 +12,9 @@ use ratatui::{
 
 use agtop_core::session::{ClientKind, SessionAnalysis, SessionState};
 
+use crate::tui::input::AppEvent;
+use crate::tui::msg::Msg;
+
 use crate::tui::animation::PulseClock;
 use crate::tui::column_config::{self, ColumnId};
 use crate::tui::theme_v2::{client_palette, Theme};
@@ -256,6 +259,67 @@ impl SessionsTable {
     }
 }
 
+impl SessionsTable {
+    pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        match event {
+            AppEvent::Key(KeyEvent { code, modifiers, .. }) => {
+                if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT { return None; }
+                match code {
+                    KeyCode::Down | KeyCode::Char('j') => { self.move_selection(1); Some(Msg::Noop) }
+                    KeyCode::Up | KeyCode::Char('k') => { self.move_selection(-1); Some(Msg::Noop) }
+                    KeyCode::Char('s') => { self.cycle_sort_key(); self.apply_sort(); Some(Msg::Noop) }
+                    KeyCode::Char('S') => {
+                        self.sort_dir = match self.sort_dir {
+                            SortDir::Asc => SortDir::Desc,
+                            SortDir::Desc => SortDir::Asc,
+                        };
+                        self.apply_sort();
+                        Some(Msg::Noop)
+                    }
+                    _ => None,
+                }
+            }
+            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::ScrollDown, .. }) => {
+                self.move_selection(1);
+                Some(Msg::Noop)
+            }
+            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::ScrollUp, .. }) => {
+                self.move_selection(-1);
+                Some(Msg::Noop)
+            }
+            AppEvent::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), row, column, .. }) => {
+                // Mouse row-select deferred to Task 18 integration.
+                let _ = (row, column);
+                Some(Msg::Noop)
+            }
+            _ => None,
+        }
+    }
+
+    fn move_selection(&mut self, delta: i32) {
+        if self.rows.is_empty() { return; }
+        let cur = self.state.selected().unwrap_or(0) as i32;
+        let next = (cur + delta).rem_euclid(self.rows.len() as i32) as usize;
+        self.state.select(Some(next));
+    }
+
+    fn cycle_sort_key(&mut self) {
+        self.sort_key = match self.sort_key {
+            SessionSortKey::Session => SessionSortKey::Age,
+            SessionSortKey::Age => SessionSortKey::Client,
+            SessionSortKey::Client => SessionSortKey::Subscription,
+            SessionSortKey::Subscription => SessionSortKey::Model,
+            SessionSortKey::Model => SessionSortKey::Cpu,
+            SessionSortKey::Cpu => SessionSortKey::Memory,
+            SessionSortKey::Memory => SessionSortKey::Tokens,
+            SessionSortKey::Tokens => SessionSortKey::Cost,
+            SessionSortKey::Cost => SessionSortKey::Project,
+            SessionSortKey::Project => SessionSortKey::Session,
+        };
+    }
+}
+
 fn width_for(col: ColumnId) -> Constraint {
     match col {
         ColumnId::Session => Constraint::Length(10),
@@ -380,6 +444,42 @@ mod tests {
         assert_eq!(table.sort_dir, SortDir::Asc);
     }
 
+    fn mock_row(id: &str) -> SessionRow {
+        use agtop_core::session::{CostBreakdown, SessionSummary, TokenTotals};
+        let summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            id.to_string(),
+            None,
+            None,
+            None,
+            None,
+            std::path::PathBuf::new(),
+            None,
+            None,
+            None,
+            None,
+        );
+        let analysis = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        SessionRow {
+            analysis,
+            client_kind: ClientKind::Claude,
+            client_label: "claude".into(),
+            activity_samples: vec![],
+        }
+    }
+
     #[test]
     fn activity_samples_render_to_8_braille_chars() {
         let s = sparkline_braille::render_braille(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 8, 10.0);
@@ -388,5 +488,38 @@ mod tests {
         for c in s.chars() {
             assert!((0x2800..=0x28FF).contains(&(c as u32)));
         }
+    }
+
+    #[test]
+    fn down_moves_selection_forward() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let mut t = SessionsTable::default();
+        t.rows = vec![mock_row("a"), mock_row("b"), mock_row("c")];
+        t.state.select(Some(0));
+        let ev = AppEvent::Key(KeyEvent {
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(t.state.selected(), Some(1));
+    }
+
+    #[test]
+    fn up_wraps_from_zero() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+        let mut t = SessionsTable::default();
+        t.rows = vec![mock_row("a"), mock_row("b"), mock_row("c")];
+        t.state.select(Some(0));
+        let ev = AppEvent::Key(KeyEvent {
+            code: KeyCode::Up,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
+        t.handle_event(&ev);
+        // Should wrap to last row.
+        assert_eq!(t.state.selected(), Some(2));
     }
 }
