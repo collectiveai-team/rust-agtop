@@ -12,7 +12,7 @@ use ratatui::{
 
 use agtop_core::session::{ClientKind, SessionAnalysis, SessionState};
 
-use super::info_format::{human_tokens, money_summary, truncate_to};
+use super::info_format::{human_bytes, human_tokens, money_summary, truncate_to};
 use crate::tui::theme_v2::{client_palette, Theme};
 use crate::tui::widgets::{icon::Icon, state_style};
 
@@ -64,10 +64,10 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme: &T
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Length(5),
-            Constraint::Length(2),
-            Constraint::Min(6),
+            Constraint::Length(5), // hero: project, cwd, started, title, pills
+            Constraint::Length(7), // status: header, state, session, usage, context, disk, spacer
+            Constraint::Length(2), // activity sparkline
+            Constraint::Min(6),    // recent messages
         ])
         .split(area);
     render_hero(frame, layout[0], m, theme);
@@ -122,6 +122,9 @@ fn render_hero(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme: &
     let state_label = state_style::label_for(m.state);
     let state_color_style = state_color_style(m.state, theme);
 
+    let session_title = m.analysis.summary.session_title.as_deref().unwrap_or("");
+    let tag = Icon::Tag.render(m.nerd_font);
+
     let mut lines = vec![
         Line::from(vec![
             Span::styled(
@@ -141,6 +144,18 @@ fn render_hero(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme: &
             Span::styled(format!("{clock} "), Style::default().fg(theme.fg_muted)),
             Span::styled(started_str, Style::default().fg(theme.fg_muted)),
         ]),
+        // Session title row — empty line when no title is available.
+        if session_title.is_empty() {
+            Line::from("")
+        } else {
+            Line::from(vec![
+                Span::styled(format!("{tag} "), Style::default().fg(theme.fg_muted)),
+                Span::styled(
+                    truncate_to(session_title, area.width.saturating_sub(4) as usize),
+                    Style::default().fg(theme.fg_default),
+                ),
+            ])
+        },
         Line::from(vec![
             pill(m.client_label, title_color, theme),
             Span::raw(" "),
@@ -157,7 +172,7 @@ fn render_hero(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme: &
             ),
         ]),
     ];
-    while lines.len() < 4 {
+    while lines.len() < 5 {
         lines.push(Line::from(""));
     }
     frame.render_widget(Paragraph::new(lines), area);
@@ -196,6 +211,34 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme:
         "Standalone".to_string()
     };
     let action = m.analysis.current_action.as_deref().unwrap_or("");
+
+    // Context usage row value.
+    let context_str = match (
+        m.analysis.context_used_pct,
+        m.analysis.context_used_tokens,
+        m.analysis.context_window,
+    ) {
+        (Some(pct), Some(used), Some(win)) => {
+            format!("{:.0}%  {} / {}", pct, human_tokens(used), human_tokens(win))
+        }
+        (Some(pct), _, _) => format!("{:.0}%", pct),
+        _ => "—".to_string(),
+    };
+
+    // Disk I/O row value (cumulative bytes since process start).
+    let disk_str = m
+        .analysis
+        .process_metrics
+        .as_ref()
+        .map(|pm| {
+            format!(
+                "R: {}   W: {}",
+                human_bytes(pm.disk_read_bytes),
+                human_bytes(pm.disk_written_bytes),
+            )
+        })
+        .unwrap_or_else(|| "—".to_string());
+
     let lines = vec![
         Line::from(vec![
             Span::styled(" Status ", Style::default().fg(theme.fg_muted)),
@@ -240,6 +283,14 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme:
                 format!("{} agent turns", agent_turns),
                 Style::default().fg(theme.fg_default),
             ),
+        ]),
+        Line::from(vec![
+            Span::styled("Context  ", Style::default().fg(theme.fg_muted)),
+            Span::styled(context_str, Style::default().fg(theme.fg_default)),
+        ]),
+        Line::from(vec![
+            Span::styled("Disk     ", Style::default().fg(theme.fg_muted)),
+            Span::styled(disk_str, Style::default().fg(theme.fg_default)),
         ]),
         Line::from(""),
     ];

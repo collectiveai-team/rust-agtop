@@ -1,6 +1,5 @@
 ---
 source: crates/agtop-cli/tests/config_snapshot.rs
-assertion_line: 21
 expression: buffer_to_text(&buf)
 ---
  / Search:
@@ -18,6 +17,7 @@ expression: buffer_to_text(&buf)
                               │  [x]  R/s
                               │  [x]  W/s
                               │  [x]  TOKENS
+                              │  [x]  CONTEXT
                               │  [x]  COST$
                               │  [x]  PROJECT
                               │  [x]  NAME
@@ -31,5 +31,4 @@ expression: buffer_to_text(&buf)
                               │  [ ]  DISK R
                               │  [ ]  DISK W
                               │  [ ]  OUT
-                              │  [ ]  CACHE
  [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help

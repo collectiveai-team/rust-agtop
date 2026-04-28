@@ -18,7 +18,7 @@ use crate::tui::input::AppEvent;
 use crate::tui::msg::Msg;
 
 use crate::tui::animation::PulseClock;
-use crate::tui::column_config::{self, ColumnId};
+use crate::tui::column_config::ColumnId;
 use crate::tui::theme_v2::{client_palette, Theme};
 use crate::tui::widgets::{sparkline_braille, state_dot, state_style};
 
@@ -99,16 +99,24 @@ impl Default for SessionsTable {
 impl SessionsTable {
     pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
         self.table_area = area;
-        // Map columns from default_visible into column constraints + header strings.
-        let columns = column_config::default_visible_v2();
+        // Build the visible column list, dropping low-priority columns when
+        // the terminal is too narrow to fit everything with minimum widths.
+        // `show_activity` is false when the ACTIVITY sparkline itself is
+        // dropped (independently of the CLIENT column) to save 9 chars (8 +
+        // 1 spacing).
+        let (columns, show_activity) = visible_columns_for_width(area.width);
 
-        // Insertion point for ACTIVITY sparkline: after CLIENT. (Previously
-        // inserted after ACTION, but ACTION was removed from the default view.)
-        // Falls back to ACTION if a user re-enables it.
-        let activity_after = columns
-            .iter()
-            .position(|c| *c == ColumnId::Action)
-            .or_else(|| columns.iter().position(|c| *c == ColumnId::Client));
+        // Insertion point for ACTIVITY sparkline: after CLIENT (if active),
+        // falling back to ACTION. When `show_activity` is false the insertion
+        // point is computed but the sparkline cell is never actually added.
+        let activity_after = if show_activity {
+            columns
+                .iter()
+                .position(|c| *c == ColumnId::Action)
+                .or_else(|| columns.iter().position(|c| *c == ColumnId::Client))
+        } else {
+            None
+        };
 
         let mut header_cells: Vec<Cell> = Vec::with_capacity(columns.len() + 3);
         // State dot column has no header label.
@@ -139,12 +147,26 @@ impl SessionsTable {
             .map(|sr| self.render_row(sr, &columns, activity_after, theme))
             .collect();
 
+        // Build constraints. PROJECT and NAME widths are computed from the
+        // slack left after all fixed-width columns are accounted for:
+        //   - PROJECT: clamped to [PROJECT_MIN, PROJECT_MAX]
+        //   - NAME: at least NAME_MIN, takes all remaining slack (no upper cap)
+        let project_name_constraints =
+            project_name_constraints(&columns, activity_after, area.width);
+
         let mut constraints: Vec<Constraint> = Vec::with_capacity(columns.len() + 2);
-        // State-dot column: 5 cells wide. depth=0 needs 2 (▶ + space) + dot + space;
-        // depth=1 needs 4 for the tree glyph (`├── ` / `└── `) + dot.
+        // State-dot column: 5 cells wide.
         constraints.push(Constraint::Length(5));
         for (i, c) in columns.iter().enumerate() {
-            constraints.push(width_for(*c));
+            match c {
+                ColumnId::Project => {
+                    constraints.push(project_name_constraints.0);
+                }
+                ColumnId::SessionName => {
+                    constraints.push(project_name_constraints.1);
+                }
+                _ => constraints.push(fixed_width_for(*c)),
+            }
             if Some(i) == activity_after {
                 constraints.push(Constraint::Length(8)); // ACTIVITY sparkline
             }
@@ -298,6 +320,12 @@ impl SessionsTable {
                     .session_title
                     .clone()
                     .unwrap_or_default(),
+            ),
+            ColumnId::Context => Cell::from(
+                row.analysis
+                    .context_used_pct
+                    .map(|pct| format!("{:.0}%", pct))
+                    .unwrap_or_else(|| "—".into()),
             ),
             // Defaults for anything else.
             _ => Cell::from(""),
@@ -561,7 +589,14 @@ impl SessionsTable {
     }
 }
 
-fn width_for(col: ColumnId) -> Constraint {
+/// Minimum and maximum widths for PROJECT and NAME columns.
+const PROJECT_MIN: u16 = 12;
+const PROJECT_MAX: u16 = 25;
+const NAME_MIN: u16 = 14;
+
+/// Fixed pixel widths for columns that are not PROJECT or SessionName.
+/// PROJECT and SessionName are handled separately by `project_name_constraints`.
+fn fixed_width_for(col: ColumnId) -> Constraint {
     match col {
         ColumnId::Session => Constraint::Length(10),
         ColumnId::Age => Constraint::Length(5),
@@ -571,12 +606,181 @@ fn width_for(col: ColumnId) -> Constraint {
         ColumnId::Model => Constraint::Length(20),
         ColumnId::Cpu => Constraint::Length(5),
         ColumnId::Memory => Constraint::Length(6),
+        ColumnId::DiskReadRate => Constraint::Length(8),
+        ColumnId::DiskWriteRate => Constraint::Length(8),
         ColumnId::Tokens => Constraint::Length(8),
+        ColumnId::Context => Constraint::Length(8),
         ColumnId::Cost => Constraint::Length(7),
-        ColumnId::Project => Constraint::Min(12),
-        ColumnId::SessionName => Constraint::Min(14),
+        // PROJECT and SessionName should be handled by project_name_constraints,
+        // not this function; fall back to sensible defaults if called directly.
+        ColumnId::Project => Constraint::Length(PROJECT_MIN),
+        ColumnId::SessionName => Constraint::Length(NAME_MIN),
         _ => Constraint::Length(8),
     }
+}
+
+/// Returns the fixed pixel width of a column (the value inside `Length`).
+/// Returns 0 for Project/SessionName (handled separately).
+fn fixed_col_width(col: ColumnId) -> u16 {
+    match col {
+        ColumnId::Session => 10,
+        ColumnId::Age => 5,
+        ColumnId::Action => 20,
+        ColumnId::Client => 14,
+        ColumnId::Subscription => 16,
+        ColumnId::Model => 20,
+        ColumnId::Cpu => 5,
+        ColumnId::Memory => 6,
+        ColumnId::DiskReadRate => 8,
+        ColumnId::DiskWriteRate => 8,
+        ColumnId::Tokens => 8,
+        ColumnId::Context => 8,
+        ColumnId::Cost => 7,
+        ColumnId::Project | ColumnId::SessionName => 0,
+        _ => 8,
+    }
+}
+
+/// Column spacing used by ratatui's Table widget (default = 1).
+const COLUMN_SPACING: u16 = 1;
+
+/// Compute the `(project_constraint, name_constraint)` pair given the visible
+/// columns and the available terminal width.
+///
+/// All columns other than PROJECT and NAME have fixed widths. The slack
+/// remaining after those fixed widths (including inter-column spacing) is
+/// split:
+///   - PROJECT gets `clamp(slack - NAME_MIN, PROJECT_MIN, PROJECT_MAX)`.
+///   - NAME gets all remaining slack (`Min(NAME_MIN)` so it still renders
+///     when slack is tight, but never forces an overflow).
+fn project_name_constraints(
+    columns: &[ColumnId],
+    activity_after: Option<usize>,
+    area_width: u16,
+) -> (Constraint, Constraint) {
+    // Count the number of constraint slots: state-dot + each column + optional ACTIVITY.
+    let n_slots = 1 // state-dot
+        + columns.len() as u16
+        + if activity_after.is_some() { 1 } else { 0 };
+    // Inter-column spacing consumed by the Table widget.
+    let spacing = n_slots.saturating_sub(1) * COLUMN_SPACING;
+
+    // Sum up all fixed-width columns in the current visible set.
+    let mut fixed_total: u16 = 5 + spacing; // state-dot + spacing
+    for (i, c) in columns.iter().enumerate() {
+        fixed_total += fixed_col_width(*c);
+        if Some(i) == activity_after {
+            fixed_total += 8; // ACTIVITY sparkline
+        }
+    }
+
+    let slack = area_width.saturating_sub(fixed_total);
+    // Reserve NAME_MIN for NAME first, then give the rest to PROJECT (capped).
+    let project_budget = slack.saturating_sub(NAME_MIN);
+    let project_w = project_budget.clamp(PROJECT_MIN, PROJECT_MAX);
+    // NAME gets all remaining slack after PROJECT; use Min so it renders even
+    // when the window is very tight.
+    (Constraint::Length(project_w), Constraint::Min(NAME_MIN))
+}
+
+/// Columns that are always shown (never dropped regardless of width).
+const ALWAYS_COLUMNS: &[ColumnId] = &[
+    ColumnId::Session,
+    ColumnId::Age,
+    ColumnId::Client,
+    ColumnId::Model,
+    ColumnId::Cpu,
+    ColumnId::Memory,
+    ColumnId::Cost,
+    ColumnId::Project,
+    ColumnId::SessionName,
+];
+
+/// Represents one step in the column drop priority sequence.
+#[derive(Clone, Copy)]
+enum DropStep {
+    /// Drop one or more named columns.
+    Cols(&'static [ColumnId]),
+    /// Drop the ACTIVITY sparkline slot (not a ColumnId; tracked separately).
+    Activity,
+}
+
+/// Drop priority sequence. Earlier entries are dropped first when space is
+/// tight. The ACTIVITY sparkline is dropped as a step independently from CLIENT.
+const DROP_SEQUENCE: &[DropStep] = &[
+    DropStep::Cols(&[ColumnId::DiskReadRate, ColumnId::DiskWriteRate]),
+    DropStep::Cols(&[ColumnId::Context]),
+    DropStep::Activity,
+    DropStep::Cols(&[ColumnId::Tokens]),
+    DropStep::Cols(&[ColumnId::Subscription]),
+    DropStep::Cols(&[ColumnId::Client]),
+];
+
+/// Returns the set of columns to display and whether to show the ACTIVITY
+/// sparkline, given the available terminal width.
+///
+/// PROJECT and NAME are always included (with minimum widths guaranteed by
+/// `project_name_constraints`). Optional columns and the ACTIVITY sparkline
+/// are dropped in priority order when space is insufficient.
+fn visible_columns_for_width(area_width: u16) -> (Vec<ColumnId>, bool) {
+    const ACTIVITY_W: u16 = 8;
+
+    // Full column set in display order.
+    let full: &[ColumnId] = &[
+        ColumnId::Session,
+        ColumnId::Age,
+        ColumnId::Client,
+        ColumnId::Subscription,
+        ColumnId::Model,
+        ColumnId::Cpu,
+        ColumnId::Memory,
+        ColumnId::DiskReadRate,
+        ColumnId::DiskWriteRate,
+        ColumnId::Tokens,
+        ColumnId::Context,
+        ColumnId::Cost,
+        ColumnId::Project,
+        ColumnId::SessionName,
+    ];
+
+    let mut active: std::collections::HashSet<ColumnId> = full.iter().copied().collect();
+    let mut show_activity = true;
+
+    /// Compute the minimum total width needed for the current active set.
+    fn min_total(
+        active: &std::collections::HashSet<ColumnId>,
+        show_activity: bool,
+    ) -> u16 {
+        let has_client = active.contains(&ColumnId::Client);
+        let act_slot = if has_client && show_activity { 1u16 } else { 0 };
+        let n_slots = 1u16 + active.len() as u16 + act_slot; // state-dot + cols + activity
+        let spacing = n_slots.saturating_sub(1) * COLUMN_SPACING;
+        let fixed: u16 = 5 // state-dot
+            + active.iter().map(|c| fixed_col_width(*c)).sum::<u16>()
+            + if has_client && show_activity { ACTIVITY_W } else { 0 }
+            + spacing;
+        fixed + PROJECT_MIN + NAME_MIN
+    }
+
+    for step in DROP_SEQUENCE {
+        if min_total(&active, show_activity) <= area_width {
+            break;
+        }
+        match step {
+            DropStep::Cols(group) => {
+                for c in *group {
+                    active.remove(c);
+                }
+            }
+            DropStep::Activity => {
+                show_activity = false;
+            }
+        }
+    }
+    // If still doesn't fit after all drops, render best-effort.
+
+    let cols = full.iter().copied().filter(|c| active.contains(c)).collect();
+    (cols, show_activity)
 }
 
 fn render_action_cell<'a>(row: &'a SessionRow, state: &SessionState, theme: &Theme) -> Cell<'a> {

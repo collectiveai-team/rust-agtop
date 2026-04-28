@@ -11,7 +11,7 @@ use crate::tui::app::{SortColumn, SortDir};
 use agtop_core::ClientKind;
 
 /// All column identifiers in the session table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColumnId {
     #[serde(alias = "provider")]
@@ -271,6 +271,7 @@ pub fn default_visible_v2() -> Vec<ColumnId> {
         ColumnId::DiskReadRate,
         ColumnId::DiskWriteRate,
         ColumnId::Tokens,
+        ColumnId::Context,
         ColumnId::Cost,
         ColumnId::Project,
         ColumnId::SessionName,
