@@ -166,11 +166,25 @@ fn ms_to_utc(ms: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(ms).single()
 }
 
-fn state_from_opencode_message(v: &serde_json::Value) -> Option<(String, String)> {
+fn parser_state_from_opencode_message(v: &serde_json::Value) -> Option<(ParserState, String)> {
     match v.get("finish").and_then(|x| x.as_str()) {
-        Some("tool-calls") => Some(("waiting".to_string(), "finish=tool-calls".to_string())),
-        Some("stop") => Some(("stopped".to_string(), "finish=stop".to_string())),
+        // tool-calls: agent dispatching tool calls — still mid-turn (Running).
+        Some("tool-calls") => Some((ParserState::Running, "finish=tool-calls".to_string())),
+        // stop: agent finished turn cleanly — awaiting user (Idle).
+        Some("stop") => Some((ParserState::Idle, "finish=stop".to_string())),
         _ => None,
+    }
+}
+
+/// Derive the legacy `state: Option<String>` value from a `ParserState`.
+/// Used to keep `SessionSummary.state` populated during migration (removed in B7).
+fn legacy_state_string(ps: &ParserState) -> Option<String> {
+    match ps {
+        ParserState::Running => Some("running".to_string()),
+        ParserState::Idle => Some("stopped".to_string()),
+        ParserState::Waiting(_) => Some("waiting".to_string()),
+        ParserState::Error(_) => Some("running".to_string()), // treat as running for legacy display
+        ParserState::Unknown => None,
     }
 }
 
@@ -1080,7 +1094,7 @@ fn list_sessions_sqlite(
             let started_at = created_ms.and_then(ms_to_utc);
             let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
             let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
-            let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
+            let (state, state_detail, parser_state) = latest_message_state_sqlite(&conn, &id);
             let subscription =
                 resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
             // OpenCode only persists effort labels on explicit user-message variants.
@@ -1099,7 +1113,7 @@ fn list_sessions_sqlite(
                 model,
                 cwd,
                 state,
-                parser_state: ParserState::default(),
+                parser_state,
                 state_detail,
                 model_effort,
                 model_effort_detail,
@@ -1138,7 +1152,7 @@ fn list_child_sessions_sqlite(
             let started_at = created_ms.and_then(ms_to_utc);
             let last_active = updated_ms.and_then(ms_to_utc).or(started_at);
             let (model, provider_id) = first_message_identity_sqlite(&conn, &id);
-            let (state, state_detail) = latest_message_state_sqlite(&conn, &id);
+            let (state, state_detail, parser_state) = latest_message_state_sqlite(&conn, &id);
             let subscription =
                 resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
             let (model_effort, model_effort_detail) =
@@ -1159,7 +1173,7 @@ fn list_child_sessions_sqlite(
                 model,
                 cwd,
                 state,
-                parser_state: ParserState::default(),
+                parser_state,
                 state_detail,
                 model_effort,
                 model_effort_detail,
@@ -1175,7 +1189,7 @@ fn list_child_sessions_sqlite(
 fn latest_message_state_sqlite(
     conn: &rusqlite::Connection,
     session_id: &str,
-) -> (Option<String>, Option<String>) {
+) -> (Option<String>, Option<String>, ParserState) {
     // Only inspect the most recent *assistant* message for state.
     // User messages (tool results, question responses) do not carry a
     // `finish` field and would otherwise mask the actual assistant state.
@@ -1191,7 +1205,7 @@ fn latest_message_state_sqlite(
                 .map(|rows| rows.filter_map(|r| r.ok()).collect())
         }) {
         Ok(rows) => rows,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, ParserState::default()),
     };
 
     let mut parsed = rows
@@ -1199,17 +1213,28 @@ fn latest_message_state_sqlite(
         .filter_map(|data| serde_json::from_str::<serde_json::Value>(data).ok());
 
     let Some(latest) = parsed.next() else {
-        return (None, None);
+        return (None, None, ParserState::default());
     };
     if is_opencode_pending_placeholder(&latest) {
         return parsed
             .next()
-            .and_then(|value| state_from_opencode_message(&value))
-            .map_or((None, None), |(state, detail)| (Some(state), Some(detail)));
+            .and_then(|value| parser_state_from_opencode_message(&value))
+            .map_or(
+                (None, None, ParserState::default()),
+                |(ps, detail)| {
+                    let s = legacy_state_string(&ps);
+                    (s, Some(detail), ps)
+                },
+            );
     }
 
-    state_from_opencode_message(&latest)
-        .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
+    parser_state_from_opencode_message(&latest).map_or(
+        (None, None, ParserState::default()),
+        |(ps, detail)| {
+            let s = legacy_state_string(&ps);
+            (s, Some(detail), ps)
+        },
+    )
 }
 
 fn first_message_identity_sqlite(
@@ -1552,7 +1577,7 @@ fn summarize_opencode_session_json(
         .join("message")
         .join(&session_id);
     let (model, provider_id) = first_message_identity_json(&msg_dir);
-    let (state, state_detail) = latest_message_state_json(&msg_dir);
+    let (state, state_detail, parser_state) = latest_message_state_json(&msg_dir);
     let subscription =
         resolve_subscription(subscriptions, provider_id.as_deref(), model.as_deref());
     // OpenCode only persists effort labels on explicit user-message variants.
@@ -1571,7 +1596,7 @@ fn summarize_opencode_session_json(
         model,
         cwd,
         state,
-        parser_state: ParserState::default(),
+        parser_state,
         state_detail,
         model_effort,
         model_effort_detail,
@@ -1580,9 +1605,9 @@ fn summarize_opencode_session_json(
     })
 }
 
-fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
+fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>, ParserState) {
     if !dir_exists(msg_dir) {
-        return (None, None);
+        return (None, None, ParserState::default());
     }
 
     // Collect all messages with their modification time, then pick the most
@@ -1591,7 +1616,7 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
     let mut assistants: Vec<(std::time::SystemTime, serde_json::Value)> = Vec::new();
     let entries = match fs::read_dir(msg_dir) {
         Ok(entries) => entries,
-        Err(_) => return (None, None),
+        Err(_) => return (None, None, ParserState::default()),
     };
     for f in entries.flatten() {
         let p = f.path();
@@ -1616,17 +1641,25 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, Option<String>)
 
     assistants.sort_by(|a, b| b.0.cmp(&a.0));
     let Some((_, latest)) = assistants.first() else {
-        return (None, None);
+        return (None, None, ParserState::default());
     };
     if is_opencode_pending_placeholder(latest) {
         return assistants
             .get(1)
-            .and_then(|(_, value)| state_from_opencode_message(value))
-            .map_or((None, None), |(state, detail)| (Some(state), Some(detail)));
+            .and_then(|(_, value)| parser_state_from_opencode_message(value))
+            .map_or((None, None, ParserState::default()), |(ps, detail)| {
+                let s = legacy_state_string(&ps);
+                (s, Some(detail), ps)
+            });
     }
 
-    state_from_opencode_message(latest)
-        .map_or((None, None), |(state, detail)| (Some(state), Some(detail)))
+    parser_state_from_opencode_message(latest).map_or(
+        (None, None, ParserState::default()),
+        |(ps, detail)| {
+            let s = legacy_state_string(&ps);
+            (s, Some(detail), ps)
+        },
+    )
 }
 
 fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String>) {
@@ -2195,11 +2228,20 @@ mod tests {
     }
 
     #[test]
-    fn finish_tool_calls_maps_to_waiting() {
+    fn finish_tool_calls_maps_to_running() {
         let v = serde_json::json!({ "finish": "tool-calls" });
         assert_eq!(
-            state_from_opencode_message(&v),
-            Some(("waiting".to_string(), "finish=tool-calls".to_string()))
+            parser_state_from_opencode_message(&v),
+            Some((ParserState::Running, "finish=tool-calls".to_string()))
+        );
+    }
+
+    #[test]
+    fn finish_stop_maps_to_idle() {
+        let v = serde_json::json!({ "finish": "stop" });
+        assert_eq!(
+            parser_state_from_opencode_message(&v),
+            Some((ParserState::Idle, "finish=stop".to_string()))
         );
     }
 

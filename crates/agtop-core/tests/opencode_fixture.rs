@@ -357,7 +357,7 @@ fn opencode_sqlite_children_follow_parent_id() {
     assert_eq!(children[0].cwd.as_deref(), Some("/tmp/opencode-child-b"));
     assert_eq!(children[0].model.as_deref(), Some(MODEL_ID));
     assert_eq!(children[0].state.as_deref(), Some("stopped"));
-    assert_eq!(children[1].state.as_deref(), Some("waiting"));
+    assert_eq!(children[1].state.as_deref(), Some("running"));
 }
 
 // ---------------------------------------------------------------------------
