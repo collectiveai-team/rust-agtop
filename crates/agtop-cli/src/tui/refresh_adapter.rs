@@ -713,4 +713,54 @@ mod tests {
             Some(SessionState::Closed)
         ));
     }
+
+    #[test]
+    fn dashboard_syncs_info_selection_after_refresh_changes_state() {
+        use crate::tui::screens::dashboard::DashboardState;
+        use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
+
+        fn sync_analysis(state: SessionState) -> SessionAnalysis {
+            let summary = SessionSummary::new(
+                ClientKind::OpenCode,
+                None,
+                "ses_sync".into(),
+                None,
+                Some(chrono::Utc::now()),
+                None,
+                None,
+                std::path::PathBuf::new(),
+                None,
+                None,
+                None,
+            );
+            let mut a = SessionAnalysis::new(summary, TokenTotals::default(), CostBreakdown::default(), None, 0, None, None, None, None, None);
+            match state {
+                SessionState::Running => {
+                    a.liveness = Some(Liveness::Live);
+                    a.summary.last_active = Some(chrono::Utc::now());
+                }
+                SessionState::Idle => {
+                    a.liveness = Some(Liveness::Live);
+                    a.summary.parser_state = agtop_core::session::ParserState::Idle;
+                    a.summary.last_active = Some(chrono::Utc::now());
+                }
+                other => {
+                    a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::hours(2));
+                    a.session_state = Some(other);
+                }
+            }
+            a
+        }
+
+        let mut dashboard = DashboardState::default();
+        dashboard.sessions.state.select(Some(0));
+        let mut aggregation = AggregationState::default();
+        apply_analyses(&[sync_analysis(SessionState::Running)], &mut dashboard.header, &mut dashboard.sessions, &mut dashboard.quota, &mut aggregation, 2);
+        dashboard.sync_info_selection();
+        assert!(matches!(dashboard.info.selected_row.as_ref().unwrap().analysis.session_state, Some(SessionState::Running)));
+
+        apply_analyses(&[sync_analysis(SessionState::Idle)], &mut dashboard.header, &mut dashboard.sessions, &mut dashboard.quota, &mut aggregation, 2);
+        dashboard.sync_info_selection();
+        assert!(matches!(dashboard.info.selected_row.as_ref().unwrap().analysis.session_state, Some(SessionState::Idle)));
+    }
 }

@@ -46,17 +46,23 @@ impl InfoTab {
 pub struct InfoDrawer {
     pub vis: DrawerVis,
     pub tab: InfoTab,
-    /// Selected session row from the table; drives all tab bodies.
     pub selected_row: Option<SessionRow>,
-    /// Last area occupied by the drawer (set during render). Used to block
-    /// click-through to the sessions table behind the drawer.
     pub last_area: Option<Rect>,
+    pub summary_message_scroll_from_bottom: usize,
+    pub details_scroll_offset: usize,
+    pub last_selected_session_id: Option<String>,
 }
 
 impl InfoDrawer {
     /// Sync the selected row from the sessions table. Call after every
     /// selection change.
     pub fn set_row(&mut self, row: Option<SessionRow>) {
+        let next_id = row.as_ref().map(|r| r.analysis.summary.session_id.clone());
+        if next_id != self.last_selected_session_id {
+            self.summary_message_scroll_from_bottom = 0;
+            self.details_scroll_offset = 0;
+            self.last_selected_session_id = next_id;
+        }
         self.selected_row = row;
     }
 
@@ -173,7 +179,7 @@ impl InfoDrawer {
                     client_kind: row.client_kind,
                     state: &state,
                     recent_turns: row.analysis.recent_messages.iter().map(info_summary::MessageTurn::from).collect(),
-                    message_scroll_from_bottom: 0,
+                    message_scroll_from_bottom: self.summary_message_scroll_from_bottom,
                     activity_samples: row.activity_samples.clone(),
                     parent_session_id: row.parent_session_id.as_deref(),
                     subagent_count: row.analysis.children.len(),
@@ -186,7 +192,7 @@ impl InfoDrawer {
                     analysis: &row.analysis,
                     parent_session_id: row.parent_session_id.as_deref(),
                     subagent_count: row.analysis.children.len(),
-                    scroll_offset: 0,
+                    scroll_offset: self.details_scroll_offset,
                 };
                 info_details::render(frame, inner, &model, theme);
             }
@@ -232,6 +238,36 @@ impl InfoDrawer {
                 }
             }
             return None;
+        }
+
+        if self.vis == DrawerVis::Open {
+            if let AppEvent::Mouse(MouseEvent { kind, row, column, .. }) = event {
+                let inside = self.last_area.map_or(false, |area| {
+                    *column >= area.x
+                        && *column < area.x + area.width
+                        && *row >= area.y
+                        && *row < area.y + area.height
+                });
+                if inside {
+                    match kind {
+                        MouseEventKind::ScrollUp => {
+                            match self.tab {
+                                InfoTab::Summary => self.summary_message_scroll_from_bottom = self.summary_message_scroll_from_bottom.saturating_add(1),
+                                InfoTab::Details => self.details_scroll_offset = self.details_scroll_offset.saturating_sub(1),
+                            }
+                            return Some(Msg::Noop);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            match self.tab {
+                                InfoTab::Summary => self.summary_message_scroll_from_bottom = self.summary_message_scroll_from_bottom.saturating_sub(1),
+                                InfoTab::Details => self.details_scroll_offset = self.details_scroll_offset.saturating_add(1),
+                            }
+                            return Some(Msg::Noop);
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
         let AppEvent::Key(KeyEvent {
