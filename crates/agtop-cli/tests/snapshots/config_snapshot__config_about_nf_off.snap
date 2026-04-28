@@ -8,7 +8,7 @@ expression: buffer_to_text(&buf)
   ⟳  Refresh                  │
   Clients                     │  Version       0.4.2
   Keybinds                    │  Git SHA       dev
-  Data sources                │  Config file   /home/rbarriga/.config/agtop/config.toml
+  Data sources                │  Config file   /home/user/.config/agtop/config.toml
   ‹ About ›                   │  Repository    https://github.com/collectiveai-team/rust-agtop
                               │
                               │

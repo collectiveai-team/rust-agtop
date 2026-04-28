@@ -9,10 +9,17 @@ use agtop_cli::tui::theme_v2::vscode_dark_plus;
 use snapshot_helpers::{buffer_to_text, render_to_buffer};
 
 fn snapshot_section(section: ConfigSection, nerd_font: bool, name: &str) {
+    use agtop_cli::tui::screens::config::sections::about::AboutModel;
     let theme = vscode_dark_plus::theme();
-    let state = ConfigState {
+    let mut state = ConfigState {
         current_section: section,
         nerd_font,
+        ..Default::default()
+    };
+    // Pin the config path to a fixed value so this snapshot is not
+    // machine-specific (dirs::config_dir() returns a user-dependent path).
+    state.detail.about = AboutModel {
+        config_path: "/home/user/.config/agtop/config.toml".into(),
         ..Default::default()
     };
     let buf = render_to_buffer(140, 30, |f| {
