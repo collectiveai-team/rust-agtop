@@ -81,9 +81,19 @@ pub fn render(
 
     // ── Compute absolute x-ranges for sortable header cells ──────────────
     //
-    // We mirror ratatui's Table::get_columns_widths exactly:
-    //   1. Reserve `selection_width` columns for the highlight symbol.
-    //   2. Split the remaining inner width with the same Constraints + spacing=1.
+    // Mirror ratatui's Table::get_columns_widths + render_header exactly:
+    //
+    //   ratatui flow:
+    //     table_area  = block.inner_if_some(outer_area)   // strips borders
+    //     col_widths  = get_columns_widths(table_area.width, selection_width, ...)
+    //                   → splits Rect::new(0, 0, table_area.width, 1) into
+    //                     [selection_area, columns_area]; then columns_area
+    //                     is split by widths/spacing.
+    //     render_header(header_area, ...) renders each cell at
+    //                     header_area.x + col_x  (where col_x from above)
+    //     header_area.x == table_area.x  (same horizontal origin, no extra offset)
+    //
+    //   Therefore absolute screen x = table_area.x + col_x_from_get_columns_widths.
     //
     // This is the only way to get correct offsets when the terminal is
     // narrower than the sum of all Length constraints (ratatui compresses
@@ -95,13 +105,18 @@ pub fn render(
     // width only when a row is selected.
     let selection_width: u16 = if app.selected_idx().is_some() { 2 } else { 0 };
 
-    // Inner area: strip the block's 1-column left and right borders.
+    // table_area (inner) dimensions, matching ratatui's block.inner_if_some(area).
+    let table_inner_x = area.x + 1;
     let inner_width = area.width.saturating_sub(2);
-    let inner_x = area.x + 1;
 
-    // Columns area starts after the selection column.
-    let columns_x = inner_x + selection_width;
-    let columns_width = inner_width.saturating_sub(selection_width);
+    // Mirror Table::get_columns_widths: split a 0-based rect of inner_width
+    // into [selection_area, columns_area], then split columns_area by our widths.
+    let columns_area = {
+        let [_, cols] =
+            Layout::horizontal([Constraint::Length(selection_width), Constraint::Fill(0)])
+                .areas::<2>(Rect::new(0, 0, inner_width, 1));
+        cols
+    };
 
     // Split exactly as Table does: Layout::horizontal(widths).spacing(1).
     // clone: widths ownership is needed by Table::new below.
@@ -109,12 +124,15 @@ pub fn render(
         .direction(Direction::Horizontal)
         .constraints(widths.clone())
         .spacing(1)
-        .split(Rect::new(columns_x, area.y, columns_width, 1));
+        .split(columns_area);
 
     for (i, &col_id) in visible.iter().enumerate() {
         if let Some(sc) = col_id.sort_col() {
             let r = col_rects[i];
-            header_cols.push((r.x, r.x + r.width, sc));
+            // col_rect.x is relative to the 0-based inner rect; add table_inner_x
+            // to get the absolute terminal column, matching render_header's offset.
+            let abs_start = table_inner_x + r.x;
+            header_cols.push((abs_start, abs_start + r.width, sc));
         }
     }
     // ─────────────────────────────────────────────────────────────────────

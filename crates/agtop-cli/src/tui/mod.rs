@@ -1393,32 +1393,26 @@ mod tests {
     #[test]
     fn clicking_sortable_header_sorts_by_correct_column() {
         use crate::tui::app::SortColumn;
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         // Test at multiple widths to catch off-by-one in right-anchored columns.
         for &width in &[140u16, 160, 180, 200] {
             let backend = TestBackend::new(width, 30);
             let mut terminal = Terminal::new(backend).unwrap();
-            let app = fixture_app();
+            let mut app = fixture_app();
             let mut state = ratatui::widgets::TableState::default();
             let mut layout = UiLayout::default();
             terminal
                 .draw(|f| render(f, &app, &mut state, &mut layout))
                 .expect("draw");
 
-        let buffer = terminal.backend().buffer().clone();
-        let header_y = layout.table_area.y + 1;
-        let row_width = buffer.area.width;
+            let buffer = terminal.backend().buffer().clone();
+            let header_y = layout.table_area.y + 1;
+            let row_width = buffer.area.width;
 
-        eprintln!("DBG width={width} table_area={:?} header_y={header_y}", layout.table_area);
-        eprintln!("DBG header_cols={:?}", layout.header_cols);
-        for x in 0..30u16.min(row_width) {
-            let sym = buffer.cell((x, header_y)).unwrap().symbol();
-            eprintln!("DBG buf[{x}]={sym:?}");
-        }
-
-        // Map of rendered label text → expected SortColumn
-        let cases: &[(&[u8], SortColumn)] = &[
+            // Map of rendered label text → expected SortColumn.
+            // Each label is the rendered column header (may have sort arrow appended
+            // when it's the active sort, so we use a prefix that won't collide).
+            let cases: &[(&[u8], SortColumn)] = &[
                 (b"CLIENT", SortColumn::Client),
                 (b"STARTED", SortColumn::Started),
                 (b"AGE", SortColumn::LastActive),
@@ -1431,9 +1425,7 @@ mod tests {
 
             for &(label, expected_col) in cases {
                 // Find rendered x of this label in the header row of the
-                // already-rendered buffer. The buffer, layout, and app were
-                // all produced together so header_cols is consistent with
-                // what the buffer actually shows.
+                // already-rendered buffer.
                 let mut found_x: Option<u16> = None;
                 'search: for x in 0..=(row_width.saturating_sub(label.len() as u16)) {
                     for (i, &b) in label.iter().enumerate() {
@@ -1455,20 +1447,26 @@ mod tests {
                     None => continue, // column hidden at this width
                 };
 
-                // Verify via header_cols directly: find which sort column
-                // the computed layout maps label_x to.  This avoids the
-                // need to re-render a second App instance whose selection
-                // state might differ from the one that produced the buffer.
-                let mapped_col = layout
-                    .header_cols
-                    .iter()
-                    .find(|&&(start, end, _)| label_x >= start && label_x < end)
-                    .map(|&(_, _, sc)| sc);
+                // Click at `label_x` on the SAME `app` + `layout` that produced
+                // the buffer. This guarantees header_cols offsets are consistent
+                // with the visual positions (no separate render with potentially
+                // different state or rounding).
+                let event = crossterm::event::MouseEvent {
+                    kind: crossterm::event::MouseEventKind::Down(
+                        crossterm::event::MouseButton::Left,
+                    ),
+                    column: label_x,
+                    row: header_y,
+                    modifiers: crossterm::event::KeyModifiers::NONE,
+                };
+                apply_mouse(&mut app, event, &layout);
                 assert_eq!(
-                    mapped_col,
-                    Some(expected_col),
-                    "width={width}: '{}' at x={label_x} maps to {mapped_col:?} in header_cols, expected {expected_col:?}",
+                    app.sort_col(),
+                    expected_col,
+                    "width={width}: clicking '{}' header at x={label_x} should sort by {expected_col:?}, got {:?}; header_cols={:?}",
                     std::str::from_utf8(label).unwrap(),
+                    app.sort_col(),
+                    layout.header_cols,
                 );
             }
         }
