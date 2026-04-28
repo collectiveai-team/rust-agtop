@@ -51,6 +51,36 @@ pub enum ErrorReason {
     ParserDetected(String),
 }
 
+/// Coarse state inferred by a per-client parser from session log content.
+///
+/// This is the *parser's* opinion of what the agent is doing based on the
+/// session file alone (e.g. "the last assistant turn ended"); it is fed
+/// into `state_resolution::resolve_state` along with OS liveness data to
+/// produce the canonical [`SessionState`].
+///
+/// Parsers MUST return a typed `ParserState` value. Callers MUST NOT
+/// inspect parser state via string matching — use this enum.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
+pub enum ParserState {
+    /// Last assistant turn ended cleanly; the agent is awaiting user input.
+    /// Maps to `SessionState::Idle` when the process is live.
+    Idle,
+    /// Agent is mid-turn — actively generating output or running a tool.
+    /// Maps to `SessionState::Running` when the process is live.
+    Running,
+    /// Agent is paused waiting for a specific kind of user response.
+    /// Maps to `SessionState::Waiting(_)` when the process is live.
+    Waiting(WaitReason),
+    /// Parser detected an explicit error in the session log
+    /// (e.g. tool execution failure, crash trace).
+    Error(ErrorReason),
+    /// Parser had no opinion. Resolution falls back to recency + liveness.
+    #[default]
+    Unknown,
+}
+
 impl SessionState {
     /// Coarse string label (matches the outer tag in serde).
     #[must_use]
@@ -520,6 +550,28 @@ mod tests {
             serde_json::from_value(raw).expect("deserialize legacy summary");
         assert_eq!(summary.client, ClientKind::Claude);
         assert_eq!(summary.subscription.as_deref(), Some("Claude Max 5x"));
+    }
+
+    #[test]
+    fn parser_state_default_is_unknown() {
+        assert_eq!(ParserState::default(), ParserState::Unknown);
+    }
+
+    #[test]
+    fn parser_state_serde_round_trip() {
+        let cases = [
+            ParserState::Idle,
+            ParserState::Running,
+            ParserState::Waiting(WaitReason::Input),
+            ParserState::Waiting(WaitReason::Permission),
+            ParserState::Error(ErrorReason::ParserDetected("boom".into())),
+            ParserState::Unknown,
+        ];
+        for c in cases {
+            let s = serde_json::to_string(&c).unwrap();
+            let back: ParserState = serde_json::from_str(&s).unwrap();
+            assert_eq!(c, back);
+        }
     }
 
     #[test]
