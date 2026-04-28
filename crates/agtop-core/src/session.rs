@@ -108,6 +108,14 @@ impl SessionState {
         matches!(self, Self::Running | Self::Idle | Self::Warning(_))
     }
 
+    /// Returns `true` for any state other than `Closed`.
+    /// Use this when you want "is the process potentially still active?"
+    /// as opposed to `is_active()` which excludes Idle and Error.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        !matches!(self, SessionState::Closed)
+    }
+
     /// True if the session is blocked on user response.
     #[must_use]
     pub const fn needs_user(&self) -> bool {
@@ -660,6 +668,16 @@ mod tests {
             assert!(SessionState::Idle.is_active());
             assert!(!SessionState::Waiting(WaitReason::Input).is_active());
             assert!(!SessionState::Closed.is_active());
+        }
+
+        #[test]
+        fn is_live_returns_false_only_for_closed() {
+            use chrono::Utc;
+            assert!(!SessionState::Closed.is_live());
+            assert!(SessionState::Running.is_live());
+            assert!(SessionState::Idle.is_live());
+            assert!(SessionState::Waiting(WaitReason::Input).is_live());
+            assert!(SessionState::Warning(WarningReason::Stalled { since: Utc::now() }).is_live());
         }
 
         #[test]
