@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{info_costs, info_general, info_process, info_summary};
+use super::{info_details, info_summary};
 use crate::tui::input::AppEvent;
 use crate::tui::msg::Msg;
 use crate::tui::screens::dashboard::sessions::SessionRow;
@@ -28,20 +28,16 @@ pub enum DrawerVis {
 pub enum InfoTab {
     #[default]
     Summary,
-    General,
-    Costs,
-    Process,
+    Details,
 }
 
 impl InfoTab {
-    pub const ALL: [InfoTab; 4] = [Self::Summary, Self::General, Self::Costs, Self::Process];
+    pub const ALL: [InfoTab; 2] = [Self::Summary, Self::Details];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Summary => "Summary",
-            Self::General => "General",
-            Self::Costs => "Costs",
-            Self::Process => "Process",
+            Self::Details => "Details",
         }
     }
 }
@@ -93,8 +89,8 @@ impl InfoDrawer {
         (title, id_cols)
     }
 
-    const TABS_FULL: &'static str = " [1] Summary  [2] General  [3] Costs  [4] Process ";
-    const TABS_SHORT: &'static str = " [1]Sum [2]Gen [3]Cost [4]Proc ";
+    const TABS_FULL: &'static str = " [1] Summary  [2] Details ";
+    const TABS_SHORT: &'static str = " [1]Sum [2]Details ";
 
     /// Compute clickable column ranges for each tab marker, expressed in
     /// absolute terminal coordinates. Returns a Vec of (start_col, end_col, tab)
@@ -121,9 +117,7 @@ impl InfoDrawer {
         let mut markers: Vec<(usize, InfoTab)> = Vec::with_capacity(4);
         for (tab, n) in [
             (InfoTab::Summary, '1'),
-            (InfoTab::General, '2'),
-            (InfoTab::Costs, '3'),
-            (InfoTab::Process, '4'),
+            (InfoTab::Details, '2'),
         ] {
             for i in 0..chars.len().saturating_sub(2) {
                 if chars[i] == '[' && chars[i + 1] == n && chars[i + 2] == ']' {
@@ -183,14 +177,14 @@ impl InfoDrawer {
                 };
                 info_summary::render(frame, inner, &model, theme);
             }
-            (InfoTab::General, Some(row)) => {
-                info_general::render(frame, inner, &row.analysis, theme);
-            }
-            (InfoTab::Costs, Some(row)) => {
-                info_costs::render(frame, inner, &row.analysis, theme);
-            }
-            (InfoTab::Process, Some(row)) => {
-                info_process::render(frame, inner, &row.analysis, &[], theme);
+            (InfoTab::Details, Some(row)) => {
+                let model = info_details::DetailsModel {
+                    analysis: &row.analysis,
+                    parent_session_id: row.parent_session_id.as_deref(),
+                    subagent_count: row.analysis.children.len(),
+                    scroll_offset: 0,
+                };
+                info_details::render(frame, inner, &model, theme);
             }
             (_, None) => {
                 frame.render_widget(
@@ -264,23 +258,16 @@ impl InfoDrawer {
                 Some(Msg::Noop)
             }
             KeyCode::Char('2') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::General;
+                self.tab = InfoTab::Details;
                 Some(Msg::Noop)
             }
-            KeyCode::Char('3') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::Costs;
-                Some(Msg::Noop)
-            }
-            KeyCode::Char('4') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::Process;
+            KeyCode::Char('3') | KeyCode::Char('4') if self.vis == DrawerVis::Open => {
                 Some(Msg::Noop)
             }
             KeyCode::Tab if self.vis == DrawerVis::Open => {
                 self.tab = match self.tab {
-                    InfoTab::Summary => InfoTab::General,
-                    InfoTab::General => InfoTab::Costs,
-                    InfoTab::Costs => InfoTab::Process,
-                    InfoTab::Process => InfoTab::Summary,
+                    InfoTab::Summary => InfoTab::Details,
+                    InfoTab::Details => InfoTab::Summary,
                 };
                 Some(Msg::Noop)
             }
@@ -325,11 +312,7 @@ mod tests {
         let mut d = InfoDrawer::default();
         d.handle_event(&k('i'));
         d.handle_event(&k('2'));
-        assert_eq!(d.tab, InfoTab::General);
-        d.handle_event(&k('3'));
-        assert_eq!(d.tab, InfoTab::Costs);
-        d.handle_event(&k('4'));
-        assert_eq!(d.tab, InfoTab::Process);
+        assert_eq!(d.tab, InfoTab::Details);
     }
 
     #[test]
@@ -384,8 +367,8 @@ mod tests {
 
         assert_eq!(
             d.tab,
-            InfoTab::General,
-            "clicking [2] in the drawer title must switch tab to General"
+            InfoTab::Details,
+            "clicking [2] in the drawer title must switch tab to Details"
         );
     }
 
