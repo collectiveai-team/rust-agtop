@@ -59,6 +59,12 @@ struct Cli {
     #[arg(short = 'd', long, default_value_t = 5u64, value_name = "SECS")]
     delay: u64,
 
+    /// Skip reading the persistent session cache on startup.
+    /// Cache writes still occur so the next launch benefits.
+    /// Also activated by setting `AGTOP_NO_CACHE=1`.
+    #[arg(long, default_value_t = false)]
+    no_cache: bool,
+
     /// Start directly in the btop-style dashboard view.
     #[arg(short = 'D', long)]
     dashboard: bool,
@@ -193,12 +199,14 @@ fn main() -> Result<()> {
         // Default: launch the TUI. Any rendering error is bubbled up
         // after the terminal has been restored (tui::run guarantees
         // teardown on both success and failure paths).
+        let no_cache = cli.no_cache || std::env::var("AGTOP_NO_CACHE").as_deref() == Ok("1");
         tui::run_v2(
             clients,
             enabled_initial,
             plan,
             std::time::Duration::from_secs(cli.delay.max(1)),
             cli.dashboard,
+            no_cache,
         )?;
     }
 

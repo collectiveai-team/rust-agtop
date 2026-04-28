@@ -170,6 +170,79 @@ pub fn apply_analyses(
     aggregation.recompute();
 }
 
+/// Insert or update a single session row from the streaming Phase 2 pipeline.
+/// Does not rebuild the whole list — O(n) scan for an existing entry, then insert/replace.
+///
+/// Mirrors the depth=0 row-construction logic in `apply_analyses` but skips
+/// the children expansion: streamed analyses arrive with their own children
+/// already attached. Children are only rendered when the parent is expanded
+/// (state held in `sessions.collapsed`); on first stream-in we treat the
+/// parent like any newly-observed parent and let the auto-collapse policy run.
+pub fn apply_session_added(
+    analysis: SessionAnalysis,
+    header: &mut HeaderModel,
+    sessions: &mut SessionsTable,
+    _quota: &mut QuotaPanel,
+    aggregation: &mut AggregationState,
+) {
+    let normalized = normalize_analysis(&analysis);
+    let session_id = normalized.summary.session_id.clone();
+    let kind = normalized.summary.client;
+
+    // Mirror auto-collapse policy: a brand-new parent starts collapsed.
+    if !normalized.children.is_empty() && !sessions.known_parents.contains(&session_id) {
+        sessions.collapsed.insert(session_id.clone());
+    }
+    if !normalized.children.is_empty() {
+        sessions.known_parents.insert(session_id.clone());
+    }
+
+    let new_row = SessionRow {
+        analysis: normalized,
+        client_kind: kind,
+        client_label: kind.as_str().to_string(),
+        activity_samples: vec![],
+        depth: 0,
+        parent_session_id: None,
+        is_last_child: false,
+    };
+
+    if let Some(pos) = sessions
+        .rows
+        .iter()
+        .position(|r| r.depth == 0 && r.analysis.summary.session_id == session_id)
+    {
+        sessions.rows[pos] = new_row;
+    } else {
+        sessions.rows.push(new_row);
+        sessions.apply_sort();
+    }
+
+    // Recompute header counts from current depth-0 rows.
+    let depth0_iter = || sessions.rows.iter().filter(|r| r.depth == 0);
+    header.sessions_active = depth0_iter()
+        .filter(|r| {
+            r.analysis
+                .session_state
+                .as_ref()
+                .map(|s| s.is_active())
+                .unwrap_or(false)
+        })
+        .count();
+    header.sessions_idle = depth0_iter()
+        .filter(|r| matches!(r.analysis.session_state, Some(SessionState::Idle)))
+        .count();
+
+    // Recompute today count.
+    let depth0_analyses: Vec<SessionAnalysis> =
+        depth0_iter().map(|r| r.analysis.clone()).collect();
+    header.sessions_today = count_today(&depth0_analyses);
+
+    // Recompute aggregation from current depth-0 rows.
+    aggregation.sessions = depth0_analyses;
+    aggregation.recompute();
+}
+
 /// Count sessions whose `started_at` is on or after local midnight today.
 fn count_today(analyses: &[SessionAnalysis]) -> usize {
     use chrono::TimeZone;
@@ -953,5 +1026,89 @@ mod tests {
                 .session_state,
             Some(SessionState::Idle)
         ));
+    }
+
+    #[test]
+    fn apply_session_added_inserts_new_row() {
+        use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
+        use chrono::Utc;
+        let summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "ses_new".to_string(),
+            Some(Utc::now()),
+            Some(Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/fake.jsonl"),
+            None,
+            None,
+            None,
+        );
+        let a = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+
+        apply_session_added(a, &mut header, &mut sessions, &mut quota, &mut aggregation);
+
+        assert_eq!(sessions.rows.len(), 1);
+        assert_eq!(sessions.rows[0].analysis.summary.session_id, "ses_new");
+    }
+
+    #[test]
+    fn apply_session_added_replaces_existing_row() {
+        use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
+        use chrono::Utc;
+        fn mk(id: &str) -> SessionAnalysis {
+            let summary = SessionSummary::new(
+                ClientKind::Claude,
+                None,
+                id.to_string(),
+                Some(Utc::now()),
+                Some(Utc::now()),
+                None,
+                None,
+                std::path::PathBuf::from("/tmp/fake.jsonl"),
+                None,
+                None,
+                None,
+            );
+            SessionAnalysis::new(
+                summary,
+                TokenTotals::default(),
+                CostBreakdown::default(),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+
+        apply_session_added(mk("ses_dup"), &mut header, &mut sessions, &mut quota, &mut aggregation);
+        apply_session_added(mk("ses_dup"), &mut header, &mut sessions, &mut quota, &mut aggregation);
+
+        assert_eq!(sessions.rows.len(), 1, "duplicate session_id should replace, not add");
     }
 }

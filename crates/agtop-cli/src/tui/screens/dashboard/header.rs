@@ -27,6 +27,9 @@ pub struct HeaderModel {
     pub sessions_today: usize,
     pub refresh_secs: u64,
     pub clock: String, // pre-formatted "HH:MM:SS"
+    /// `Some((done, total))` while Phase 2 streaming is in progress; `None` when idle.
+    /// Wired by Task 5 from `RefreshMsg::AnalysisProgress`.
+    pub analysis_progress: Option<(usize, usize)>,
 }
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, model: &HeaderModel, theme: &Theme) {
@@ -45,26 +48,51 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, model: &HeaderModel, theme: &Th
 }
 
 fn render_row1(frame: &mut Frame<'_>, area: Rect, m: &HeaderModel, theme: &Theme) {
-    // Layout: "Procs N   CPU <sparkline> NN%       <pad>   ⟳ Ns · HH:MM:SS"
+    use crate::tui::animation::{dim_rgb, PulseClock};
+    use std::sync::{Mutex, OnceLock};
+
     let cpu_now = m.cpu_history.last().copied().unwrap_or(0.0);
     let spark = sparkline_braille::render_braille(&m.cpu_history, 20, m.cpu_max.max(1.0));
     let left = format!(" Procs {procs}   CPU  ", procs = m.procs);
     let cpu_pct = format!("  {pct:>3.0}%", pct = cpu_now);
     let right = format!("⟳ {s}s · {clk} ", s = m.refresh_secs, clk = m.clock);
 
+    // Optional pulsing "analyzing N/M" segment between CPU% and the right-side clock.
+    let progress_text: Option<String> = m
+        .analysis_progress
+        .map(|(done, total)| format!("  analyzing {done}/{total}"));
+    let progress_style: Option<Style> = progress_text.as_ref().map(|_| {
+        // Process-wide pulse clock so brightness advances continuously across
+        // frames. `OnceLock<Mutex<...>>` is the lightest pattern that
+        // initialises lazily and is `Sync`.
+        static PULSE: OnceLock<Mutex<PulseClock>> = OnceLock::new();
+        let pulse = PULSE.get_or_init(|| Mutex::new(PulseClock::default()));
+        let brightness = pulse.lock().map(|p| p.brightness()).unwrap_or(1.0);
+        // Muted gray base so the pulse is subtle.
+        let (r, g, b) = dim_rgb(160, 160, 160, brightness);
+        Style::default().fg(ratatui::style::Color::Rgb(r, g, b))
+    });
+
+    let progress_len = progress_text.as_ref().map(|s| s.chars().count()).unwrap_or(0);
     let total_chars = left.chars().count()
         + spark.chars().count()
         + cpu_pct.chars().count()
+        + progress_len
         + right.chars().count();
     let pad = (area.width as usize).saturating_sub(total_chars);
 
-    let line = Line::from(vec![
+    let mut spans: Vec<Span> = vec![
         Span::styled(left, Style::default().fg(theme.fg_default)),
         Span::styled(spark, Style::default().fg(theme.accent_primary)),
         Span::styled(cpu_pct, Style::default().fg(theme.fg_default)),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(right, Style::default().fg(theme.fg_muted)),
-    ]);
+    ];
+    if let (Some(text), Some(style)) = (progress_text, progress_style) {
+        spans.push(Span::styled(text, style));
+    }
+    spans.push(Span::raw(" ".repeat(pad)));
+    spans.push(Span::styled(right, Style::default().fg(theme.fg_muted)));
+
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);
 }
 
@@ -154,8 +182,38 @@ mod tests {
             sessions_today: 47,
             refresh_secs: 2,
             clock: "14:25:49".to_string(),
+            analysis_progress: None,
         };
         term.draw(|f| render(f, Rect::new(0, 0, 140, 3), &model, &theme))
             .unwrap();
+    }
+
+    #[test]
+    fn renders_with_analysis_progress_present() {
+        let backend = TestBackend::new(140, 3);
+        let mut term = Terminal::new(backend).unwrap();
+        let theme = vscode_dark_plus::theme();
+        let model = HeaderModel {
+            procs: 4,
+            cpu_history: vec![10.0, 20.0],
+            cpu_max: 100.0,
+            mem_used_bytes: 1024,
+            mem_total_bytes: 8192,
+            sessions_active: 1,
+            sessions_idle: 0,
+            sessions_today: 12,
+            refresh_secs: 2,
+            clock: "12:00:00".to_string(),
+            analysis_progress: Some((7, 42)),
+        };
+        // Render must not panic, and the buffer must contain the progress text.
+        term.draw(|f| render(f, Rect::new(0, 0, 140, 3), &model, &theme))
+            .unwrap();
+        let buffer = term.backend().buffer();
+        let dump: String = buffer.content().iter().map(|c| c.symbol().to_string()).collect();
+        assert!(
+            dump.contains("analyzing 7/42"),
+            "buffer should contain 'analyzing 7/42', got:\n{dump}"
+        );
     }
 }

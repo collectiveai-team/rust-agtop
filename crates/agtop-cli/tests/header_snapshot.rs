@@ -19,6 +19,7 @@ fn realistic_model() -> HeaderModel {
         sessions_today: 47,
         refresh_secs: 2,
         clock: "14:25:49".to_string(),
+        analysis_progress: None,
     }
 }
 

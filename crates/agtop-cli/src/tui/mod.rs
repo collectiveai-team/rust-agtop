@@ -17,6 +17,7 @@ pub mod msg;
 mod refresh;
 pub mod refresh_adapter;
 pub mod screens;
+pub mod session_cache;
 pub mod theme;
 pub mod theme_v2;
 pub mod widgets;
@@ -149,6 +150,7 @@ pub fn run(
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
+        false,
     )
     .context("spawn background refresh worker")?;
     let mut app = App::new();
@@ -236,6 +238,13 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
                 RefreshMsg::Error { message, .. } => app.set_refresh_error(message),
                 RefreshMsg::QuotaSnapshot { results, .. } => app.apply_quota_results(results),
                 RefreshMsg::QuotaError { message, .. } => app.set_quota_error(message),
+                RefreshMsg::SessionAdded(_)
+                | RefreshMsg::AnalysisProgress { .. }
+                | RefreshMsg::AnalysisComplete => {
+                    // Streaming variants are delivered via `stream_rx` (Task 5).
+                    // The watch channel never carries them; this arm only exists
+                    // to keep the match exhaustive while the build is in flight.
+                }
             }
         }
 
@@ -801,6 +810,7 @@ pub fn run_v2(
     plan: Plan,
     refresh_interval: Duration,
     _start_dashboard: bool,
+    no_cache: bool,
 ) -> Result<()> {
     let mut terminal = setup_terminal().context("set up terminal for TUI (v2)")?;
     install_panic_hook();
@@ -811,6 +821,7 @@ pub fn run_v2(
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
+        no_cache,
     )
     .context("spawn background refresh worker")?;
 
@@ -844,6 +855,42 @@ pub fn run_v2(
                     refresh::RefreshMsg::QuotaError { .. } | refresh::RefreshMsg::Error { .. } => {
                         // Silently ignore; panels retain their last good data.
                     }
+                    refresh::RefreshMsg::SessionAdded(_)
+                    | refresh::RefreshMsg::AnalysisProgress { .. }
+                    | refresh::RefreshMsg::AnalysisComplete => {
+                        // Streaming variants are delivered via `stream_rx` below;
+                        // the watch channel only ever carries the legacy variants.
+                    }
+                }
+            }
+
+            // Drain streaming messages from the Phase 2 analysis pipeline.
+            while let Some(msg) = handle.try_recv_stream() {
+                match msg {
+                    refresh::RefreshMsg::SessionAdded(analysis) => {
+                        refresh_adapter::apply_session_added(
+                            *analysis,
+                            &mut app.dashboard.header,
+                            &mut app.dashboard.sessions,
+                            &mut app.dashboard.quota,
+                            &mut app.aggregation,
+                        );
+                        app.dashboard.sync_info_selection();
+                    }
+                    refresh::RefreshMsg::AnalysisProgress { done, total } => {
+                        app.dashboard.header.analysis_progress = Some((done, total));
+                    }
+                    refresh::RefreshMsg::AnalysisComplete => {
+                        app.dashboard.header.analysis_progress = None;
+                    }
+                    // The legacy variants are delivered via the watch channel above
+                    // and never appear on `stream_rx`. Including them here keeps the
+                    // match exhaustive without a wildcard so any future variant is
+                    // surfaced as a compile error.
+                    refresh::RefreshMsg::Snapshot { .. }
+                    | refresh::RefreshMsg::Error { .. }
+                    | refresh::RefreshMsg::QuotaSnapshot { .. }
+                    | refresh::RefreshMsg::QuotaError { .. } => {}
                 }
             }
 
