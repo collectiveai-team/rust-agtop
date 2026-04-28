@@ -658,7 +658,9 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                     if let Some((next_parser_state, detail)) = parser_state_from_response_item(p) {
                         parser_state = next_parser_state.clone();
                         state_detail = Some(detail);
-                    } else if let Some((next_parser_state, detail)) = parser_state_from_codex_message(p) {
+                    } else if let Some((next_parser_state, detail)) =
+                        parser_state_from_codex_message(p)
+                    {
                         parser_state = next_parser_state.clone();
                         state_detail = Some(detail);
                     } else {
@@ -1290,7 +1292,10 @@ mod tests {
         let v = serde_json::json!({ "type": "function_call" });
         assert_eq!(
             parser_state_from_response_item(&v),
-            Some((ParserState::Running, "response_item:function_call".to_string()))
+            Some((
+                ParserState::Running,
+                "response_item:function_call".to_string()
+            ))
         );
     }
 
@@ -1303,7 +1308,10 @@ mod tests {
         });
         assert_eq!(
             parser_state_from_codex_message(&v),
-            Some((ParserState::Idle, "response_item:assistant-final".to_string()))
+            Some((
+                ParserState::Idle,
+                "response_item:assistant-final".to_string()
+            ))
         );
     }
 
@@ -1316,7 +1324,10 @@ mod tests {
         });
         assert_eq!(
             parser_state_from_codex_message(&v),
-            Some((ParserState::Waiting(WaitReason::Input), "response_item:assistant-question".to_string()))
+            Some((
+                ParserState::Waiting(WaitReason::Input),
+                "response_item:assistant-question".to_string()
+            ))
         );
     }
 

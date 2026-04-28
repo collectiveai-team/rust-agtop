@@ -10,12 +10,12 @@ use ratatui::{
     Frame,
 };
 
+use super::{info_costs, info_general, info_process, info_summary};
 use crate::tui::input::AppEvent;
 use crate::tui::msg::Msg;
 use crate::tui::screens::dashboard::sessions::SessionRow;
 use crate::tui::theme_v2::Theme;
 use crate::tui::widgets::drawer::{self, Anchor};
-use super::{info_costs, info_general, info_process, info_summary};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DrawerVis {
@@ -236,8 +236,15 @@ impl InfoDrawer {
             return None;
         }
 
-        let AppEvent::Key(KeyEvent { code, modifiers, .. }) = event else { return None };
-        if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT { return None; }
+        let AppEvent::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event
+        else {
+            return None;
+        };
+        if !modifiers.is_empty() && *modifiers != KeyModifiers::SHIFT {
+            return None;
+        }
         match code {
             KeyCode::Char('i') if self.vis == DrawerVis::Open => {
                 self.vis = DrawerVis::Closed;
@@ -252,15 +259,27 @@ impl InfoDrawer {
                 self.tab = InfoTab::Summary;
                 Some(Msg::Noop)
             }
-            KeyCode::Char('1') if self.vis == DrawerVis::Open => { self.tab = InfoTab::Summary; Some(Msg::Noop) }
-            KeyCode::Char('2') if self.vis == DrawerVis::Open => { self.tab = InfoTab::General; Some(Msg::Noop) }
-            KeyCode::Char('3') if self.vis == DrawerVis::Open => { self.tab = InfoTab::Costs; Some(Msg::Noop) }
-            KeyCode::Char('4') if self.vis == DrawerVis::Open => { self.tab = InfoTab::Process; Some(Msg::Noop) }
+            KeyCode::Char('1') if self.vis == DrawerVis::Open => {
+                self.tab = InfoTab::Summary;
+                Some(Msg::Noop)
+            }
+            KeyCode::Char('2') if self.vis == DrawerVis::Open => {
+                self.tab = InfoTab::General;
+                Some(Msg::Noop)
+            }
+            KeyCode::Char('3') if self.vis == DrawerVis::Open => {
+                self.tab = InfoTab::Costs;
+                Some(Msg::Noop)
+            }
+            KeyCode::Char('4') if self.vis == DrawerVis::Open => {
+                self.tab = InfoTab::Process;
+                Some(Msg::Noop)
+            }
             KeyCode::Tab if self.vis == DrawerVis::Open => {
                 self.tab = match self.tab {
                     InfoTab::Summary => InfoTab::General,
                     InfoTab::General => InfoTab::Costs,
-                    InfoTab::Costs   => InfoTab::Process,
+                    InfoTab::Costs => InfoTab::Process,
                     InfoTab::Process => InfoTab::Summary,
                 };
                 Some(Msg::Noop)
@@ -319,9 +338,7 @@ mod tests {
         // [2] marker, simulate a left-click at that column, and assert the
         // tab switches to General.
         use crate::tui::theme_v2::vscode_dark_plus;
-        use crossterm::event::{
-            KeyModifiers as KM, MouseButton, MouseEvent, MouseEventKind,
-        };
+        use crossterm::event::{KeyModifiers as KM, MouseButton, MouseEvent, MouseEventKind};
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 
@@ -375,9 +392,7 @@ mod tests {
     #[test]
     fn mouse_click_outside_title_row_does_not_switch_tab() {
         use crate::tui::theme_v2::vscode_dark_plus;
-        use crossterm::event::{
-            KeyModifiers as KM, MouseButton, MouseEvent, MouseEventKind,
-        };
+        use crossterm::event::{KeyModifiers as KM, MouseButton, MouseEvent, MouseEventKind};
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 

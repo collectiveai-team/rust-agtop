@@ -47,7 +47,9 @@ pub fn render<'a>(
     };
 
     let mut style = Style::default().fg(final_color);
-    if bold { style = style.add_modifier(Modifier::BOLD); }
+    if bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
     Span::styled("●", style)
 }
 
@@ -60,7 +62,12 @@ mod tests {
     #[test]
     fn closed_renders_a_space() {
         let pulse = PulseClock::default();
-        let s = render(&SessionState::Closed, &pulse, true, &vscode_dark_plus::theme());
+        let s = render(
+            &SessionState::Closed,
+            &pulse,
+            true,
+            &vscode_dark_plus::theme(),
+        );
         assert_eq!(s.content, " ");
     }
 
@@ -115,7 +122,9 @@ mod tests {
         let pulse = PulseClock::default();
         let theme = vscode_dark_plus::theme();
         let s = render(
-            &SessionState::Warning(WarningReason::Stalled { since: chrono::Utc::now() }),
+            &SessionState::Warning(WarningReason::Stalled {
+                since: chrono::Utc::now(),
+            }),
             &pulse,
             true,
             &theme,

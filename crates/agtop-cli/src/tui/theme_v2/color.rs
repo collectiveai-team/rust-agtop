@@ -71,8 +71,12 @@ impl TrueColorMode {
 pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
     // Grayscale ramp: indices 232–255 (24 steps from #080808 to #eeeeee).
     if r == g && g == b {
-        if r < 8 { return 16; }
-        if r > 248 { return 231; }
+        if r < 8 {
+            return 16;
+        }
+        if r > 248 {
+            return 231;
+        }
         return 232 + ((r as u16 - 8) * 24 / 247) as u8;
     }
     // 6×6×6 color cube: indices 16–231.

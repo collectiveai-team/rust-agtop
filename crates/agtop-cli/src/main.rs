@@ -691,7 +691,9 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals};
+    use agtop_core::session::{
+        ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals,
+    };
     use std::path::PathBuf;
 
     #[test]

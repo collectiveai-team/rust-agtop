@@ -147,12 +147,8 @@ pub fn resolve_state_with_threshold(
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 /// Returns `true` if `last_active` is within `window` of `now`.
-fn is_recent(
-    last_active: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-    window: Duration,
-) -> bool {
-    last_active.map_or(false, |t| now.signed_duration_since(t) < window)
+fn is_recent(last_active: Option<DateTime<Utc>>, now: DateTime<Utc>, window: Duration) -> bool {
+    last_active.is_some_and(|t| now.signed_duration_since(t) < window)
 }
 
 #[cfg(test)]
@@ -212,12 +208,7 @@ mod tests {
     fn running_live_stalled_is_warning() {
         let now = Utc::now();
         let last = now - DEFAULT_STALLED_AFTER - Duration::seconds(1);
-        let s = resolve_state(
-            ParserState::Running,
-            Some(Liveness::Live),
-            Some(last),
-            now,
-        );
+        let s = resolve_state(ParserState::Running, Some(Liveness::Live), Some(last), now);
         assert!(
             matches!(s, SessionState::Warning(WarningReason::Stalled { .. })),
             "expected Warning(Stalled), got {s:?}"
@@ -290,24 +281,14 @@ mod tests {
     #[test]
     fn unknown_dead_is_closed() {
         let now = Utc::now();
-        let s = resolve_state(
-            ParserState::Unknown,
-            Some(Liveness::Stopped),
-            None,
-            now,
-        );
+        let s = resolve_state(ParserState::Unknown, Some(Liveness::Stopped), None, now);
         assert_eq!(s, SessionState::Closed);
     }
 
     #[test]
     fn stopped_liveness_is_closed() {
         let now = Utc::now();
-        let s = resolve_state(
-            ParserState::Idle,
-            Some(Liveness::Stopped),
-            None,
-            now,
-        );
+        let s = resolve_state(ParserState::Idle, Some(Liveness::Stopped), None, now);
         assert_eq!(s, SessionState::Closed);
     }
 

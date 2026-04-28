@@ -11,10 +11,22 @@ use ratatui::{
 use crate::tui::theme_v2::Theme;
 
 const PRESETS: [(u8, u8, u8); 16] = [
-    (0,0,0), (128,0,0), (0,128,0), (128,128,0),
-    (0,0,128), (128,0,128), (0,128,128), (192,192,192),
-    (128,128,128), (255,0,0), (0,255,0), (255,255,0),
-    (0,0,255), (255,0,255), (0,255,255), (255,255,255),
+    (0, 0, 0),
+    (128, 0, 0),
+    (0, 128, 0),
+    (128, 128, 0),
+    (0, 0, 128),
+    (128, 0, 128),
+    (0, 128, 128),
+    (192, 192, 192),
+    (128, 128, 128),
+    (255, 0, 0),
+    (0, 255, 0),
+    (255, 255, 0),
+    (0, 0, 255),
+    (255, 0, 255),
+    (0, 255, 255),
+    (255, 255, 255),
 ];
 
 #[derive(Debug, Default)]
@@ -32,7 +44,9 @@ impl ColorPicker {
     }
 
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-        if !self.open { return }
+        if !self.open {
+            return;
+        }
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(" Pick a color  [Enter] confirm  [Esc] cancel ")
@@ -43,22 +57,33 @@ impl ColorPicker {
         frame.render_widget(block, area);
 
         let mut lines = vec![
-            Line::from(vec![Span::styled(" Presets:", Style::default().fg(theme.fg_muted))]),
+            Line::from(vec![Span::styled(
+                " Presets:",
+                Style::default().fg(theme.fg_muted),
+            )]),
             Line::from(
-                PRESETS.iter().map(|(r,g,b)| {
-                    Span::styled(" ████ ", Style::default().fg(Color::Rgb(*r,*g,*b)))
-                }).collect::<Vec<_>>(),
+                PRESETS
+                    .iter()
+                    .map(|(r, g, b)| {
+                        Span::styled(" ████ ", Style::default().fg(Color::Rgb(*r, *g, *b)))
+                    })
+                    .collect::<Vec<_>>(),
             ),
             Line::from(""),
             Line::from(vec![
                 Span::styled(" Hex: ", Style::default().fg(theme.fg_muted)),
-                Span::styled(format!("#{}", self.hex_input), Style::default().fg(theme.fg_default).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("#{}", self.hex_input),
+                    Style::default()
+                        .fg(theme.fg_default)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]),
         ];
-        if let Some((r,g,b)) = self.preview {
+        if let Some((r, g, b)) = self.preview {
             lines.push(Line::from(vec![
                 Span::styled(" Preview: ", Style::default().fg(theme.fg_muted)),
-                Span::styled("████", Style::default().fg(Color::Rgb(r,g,b))),
+                Span::styled("████", Style::default().fg(Color::Rgb(r, g, b))),
             ]));
         }
         frame.render_widget(Paragraph::new(lines), inner);
@@ -70,7 +95,9 @@ impl ColorPicker {
 }
 
 fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
-    if s.len() != 6 { return None }
+    if s.len() != 6 {
+        return None;
+    }
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;

@@ -26,7 +26,9 @@ fn realistic_model() -> HeaderModel {
 fn header_140_cols_snapshot() {
     let theme = vscode_dark_plus::theme();
     let model = realistic_model();
-    let buf = render_to_buffer(140, 3, |f| render(f, Rect::new(0, 0, 140, 3), &model, &theme));
+    let buf = render_to_buffer(140, 3, |f| {
+        render(f, Rect::new(0, 0, 140, 3), &model, &theme)
+    });
     insta::assert_snapshot!("header_140", buffer_to_text(&buf));
 }
 

@@ -34,8 +34,8 @@ impl DashboardState {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),               // header
-                Constraint::Min(0),                  // sessions
+                Constraint::Length(3), // header
+                Constraint::Min(0),    // sessions
                 Constraint::Length(quota_rows),
             ])
             .split(area);
@@ -105,7 +105,7 @@ pub use header::HeaderModel;
 mod overlay_tests {
     use super::*;
     use crate::tui::screens::dashboard::info_drawer::{DrawerVis, InfoDrawer};
-    use crate::tui::screens::dashboard::quota::QuotaMode;
+    use crate::tui::screens::dashboard::quota::{QuotaMode, QuotaPanel};
     use crate::tui::theme_v2::vscode_dark_plus;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -123,12 +123,17 @@ mod overlay_tests {
         // into the quota row beneath it. Use Long quota mode so the quota
         // row is tall enough that any leakage from a full-area drawer would
         // be visible.
-        let mut state = DashboardState::default();
-        state.info = InfoDrawer {
-            vis: DrawerVis::Open,
-            ..InfoDrawer::default()
+        let mut state = DashboardState {
+            info: InfoDrawer {
+                vis: DrawerVis::Open,
+                ..InfoDrawer::default()
+            },
+            quota: QuotaPanel {
+                mode: QuotaMode::Long,
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        state.quota.mode = QuotaMode::Long;
 
         let total_w: u16 = 200;
         let total_h: u16 = 40;
@@ -154,8 +159,7 @@ mod overlay_tests {
         // Drawer must be fully inside the sessions area.
         assert!(
             drawer_area.y >= sessions_area.y
-                && drawer_area.y + drawer_area.height
-                    <= sessions_area.y + sessions_area.height,
+                && drawer_area.y + drawer_area.height <= sessions_area.y + sessions_area.height,
             "drawer y-range {:?} must be inside sessions y-range {:?}",
             (drawer_area.y, drawer_area.y + drawer_area.height),
             (sessions_area.y, sessions_area.y + sessions_area.height),

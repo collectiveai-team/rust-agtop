@@ -10,8 +10,8 @@ use ratatui::{
     Frame,
 };
 
-use agtop_core::session::SessionAnalysis;
 use crate::tui::theme_v2::Theme;
+use agtop_core::session::SessionAnalysis;
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, a: &SessionAnalysis, theme: &Theme) {
     let total = if a.cost.total > 0.0 {
@@ -24,7 +24,9 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, a: &SessionAnalysis, theme: &Th
     let lines = vec![
         Line::from(Span::styled(
             "Costs",
-            Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.fg_emphasis)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
@@ -32,8 +34,14 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, a: &SessionAnalysis, theme: &Th
             Span::styled(total, Style::default().fg(theme.fg_default)),
         ]),
         Line::from(vec![
-            Span::styled("  Tokens (in+out+cache)  ", Style::default().fg(theme.fg_muted)),
-            Span::styled(format!("{total_tokens}"), Style::default().fg(theme.fg_default)),
+            Span::styled(
+                "  Tokens (in+out+cache)  ",
+                Style::default().fg(theme.fg_muted),
+            ),
+            Span::styled(
+                format!("{total_tokens}"),
+                Style::default().fg(theme.fg_default),
+            ),
         ]),
     ];
     frame.render_widget(Paragraph::new(lines), area);

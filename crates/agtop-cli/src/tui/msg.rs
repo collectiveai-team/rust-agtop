@@ -51,7 +51,10 @@ pub enum Msg {
     SetRefreshInterval(u64),
     SetStalledThreshold(u64),
     ToggleColumnVisibility(crate::tui::column_config::ColumnId),
-    MoveColumn { col: crate::tui::column_config::ColumnId, dir: MoveDir },
+    MoveColumn {
+        col: crate::tui::column_config::ColumnId,
+        dir: MoveDir,
+    },
     ToggleClient(agtop_core::session::ClientKind, bool),
     SetDataSourcePath(agtop_core::session::ClientKind, String),
     SaveConfig,

@@ -1205,20 +1205,15 @@ fn latest_message_state_sqlite(
         return parsed
             .next()
             .and_then(|value| parser_state_from_opencode_message(&value))
-            .map_or(
-                (None, ParserState::default()),
-                |(ps, detail)| {
-                    (Some(detail), ps)
-                },
-            );
+            .map_or((None, ParserState::default()), |(ps, detail)| {
+                (Some(detail), ps)
+            });
     }
 
-    parser_state_from_opencode_message(&latest).map_or(
-        (None, ParserState::default()),
-        |(ps, detail)| {
+    parser_state_from_opencode_message(&latest)
+        .map_or((None, ParserState::default()), |(ps, detail)| {
             (Some(detail), ps)
-        },
-    )
+        })
 }
 
 fn first_message_identity_sqlite(
@@ -1635,12 +1630,10 @@ fn latest_message_state_json(msg_dir: &Path) -> (Option<String>, ParserState) {
             });
     }
 
-    parser_state_from_opencode_message(latest).map_or(
-        (None, ParserState::default()),
-        |(ps, detail)| {
+    parser_state_from_opencode_message(latest)
+        .map_or((None, ParserState::default()), |(ps, detail)| {
             (Some(detail), ps)
-        },
-    )
+        })
 }
 
 fn first_message_identity_json(msg_dir: &Path) -> (Option<String>, Option<String>) {

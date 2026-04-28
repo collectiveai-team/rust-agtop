@@ -15,20 +15,43 @@ fn cards() -> Vec<QuotaCardModel> {
         QuotaCardModel {
             client_kind: ClientKind::Claude,
             client_label: "claude-code".into(),
-            closest: WindowModel { label: "5h".into(), used_pct: 0.78, note: None, reset_in: None },
+            closest: WindowModel {
+                label: "5h".into(),
+                used_pct: 0.78,
+                note: None,
+                reset_in: None,
+            },
             all_windows: vec![
-                WindowModel { label: "5h".into(), used_pct: 0.78, note: None, reset_in: None },
-                WindowModel { label: "weekly".into(), used_pct: 0.42, note: Some("142h to reset".into()), reset_in: None },
+                WindowModel {
+                    label: "5h".into(),
+                    used_pct: 0.78,
+                    note: None,
+                    reset_in: None,
+                },
+                WindowModel {
+                    label: "weekly".into(),
+                    used_pct: 0.42,
+                    note: Some("142h to reset".into()),
+                    reset_in: None,
+                },
             ],
             status: CardStatus::Ok,
         },
         QuotaCardModel {
             client_kind: ClientKind::Codex,
             client_label: "codex".into(),
-            closest: WindowModel { label: "weekly".into(), used_pct: 0.31, note: None, reset_in: None },
-            all_windows: vec![
-                WindowModel { label: "weekly".into(), used_pct: 0.31, note: None, reset_in: None },
-            ],
+            closest: WindowModel {
+                label: "weekly".into(),
+                used_pct: 0.31,
+                note: None,
+                reset_in: None,
+            },
+            all_windows: vec![WindowModel {
+                label: "weekly".into(),
+                used_pct: 0.31,
+                note: None,
+                reset_in: None,
+            }],
             status: CardStatus::Ok,
         },
     ]

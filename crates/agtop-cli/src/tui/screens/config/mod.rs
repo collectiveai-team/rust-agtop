@@ -1,17 +1,17 @@
 //! Config screen: search + sidebar + detail.
 
-pub mod sidebar;
-pub mod detail;
-pub mod controls;
 pub mod color_picker;
+pub mod controls;
+pub mod detail;
+pub mod sidebar;
 pub mod sections {
-    pub mod appearance;
-    pub mod columns;
-    pub mod refresh;
-    pub mod clients;
-    pub mod keybinds;
-    pub mod data_sources;
     pub mod about;
+    pub mod appearance;
+    pub mod clients;
+    pub mod columns;
+    pub mod data_sources;
+    pub mod keybinds;
+    pub mod refresh;
 }
 
 use ratatui::{
@@ -58,9 +58,15 @@ impl ConfigState {
 
         // Search bar
         let search_icon = Icon::Search.render(self.nerd_font);
-        let search_prefix = if !search_icon.is_empty() { format!(" {search_icon} Search: ") } else { " /  Search: ".to_string() };
+        let search_prefix = if !search_icon.is_empty() {
+            format!(" {search_icon} Search: ")
+        } else {
+            " /  Search: ".to_string()
+        };
         let search_style = if self.focus == Focus::Search {
-            Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.fg_muted)
         };
@@ -97,14 +103,29 @@ impl ConfigState {
 
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let AppEvent::Key(KeyEvent { code, modifiers, .. }) = event else { return None };
+        let AppEvent::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event
+        else {
+            return None;
+        };
 
         // Search input absorbs all keys when focused.
         if self.focus == Focus::Search {
             match code {
-                KeyCode::Esc => { self.search.clear(); self.focus = Focus::Sidebar; return Some(Msg::Noop); }
-                KeyCode::Enter => { self.focus = Focus::Sidebar; return Some(Msg::Noop); }
-                KeyCode::Backspace => { self.search.pop(); return Some(Msg::ConfigSearch(self.search.clone())); }
+                KeyCode::Esc => {
+                    self.search.clear();
+                    self.focus = Focus::Sidebar;
+                    return Some(Msg::Noop);
+                }
+                KeyCode::Enter => {
+                    self.focus = Focus::Sidebar;
+                    return Some(Msg::Noop);
+                }
+                KeyCode::Backspace => {
+                    self.search.pop();
+                    return Some(Msg::ConfigSearch(self.search.clone()));
+                }
                 KeyCode::Char(c) if modifiers.is_empty() || *modifiers == KeyModifiers::SHIFT => {
                     self.search.push(*c);
                     return Some(Msg::ConfigSearch(self.search.clone()));
@@ -114,7 +135,10 @@ impl ConfigState {
         }
 
         match code {
-            KeyCode::Char('/') => { self.focus = Focus::Search; Some(Msg::Noop) }
+            KeyCode::Char('/') => {
+                self.focus = Focus::Search;
+                Some(Msg::Noop)
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Sidebar => Focus::Detail,
@@ -169,8 +193,10 @@ mod tests {
 
     fn k(c: char) -> AppEvent {
         AppEvent::Key(KeyEvent {
-            code: KeyCode::Char(c), modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press, state: KeyEventState::NONE,
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
         })
     }
 
@@ -183,7 +209,10 @@ mod tests {
 
     #[test]
     fn search_input_appends_chars() {
-        let mut s = ConfigState { focus: Focus::Search, ..Default::default() };
+        let mut s = ConfigState {
+            focus: Focus::Search,
+            ..Default::default()
+        };
         s.handle_event(&k('a'));
         s.handle_event(&k('b'));
         assert_eq!(s.search, "ab");
@@ -194,8 +223,10 @@ mod tests {
         let mut s = ConfigState::default();
         assert_eq!(s.current_section, ConfigSection::Appearance);
         let ev = AppEvent::Key(KeyEvent {
-            code: KeyCode::Down, modifiers: KeyModifiers::NONE,
-            kind: KeyEventKind::Press, state: KeyEventState::NONE,
+            code: KeyCode::Down,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
         });
         s.handle_event(&ev);
         assert_eq!(s.current_section, ConfigSection::Columns);

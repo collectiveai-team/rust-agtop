@@ -1,10 +1,6 @@
 //! Shared helpers for `insta` snapshot tests against `ratatui::backend::TestBackend`.
 
-use ratatui::{
-    backend::TestBackend,
-    buffer::Buffer,
-    Terminal,
-};
+use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
 /// Build a TestBackend, draw with the given closure, return the rendered Buffer.
 pub fn render_to_buffer<F>(width: u16, height: u16, mut draw: F) -> Buffer

@@ -52,7 +52,13 @@ impl ControlsModel {
         let mut spans = vec![Span::styled(prefix, Style::default().fg(theme.fg_muted))];
         let mut x = area.x + prefix.chars().count() as u16;
 
-        for g in [GroupBy::Client, GroupBy::Provider, GroupBy::Model, GroupBy::Project, GroupBy::Subscription] {
+        for g in [
+            GroupBy::Client,
+            GroupBy::Provider,
+            GroupBy::Model,
+            GroupBy::Project,
+            GroupBy::Subscription,
+        ] {
             let label = match g {
                 GroupBy::Client => "Client",
                 GroupBy::Provider => "Provider",
@@ -66,11 +72,14 @@ impl ControlsModel {
                 format!("  {label}   ")
             };
             let chip_w = chip_str.chars().count() as u16;
-            self.chip_rects.push((label.to_string(), Rect::new(x, area.y, chip_w, 1)));
+            self.chip_rects
+                .push((label.to_string(), Rect::new(x, area.y, chip_w, 1)));
             x += chip_w;
 
             let style = if g == self.group_by {
-                Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.accent_primary)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg_muted)
             };
@@ -84,7 +93,12 @@ impl ControlsModel {
         let mut spans = vec![Span::styled(prefix, Style::default().fg(theme.fg_muted))];
         let mut x = area.x + prefix.chars().count() as u16;
 
-        for r in [TimeRange::Today, TimeRange::Week, TimeRange::Month, TimeRange::All] {
+        for r in [
+            TimeRange::Today,
+            TimeRange::Week,
+            TimeRange::Month,
+            TimeRange::All,
+        ] {
             let label = match r {
                 TimeRange::Today => "Today",
                 TimeRange::Week => "Week",
@@ -97,11 +111,14 @@ impl ControlsModel {
                 format!("  {label}   ")
             };
             let chip_w = chip_str.chars().count() as u16;
-            self.chip_rects.push((label.to_string(), Rect::new(x, area.y, chip_w, 1)));
+            self.chip_rects
+                .push((label.to_string(), Rect::new(x, area.y, chip_w, 1)));
             x += chip_w;
 
             let style = if r == self.range {
-                Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.accent_primary)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg_muted)
             };
@@ -114,11 +131,14 @@ impl ControlsModel {
         x += sort_sep.chars().count() as u16;
         let sort_str = format!("‹{}›", self.sort_label);
         let sort_w = sort_str.chars().count() as u16;
-        self.chip_rects.push(("__sort__".to_string(), Rect::new(x, area.y, sort_w, 1)));
+        self.chip_rects
+            .push(("__sort__".to_string(), Rect::new(x, area.y, sort_w, 1)));
         x += sort_w;
         spans.push(Span::styled(
             sort_str,
-            Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
         ));
 
         // Reverse toggle
@@ -127,10 +147,15 @@ impl ControlsModel {
         x += rev_sep.chars().count() as u16;
         let rev_str = if self.reverse { "on" } else { "off" };
         let rev_w = rev_str.chars().count() as u16;
-        self.chip_rects.push(("__reverse__".to_string(), Rect::new(x, area.y, rev_w, 1)));
+        self.chip_rects
+            .push(("__reverse__".to_string(), Rect::new(x, area.y, rev_w, 1)));
         spans.push(Span::styled(
             rev_str,
-            Style::default().fg(if self.reverse { theme.accent_primary } else { theme.fg_muted }),
+            Style::default().fg(if self.reverse {
+                theme.accent_primary
+            } else {
+                theme.fg_muted
+            }),
         ));
 
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -179,37 +204,92 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, m: &ControlsModel, theme: &Them
         .split(area);
 
     // Static render (no rect recording) — used only by old callers.
-    let mut spans = vec![Span::styled(" Group by:  ", Style::default().fg(theme.fg_muted))];
-    for g in [GroupBy::Client, GroupBy::Provider, GroupBy::Model, GroupBy::Project, GroupBy::Subscription] {
+    let mut spans = vec![Span::styled(
+        " Group by:  ",
+        Style::default().fg(theme.fg_muted),
+    )];
+    for g in [
+        GroupBy::Client,
+        GroupBy::Provider,
+        GroupBy::Model,
+        GroupBy::Project,
+        GroupBy::Subscription,
+    ] {
         let label = match g {
-            GroupBy::Client => "Client", GroupBy::Provider => "Provider",
-            GroupBy::Model => "Model", GroupBy::Project => "Project",
+            GroupBy::Client => "Client",
+            GroupBy::Provider => "Provider",
+            GroupBy::Model => "Model",
+            GroupBy::Project => "Project",
             GroupBy::Subscription => "Subscription",
         };
         let style = if g == m.group_by {
-            Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
-        } else { Style::default().fg(theme.fg_muted) };
-        let s = if g == m.group_by { format!("‹ {label} › ") } else { format!("  {label}   ") };
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg_muted)
+        };
+        let s = if g == m.group_by {
+            format!("‹ {label} › ")
+        } else {
+            format!("  {label}   ")
+        };
         spans.push(Span::styled(s, style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), layout[0]);
 
-    let mut spans2 = vec![Span::styled(" Range:     ", Style::default().fg(theme.fg_muted))];
-    for r in [TimeRange::Today, TimeRange::Week, TimeRange::Month, TimeRange::All] {
+    let mut spans2 = vec![Span::styled(
+        " Range:     ",
+        Style::default().fg(theme.fg_muted),
+    )];
+    for r in [
+        TimeRange::Today,
+        TimeRange::Week,
+        TimeRange::Month,
+        TimeRange::All,
+    ] {
         let label = match r {
-            TimeRange::Today => "Today", TimeRange::Week => "Week",
-            TimeRange::Month => "Month", TimeRange::All => "All",
+            TimeRange::Today => "Today",
+            TimeRange::Week => "Week",
+            TimeRange::Month => "Month",
+            TimeRange::All => "All",
         };
         let style = if r == m.range {
-            Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
-        } else { Style::default().fg(theme.fg_muted) };
-        let s = if r == m.range { format!("‹ {label} › ") } else { format!("  {label}   ") };
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.fg_muted)
+        };
+        let s = if r == m.range {
+            format!("‹ {label} › ")
+        } else {
+            format!("  {label}   ")
+        };
         spans2.push(Span::styled(s, style));
     }
-    spans2.push(Span::styled("  |  Sort: ", Style::default().fg(theme.fg_muted)));
-    spans2.push(Span::styled(format!("‹{}›", m.sort_label), Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)));
-    spans2.push(Span::styled("  Reverse: ", Style::default().fg(theme.fg_muted)));
-    spans2.push(Span::styled(if m.reverse { "on" } else { "off" }, Style::default().fg(if m.reverse { theme.accent_primary } else { theme.fg_muted })));
+    spans2.push(Span::styled(
+        "  |  Sort: ",
+        Style::default().fg(theme.fg_muted),
+    ));
+    spans2.push(Span::styled(
+        format!("‹{}›", m.sort_label),
+        Style::default()
+            .fg(theme.accent_primary)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans2.push(Span::styled(
+        "  Reverse: ",
+        Style::default().fg(theme.fg_muted),
+    ));
+    spans2.push(Span::styled(
+        if m.reverse { "on" } else { "off" },
+        Style::default().fg(if m.reverse {
+            theme.accent_primary
+        } else {
+            theme.fg_muted
+        }),
+    ));
     frame.render_widget(Paragraph::new(Line::from(spans2)), layout[1]);
 }
 
@@ -225,21 +305,25 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut m = ControlsModel::default();
-        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme)).unwrap();
+        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme))
+            .unwrap();
     }
 
     #[test]
     fn click_on_provider_chip_sets_group_by_provider() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
         use crate::tui::input::AppEvent;
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let backend = TestBackend::new(140, 2);
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut m = ControlsModel::default();
-        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme)).unwrap();
+        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme))
+            .unwrap();
 
-        let provider_rect = m.chip_rects.iter()
+        let provider_rect = m
+            .chip_rects
+            .iter()
             .find(|(label, _)| label == "Provider")
             .map(|(_, r)| *r)
             .expect("Provider chip rect must exist after render");
@@ -251,22 +335,28 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         m.handle_event(&click);
-        assert!(matches!(m.group_by, agtop_core::aggregate::GroupBy::Provider));
+        assert!(matches!(
+            m.group_by,
+            agtop_core::aggregate::GroupBy::Provider
+        ));
     }
 
     #[test]
     fn click_on_reverse_toggle_flips_it() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
         use crate::tui::input::AppEvent;
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let backend = TestBackend::new(140, 2);
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut m = ControlsModel::default();
         assert!(!m.reverse);
-        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme)).unwrap();
+        term.draw(|f| m.render(f, Rect::new(0, 0, 140, 2), &theme))
+            .unwrap();
 
-        let rev_rect = m.chip_rects.iter()
+        let rev_rect = m
+            .chip_rects
+            .iter()
             .find(|(label, _)| label == "__reverse__")
             .map(|(_, r)| *r)
             .expect("__reverse__ chip rect must exist after render");

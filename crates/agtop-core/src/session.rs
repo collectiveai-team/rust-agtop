@@ -38,7 +38,9 @@ pub enum WaitReason {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WarningReason {
-    Stalled { since: chrono::DateTime<chrono::Utc> },
+    Stalled {
+        since: chrono::DateTime<chrono::Utc>,
+    },
     Other(String),
 }
 
@@ -86,12 +88,12 @@ impl SessionState {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Running    => "running",
+            Self::Running => "running",
             Self::Waiting(_) => "waiting",
             Self::Warning(_) => "warning",
-            Self::Error(_)   => "error",
-            Self::Idle       => "idle",
-            Self::Closed     => "closed",
+            Self::Error(_) => "error",
+            Self::Idle => "idle",
+            Self::Closed => "closed",
         }
     }
 
@@ -622,7 +624,10 @@ mod tests {
         fn as_str_returns_outer_kind() {
             assert_eq!(SessionState::Running.as_str(), "running");
             assert_eq!(SessionState::Waiting(WaitReason::Input).as_str(), "waiting");
-            assert_eq!(SessionState::Waiting(WaitReason::Permission).as_str(), "waiting");
+            assert_eq!(
+                SessionState::Waiting(WaitReason::Permission).as_str(),
+                "waiting"
+            );
             assert_eq!(SessionState::Idle.as_str(), "idle");
             assert_eq!(SessionState::Closed.as_str(), "closed");
         }
@@ -639,7 +644,9 @@ mod tests {
 
         #[test]
         fn warning_stalled_carries_since() {
-            let t = chrono::DateTime::parse_from_rfc3339("2026-04-26T10:00:00Z").unwrap().to_utc();
+            let t = chrono::DateTime::parse_from_rfc3339("2026-04-26T10:00:00Z")
+                .unwrap()
+                .to_utc();
             let v = SessionState::Warning(WarningReason::Stalled { since: t });
             let json = serde_json::to_value(&v).unwrap();
             assert_eq!(json["kind"], "warning");

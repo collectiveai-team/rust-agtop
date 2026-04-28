@@ -151,9 +151,8 @@ fn sessions_table_renders_selected_row_highlight() {
     // The highlight is now bg_selection + fg_emphasis (no REVERSED).
     // Check that at least one cell on the selected row has bg == theme.bg_selection.
     let selected_row_y = 2;
-    let highlighted = (0..buf.area.width).any(|x| {
-        buf[(x, selected_row_y)].style().bg == Some(theme.bg_selection)
-    });
+    let highlighted = (0..buf.area.width)
+        .any(|x| buf[(x, selected_row_y)].style().bg == Some(theme.bg_selection));
     assert!(
         highlighted,
         "selected row should render with bg_selection background as visible highlight"

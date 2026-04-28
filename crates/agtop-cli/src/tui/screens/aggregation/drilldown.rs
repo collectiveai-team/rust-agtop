@@ -24,7 +24,9 @@ pub struct DrillDown {
 }
 
 impl DrillDown {
-    pub fn is_open(&self) -> bool { self.open }
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
 
     pub fn open(&mut self, label: String, sessions: &[SessionAnalysis], by: GroupBy) {
         self.label = label.clone();
@@ -51,7 +53,10 @@ impl DrillDown {
             GroupBy::Client | GroupBy::Provider => s.summary.client.as_str() == label,
             GroupBy::Model => s.summary.model.as_deref() == Some(label),
             GroupBy::Project => {
-                let basename = s.summary.cwd.as_deref()
+                let basename = s
+                    .summary
+                    .cwd
+                    .as_deref()
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .map(|n| n.to_string_lossy().into_owned());
                 basename.as_deref() == Some(label)
@@ -61,7 +66,9 @@ impl DrillDown {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-        if !self.open { return }
+        if !self.open {
+            return;
+        }
         self.last_area = Some(area);
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -77,15 +84,21 @@ impl DrillDown {
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
         use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
         // Keyboard Esc closes.
-        if let AppEvent::Key(KeyEvent { code: KeyCode::Esc, .. }) = event {
+        if let AppEvent::Key(KeyEvent {
+            code: KeyCode::Esc, ..
+        }) = event
+        {
             self.open = false;
             return Some(Msg::Noop);
         }
         // Mouse click on "[Esc] close" in the title bar closes.
         if let AppEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
-            column, row, ..
-        }) = event {
+            column,
+            row,
+            ..
+        }) = event
+        {
             if let Some(area) = self.last_area {
                 if *row == area.y {
                     let title = format!(" Drill-down: {}  [Esc] close ", self.label);
@@ -116,8 +129,8 @@ mod tests {
 
     #[test]
     fn click_on_esc_close_button_closes_drilldown() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
         use crate::tui::input::AppEvent;
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let backend = TestBackend::new(120, 30);
         let mut term = Terminal::new(backend).unwrap();
@@ -128,7 +141,8 @@ mod tests {
         assert!(d.is_open());
 
         // Render to populate last_area.
-        term.draw(|f| d.render(f, ratatui::layout::Rect::new(0, 0, 120, 30), &theme)).unwrap();
+        term.draw(|f| d.render(f, ratatui::layout::Rect::new(0, 0, 120, 30), &theme))
+            .unwrap();
 
         // The title bar row is y=0. Title is " Drill-down: Claude  [Esc] close ".
         // "[Esc]" starts at offset 22 in the title (after " Drill-down: Claude  ").
@@ -145,6 +159,9 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         d.handle_event(&click);
-        assert!(!d.is_open(), "clicking [Esc] close must close the drill-down");
+        assert!(
+            !d.is_open(),
+            "clicking [Esc] close must close the drill-down"
+        );
     }
 }

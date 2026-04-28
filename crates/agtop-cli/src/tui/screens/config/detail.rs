@@ -16,14 +16,24 @@ pub struct DetailModel {
     pub about: sections::about::AboutModel,
 }
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, current: ConfigSection, m: &DetailModel, theme: &Theme) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    current: ConfigSection,
+    m: &DetailModel,
+    theme: &Theme,
+) {
     match current {
-        ConfigSection::Appearance => sections::appearance::render(frame, area, &m.appearance, theme),
+        ConfigSection::Appearance => {
+            sections::appearance::render(frame, area, &m.appearance, theme)
+        }
         ConfigSection::Columns => sections::columns::render(frame, area, &m.columns, theme),
         ConfigSection::Refresh => sections::refresh::render(frame, area, &m.refresh, theme),
         ConfigSection::Clients => sections::clients::render(frame, area, &m.clients, theme),
         ConfigSection::Keybinds => sections::keybinds::render(frame, area, &(), theme),
-        ConfigSection::DataSources => sections::data_sources::render(frame, area, &m.data_sources, theme),
+        ConfigSection::DataSources => {
+            sections::data_sources::render(frame, area, &m.data_sources, theme)
+        }
         ConfigSection::About => sections::about::render(frame, area, &m.about, theme),
     }
 }

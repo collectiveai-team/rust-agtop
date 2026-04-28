@@ -18,7 +18,13 @@ fn fixed_now() -> chrono::DateTime<chrono::Utc> {
         .to_utc()
 }
 
-fn mk_session(client: ClientKind, hours_ago: i64, tokens: u64, cost: f64, duration: u64) -> SessionAnalysis {
+fn mk_session(
+    client: ClientKind,
+    hours_ago: i64,
+    tokens: u64,
+    cost: f64,
+    duration: u64,
+) -> SessionAnalysis {
     let now = fixed_now();
     let summary = SessionSummary::new(
         client,
@@ -45,7 +51,18 @@ fn mk_session(client: ClientKind, hours_ago: i64, tokens: u64, cost: f64, durati
         cb.total = cost;
         cb
     };
-    SessionAnalysis::new(summary, tok, c, None, 0, None, Some(duration), None, None, None)
+    SessionAnalysis::new(
+        summary,
+        tok,
+        c,
+        None,
+        0,
+        None,
+        Some(duration),
+        None,
+        None,
+        None,
+    )
 }
 
 fn fixture() -> Vec<SessionAnalysis> {
@@ -82,7 +99,9 @@ fn redact_relative_time(s: &str) -> String {
         out.push('\n');
     }
     // Remove trailing newline added by the loop.
-    if out.ends_with('\n') { out.pop(); }
+    if out.ends_with('\n') {
+        out.pop();
+    }
     out
 }
 
@@ -110,7 +129,9 @@ fn aggregation_today_by_client_140x20() {
         );
         state.table.groups = groups;
     }
-    let buf = render_to_buffer(140, 20, |f| state.render(f, Rect::new(0, 0, 140, 20), &theme));
+    let buf = render_to_buffer(140, 20, |f| {
+        state.render(f, Rect::new(0, 0, 140, 20), &theme)
+    });
     let text = buffer_to_text(&buf);
     let stable_text = redact_relative_time(&text);
     insta::assert_snapshot!("aggregation_today_by_client_140x20", stable_text);

@@ -9,28 +9,53 @@ use crate::tui::theme_v2::Theme;
 
 pub fn checkbox<'a>(checked: bool, theme: &Theme) -> Span<'a> {
     let s = if checked { "[x]" } else { "[ ]" };
-    let color = if checked { theme.accent_primary } else { theme.fg_muted };
-    Span::styled(s.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD))
+    let color = if checked {
+        theme.accent_primary
+    } else {
+        theme.fg_muted
+    };
+    Span::styled(
+        s.to_string(),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
 }
 
 pub fn radio<'a>(selected: bool, theme: &Theme) -> Span<'a> {
     let s = if selected { "(•)" } else { "( )" };
-    let color = if selected { theme.accent_primary } else { theme.fg_muted };
+    let color = if selected {
+        theme.accent_primary
+    } else {
+        theme.fg_muted
+    };
     Span::styled(s.to_string(), Style::default().fg(color))
 }
 
 pub fn dropdown<'a>(value: &str, theme: &Theme) -> Span<'a> {
-    Span::styled(format!("[ {value} ▾ ]"), Style::default().fg(theme.fg_default).add_modifier(Modifier::BOLD))
+    Span::styled(
+        format!("[ {value} ▾ ]"),
+        Style::default()
+            .fg(theme.fg_default)
+            .add_modifier(Modifier::BOLD),
+    )
 }
 
 pub fn text_input<'a>(value: &'a str, theme: &Theme) -> Span<'a> {
-    Span::styled(format!("[ {value} ]"), Style::default().fg(theme.fg_default))
+    Span::styled(
+        format!("[ {value} ]"),
+        Style::default().fg(theme.fg_default),
+    )
 }
 
 pub fn swatch<'a>(rgb: (u8, u8, u8), theme: &Theme) -> Vec<Span<'a>> {
     let _ = theme;
-    let block = Span::styled("████".to_string(), Style::default().fg(ratatui::style::Color::Rgb(rgb.0, rgb.1, rgb.2)));
-    let hex = Span::styled(format!("  #{:02X}{:02X}{:02X}", rgb.0, rgb.1, rgb.2), Style::default());
+    let block = Span::styled(
+        "████".to_string(),
+        Style::default().fg(ratatui::style::Color::Rgb(rgb.0, rgb.1, rgb.2)),
+    );
+    let hex = Span::styled(
+        format!("  #{:02X}{:02X}{:02X}", rgb.0, rgb.1, rgb.2),
+        Style::default(),
+    );
     vec![block, hex]
 }
 

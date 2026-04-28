@@ -14,10 +14,7 @@ use crate::tui::theme_v2::client_palette;
 /// Build a styled `Span` for a client name in its theme color, no modifiers.
 #[must_use]
 pub fn client_span<'a>(name: &'a str, kind: ClientKind) -> Span<'a> {
-    Span::styled(
-        name,
-        Style::default().fg(client_palette::color_for(kind)),
-    )
+    Span::styled(name, Style::default().fg(client_palette::color_for(kind)))
 }
 
 /// Same as `client_span` but with a bold modifier (used for selected row).

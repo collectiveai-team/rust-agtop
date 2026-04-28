@@ -1,4 +1,4 @@
-//! Braille sparkline. Renders a Vec<f32> series as a single line of braille
+//! Braille sparkline. Renders a `Vec<f32>` series as a single line of braille
 // Foundation code for Plans 2-4; not yet wired into the existing TUI.
 #![allow(dead_code)]
 //! characters where each cell encodes 2×4 dots from up to 8 data points.
@@ -48,7 +48,7 @@ pub fn render_braille(series: &[f32], width: usize, max: f32) -> String {
 ///   col0: bit0=top, bit1, bit2, bit6=bottom
 ///   col1: bit3=top, bit4, bit5, bit7=bottom
 fn braille_cell(left: u8, right: u8) -> char {
-    const LEFT_BITS:  [u8; 5] = [0, 0b0000_0001, 0b0000_0011, 0b0000_0111, 0b0100_0111];
+    const LEFT_BITS: [u8; 5] = [0, 0b0000_0001, 0b0000_0011, 0b0000_0111, 0b0100_0111];
     const RIGHT_BITS: [u8; 5] = [0, 0b0000_1000, 0b0001_1000, 0b0011_1000, 0b1011_1000];
     let bits = LEFT_BITS[left as usize] | RIGHT_BITS[right as usize];
     char::from_u32(0x2800 + bits as u32).unwrap_or('\u{2800}')

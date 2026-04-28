@@ -32,9 +32,7 @@ pub fn apply_analyses(
     // user toggles: once they expand a parent (removing it from
     // `collapsed`), subsequent refreshes won't re-collapse it.
     for a in &normalized {
-        if !a.children.is_empty()
-            && !sessions.known_parents.contains(&a.summary.session_id)
-        {
+        if !a.children.is_empty() && !sessions.known_parents.contains(&a.summary.session_id) {
             sessions.collapsed.insert(a.summary.session_id.clone());
         }
         if !a.children.is_empty() {
@@ -143,14 +141,12 @@ fn count_today(analyses: &[SessionAnalysis]) -> usize {
 
 fn normalize_analysis(analysis: &SessionAnalysis) -> SessionAnalysis {
     let mut analysis = analysis.clone();
-    analysis.session_state = Some(
-        agtop_core::state_resolution::resolve_state(
-            analysis.summary.parser_state.clone(),
-            analysis.liveness.clone(),
-            analysis.summary.last_active,
-            chrono::Utc::now(),
-        )
-    );
+    analysis.session_state = Some(agtop_core::state_resolution::resolve_state(
+        analysis.summary.parser_state.clone(),
+        analysis.liveness,
+        analysis.summary.last_active,
+        chrono::Utc::now(),
+    ));
     analysis
 }
 
@@ -248,8 +244,10 @@ mod tests {
         let mut a_no_date = analysis("nodate");
         a_no_date.summary.started_at = None;
 
-        let normalized: Vec<SessionAnalysis> =
-            vec![a_today, a_yesterday, a_no_date].iter().map(normalize_analysis).collect();
+        let normalized: Vec<SessionAnalysis> = [a_today, a_yesterday, a_no_date]
+            .iter()
+            .map(normalize_analysis)
+            .collect();
         assert_eq!(count_today(&normalized), 1, "only 'today' session counts");
     }
 
@@ -307,7 +305,8 @@ mod tests {
         let mut a = analysis("unmatched-waiting");
         a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         a.liveness = None;
-        a.summary.parser_state = agtop_core::session::ParserState::Waiting(agtop_core::session::WaitReason::Input);
+        a.summary.parser_state =
+            agtop_core::session::ParserState::Waiting(agtop_core::session::WaitReason::Input);
 
         let (_header, sessions) = apply_one(a);
 
@@ -370,8 +369,10 @@ mod tests {
 
     #[test]
     fn children_appear_as_depth_1_rows_after_parent() {
-        use agtop_core::session::{SessionAnalysis, SessionSummary, TokenTotals, CostBreakdown, ClientKind};
         use agtop_core::process::Liveness;
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
         use chrono::Utc;
 
         let mut parent = analysis("parent-1");
@@ -394,7 +395,13 @@ mod tests {
             child_summary,
             TokenTotals::default(),
             CostBreakdown::default(),
-            None, 0, None, None, None, None, None,
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         parent.children = vec![child];
 
@@ -403,12 +410,17 @@ mod tests {
         // Mark the parent as already known + expanded so apply_analyses does
         // not auto-collapse it (new-parent default behavior). This test
         // verifies child row construction, not the auto-collapse policy.
-        sessions
-            .known_parents
-            .insert("parent-1".to_string());
+        sessions.known_parents.insert("parent-1".to_string());
         let mut quota = QuotaPanel::default();
         let mut aggregation = AggregationState::default();
-        apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
+        apply_analyses(
+            &[parent],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
 
         assert_eq!(sessions.rows.len(), 2, "parent + 1 child = 2 rows");
         assert_eq!(sessions.rows[0].depth, 0, "parent is depth 0");
@@ -422,10 +434,10 @@ mod tests {
 
     #[test]
     fn new_parent_with_children_starts_collapsed() {
+        use agtop_core::process::Liveness;
         use agtop_core::session::{
             ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
         };
-        use agtop_core::process::Liveness;
         use chrono::Utc;
 
         let mut parent = analysis("brand-new-parent");
@@ -477,25 +489,21 @@ mod tests {
             "newly-seen parent must start collapsed (children hidden)"
         );
         assert!(
-            sessions
-                .collapsed
-                .contains("brand-new-parent"),
+            sessions.collapsed.contains("brand-new-parent"),
             "new parent must be auto-added to collapsed"
         );
         assert!(
-            sessions
-                .known_parents
-                .contains("brand-new-parent"),
+            sessions.known_parents.contains("brand-new-parent"),
             "parent must be marked as known"
         );
     }
 
     #[test]
     fn user_expanded_parent_stays_expanded_across_refreshes() {
+        use agtop_core::process::Liveness;
         use agtop_core::session::{
             ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
         };
-        use agtop_core::process::Liveness;
         use chrono::Utc;
 
         let mut parent = analysis("user-toggled");
@@ -555,19 +563,38 @@ mod tests {
 
     #[test]
     fn collapsed_parent_hides_children() {
-        use agtop_core::session::{SessionAnalysis, SessionSummary, TokenTotals, CostBreakdown, ClientKind};
         use agtop_core::process::Liveness;
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
         use chrono::Utc;
 
         let mut parent = analysis("parent-collapsed");
         parent.liveness = Some(Liveness::Live);
         let child_summary = SessionSummary::new(
-            ClientKind::Claude, None, "child-collapsed".to_string(), None,
-            Some(Utc::now()), None, None, std::path::PathBuf::from("/tmp/c.jsonl"), None, None, None,
+            ClientKind::Claude,
+            None,
+            "child-collapsed".to_string(),
+            None,
+            Some(Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/c.jsonl"),
+            None,
+            None,
+            None,
         );
         let child = SessionAnalysis::new(
-            child_summary, TokenTotals::default(), CostBreakdown::default(),
-            None, 0, None, None, None, None, None,
+            child_summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
         );
         parent.children = vec![child];
 
@@ -576,17 +603,24 @@ mod tests {
         sessions.collapsed.insert("parent-collapsed".to_string());
         let mut quota = QuotaPanel::default();
         let mut aggregation = AggregationState::default();
-        apply_analyses(&[parent], &mut header, &mut sessions, &mut quota, &mut aggregation, 5);
+        apply_analyses(
+            &[parent],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
 
         assert_eq!(sessions.rows.len(), 1, "collapsed parent hides children");
     }
 
     #[test]
     fn last_child_is_marked_is_last_child_true() {
+        use agtop_core::process::Liveness;
         use agtop_core::session::{
             ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
         };
-        use agtop_core::process::Liveness;
         use chrono::Utc;
 
         // Helper to build a child SessionAnalysis with a unique id.
@@ -627,7 +661,9 @@ mod tests {
         let mut header = HeaderModel::default();
         let mut sessions = SessionsTable::default();
         // Mark parent as known + expanded so children render.
-        sessions.known_parents.insert("multi-child-parent".to_string());
+        sessions
+            .known_parents
+            .insert("multi-child-parent".to_string());
         let mut quota = QuotaPanel::default();
         let mut aggregation = AggregationState::default();
         apply_analyses(
@@ -648,13 +684,9 @@ mod tests {
             "parent (depth 0) is_last_child must be false"
         );
         // Among the three children, exactly one — the LAST in render order — is_last_child.
-        let child_rows: Vec<&SessionRow> =
-            sessions.rows.iter().filter(|r| r.depth == 1).collect();
+        let child_rows: Vec<&SessionRow> = sessions.rows.iter().filter(|r| r.depth == 1).collect();
         assert_eq!(child_rows.len(), 3);
-        assert!(
-            !child_rows[0].is_last_child,
-            "first child must not be last"
-        );
+        assert!(!child_rows[0].is_last_child, "first child must not be last");
         assert!(
             !child_rows[1].is_last_child,
             "middle child must not be last"
