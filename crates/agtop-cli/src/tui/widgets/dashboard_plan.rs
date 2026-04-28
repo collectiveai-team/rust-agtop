@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Dashboard mode — Quota pane.
 //!
 //! Replaces the previous local-estimate Subscription Details pane. Driven

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! "Cost" tab: the selected session's CostBreakdown laid out as a
 //! small per-bucket table.
 

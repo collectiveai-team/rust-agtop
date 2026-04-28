@@ -483,7 +483,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         )
     }
 
@@ -577,7 +576,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let mut c = candidate(42, "claude", "/home/user/proj");
         c.start_time = (now - Duration::minutes(5)).timestamp() as u64;
@@ -610,7 +608,6 @@ mod tests {
             None,
             Some("/tmp/proj".into()),
             PathBuf::from("/.local/share/opencode/opencode.db"),
-            None,
             None,
             None,
             None,
@@ -658,7 +655,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         // PID 100 is the parent (wrapper); PID 101 is the child whose
         // parent_pid points back at PID 100.
@@ -699,7 +695,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         // Both candidates within the time tie-breaker margin (30s) of
         // each other relative to session.started_at, so neither wins
@@ -737,7 +732,6 @@ mod tests {
             None,
             Some("/home/user/proj".into()),
             PathBuf::from("/.local/share/opencode/opencode.db"),
-            None,
             None,
             None,
             None,
@@ -866,7 +860,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let newer = SessionSummary::new(
             ClientKind::OpenCode,
@@ -877,7 +870,6 @@ mod tests {
             None,
             Some(cwd.into()),
             PathBuf::from("/.local/share/opencode/opencode.db"),
-            None,
             None,
             None,
             None,
@@ -923,7 +915,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let newer = SessionSummary::new(
             ClientKind::Claude,
@@ -934,7 +925,6 @@ mod tests {
             None,
             None,
             PathBuf::from("/tmp/n.jsonl"),
-            None,
             None,
             None,
             None,
@@ -991,7 +981,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let s2 = SessionSummary::new(
             ClientKind::OpenCode,
@@ -1002,7 +991,6 @@ mod tests {
             None,
             Some("/home/user/projB".into()),
             PathBuf::from(db),
-            None,
             None,
             None,
             None,

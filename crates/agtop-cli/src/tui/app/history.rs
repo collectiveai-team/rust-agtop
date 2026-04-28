@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Rolling usage-history ring-buffer for the dashboard spark charts.
 
 use std::collections::VecDeque;

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! "Info" tab: static metadata for the selected session.
 
 use chrono::{DateTime, Local, Utc};
@@ -11,8 +12,7 @@ use crate::fmt;
 use crate::tui::app::App;
 use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
-use crate::tui::widgets::state_display::display_state;
-use agtop_core::session::SessionAnalysis;
+use agtop_core::session::{SessionAnalysis, SessionState};
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -123,7 +123,7 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                             "  {} tok  ${:.4}  {}",
                             compact_tokens(child_tokens),
                             child.cost.total,
-                            cs.state.as_deref().unwrap_or("-"),
+                            cs.state_detail.as_deref().unwrap_or("-"),
                         )),
                     ]));
                 }
@@ -265,7 +265,14 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
         }
         ColumnId::LastActive => kv_line("last_active", fmt_dt(s.last_active)),
         ColumnId::State => {
-            let (label, style) = display_state(a, now);
+            let closed = SessionState::Closed;
+            let session_state = a.session_state.as_ref().unwrap_or(&closed);
+            let label = session_state.as_str();
+            let style = match session_state {
+                SessionState::Running => th::STATE_WORKING,
+                SessionState::Waiting(_) => th::STATE_WAITING,
+                _ => th::STATE_STALE,
+            };
             kv_line_styled("state", label.to_string(), style)
         }
         ColumnId::Effort => kv_line(
@@ -362,6 +369,8 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
         ),
         // SubscriptionLogo is injected by visible() — not displayed in info tab.
         ColumnId::SubscriptionLogo => Line::default(),
+        // Action is a transient field rendered in the new sessions table; not displayed in old info tab.
+        ColumnId::Action => kv_line("action", a.current_action.clone().unwrap_or_default()),
     }
 }
 

@@ -11,6 +11,7 @@
 //! Higher-level helpers ([`discover_all`], [`analyze_all`]) fan out across
 //! every registered client and return aggregated results.
 
+pub mod aggregate;
 pub mod client;
 pub mod clients;
 pub mod error;
@@ -22,6 +23,7 @@ pub mod process;
 pub mod project;
 pub mod quota;
 pub mod session;
+pub mod state_resolution;
 
 // Flat re-exports for the most commonly used public API items.
 // Consumers may also access sub-modules directly (e.g. `agtop_core::pricing::lookup`).
@@ -30,7 +32,8 @@ pub use error::{Error, Result};
 pub use pricing::{Plan, PlanMode, Rates};
 pub use process::{Confidence, Liveness, ProcessCorrelator, ProcessInfo};
 pub use session::{
-    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, CostBreakdown, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionState,
+    SessionSummary, TokenTotals,
 };
 
 use std::sync::Arc;
@@ -182,7 +185,6 @@ mod tests {
                     Some("claude-3-5-sonnet".to_string()),
                     None,
                     PathBuf::from("/tmp/test-session.jsonl"),
-                    None,
                     None,
                     None,
                     None,

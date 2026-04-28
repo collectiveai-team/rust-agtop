@@ -6,10 +6,19 @@
 //! methods; all rendering through [`widgets`].
 
 pub mod app;
+pub mod app_v2;
 pub mod column_config;
+pub mod refresh_adapter;
+pub mod screens;
 mod events;
+pub mod input;
+pub mod component;
+pub mod focus;
+pub mod animation;
+pub mod msg;
 mod refresh;
 pub mod theme;
+pub mod theme_v2;
 pub mod widgets;
 
 use std::io;
@@ -47,6 +56,7 @@ use refresh::{RefreshHandle, RefreshMsg};
 
 /// Geometry of the last-rendered frame. Written by [`render`], read by
 /// the event loop to map mouse coordinates to UI regions.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct UiLayout {
     /// The full table widget area (including its border).
@@ -98,6 +108,7 @@ struct UiLayout {
 /// Run the interactive TUI. Blocks until the user quits or the terminal
 /// raises an IO error. On exit, the terminal is returned to its
 /// previous state regardless of success/failure.
+#[allow(dead_code)]
 fn decode_svg(data: &[u8]) -> Option<image::DynamicImage> {
     let tree = resvg::usvg::Tree::from_data(data, &resvg::usvg::Options::default()).ok()?;
     let size = tree.size();
@@ -117,6 +128,7 @@ fn decode_svg(data: &[u8]) -> Option<image::DynamicImage> {
     Some(image::DynamicImage::ImageRgba8(buf))
 }
 
+#[allow(dead_code)]
 pub fn run(
     clients: Vec<Arc<dyn Client>>,
     enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
@@ -193,6 +205,7 @@ pub fn run(
     result
 }
 
+#[allow(dead_code)]
 fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -262,6 +275,7 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
 
 /// Translate a crossterm mouse event into an App mutation. All geometry
 /// is sourced from the `UiLayout` captured during the previous render.
+#[allow(dead_code)]
 fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
     match event.kind {
         // ── Scroll wheel ──────────────────────────────────────────────────
@@ -445,6 +459,7 @@ fn apply_mouse(app: &mut App, event: MouseEvent, layout: &UiLayout) {
 
 /// Return true when `(col, row)` falls inside `rect` (all inclusive of
 /// the border).
+#[allow(dead_code)]
 #[inline]
 fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.x + rect.width && row >= rect.y && row < rect.y + rect.height
@@ -453,6 +468,7 @@ fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
 /// Compose the full UI: header + session table + bottom tabs + footer.
 /// Also writes the geometry of key areas into `layout` so the event
 /// loop can do mouse hit-testing without re-computing the split.
+#[allow(dead_code)]
 fn render(
     frame: &mut Frame<'_>,
     app: &App,
@@ -580,6 +596,7 @@ pub const LOGO_WIDTH: u16 = 3;
 /// re-run the protocol's `render` on every frame. Cells embed any
 /// transmit/escape data the protocol needs to emit; ratatui's diff
 /// suppresses repeats when the cells are stable.
+#[allow(dead_code)]
 fn render_logo_to_cells(proto: &ratatui_image::protocol::Protocol) -> Vec<ratatui::buffer::Cell> {
     use ratatui::widgets::Widget;
     use ratatui_image::Image;
@@ -752,6 +769,7 @@ fn render_bottom_panel(frame: &mut Frame<'_>, area: Rect, app: &App, layout: &mu
     }
 }
 
+#[allow(dead_code)]
 fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let (text, style) = match app.mode() {
         InputMode::Filter => (
@@ -769,6 +787,96 @@ fn render_footer(frame: &mut Frame<'_>, area: Rect, app: &App) {
     };
     let p = Paragraph::new(text).style(style);
     frame.render_widget(p, area);
+}
+
+// ---------------------------------------------------------------------------
+// App v2 entry point (Plan 2 migration)
+// ---------------------------------------------------------------------------
+
+/// Run the new App v2 TUI. Uses the new screen-dispatch loop.
+/// Data wiring to the refresh worker is completed in Task 21.
+pub fn run_v2(
+    clients: Vec<Arc<dyn Client>>,
+    enabled_initial: std::collections::HashSet<agtop_core::ClientKind>,
+    plan: Plan,
+    refresh_interval: Duration,
+    _start_dashboard: bool,
+) -> Result<()> {
+    let mut terminal = setup_terminal().context("set up terminal for TUI (v2)")?;
+    install_panic_hook();
+
+    let enabled_arc = std::sync::Arc::new(std::sync::RwLock::new(enabled_initial));
+    let mut handle = refresh::spawn(
+        clients,
+        std::sync::Arc::clone(&enabled_arc),
+        plan,
+        refresh_interval,
+    )
+    .context("spawn background refresh worker")?;
+
+    // Kick the background quota fetcher; it starts in Stop state and waits
+    // for an explicit Start command. Without this the quota panel never
+    // receives any data.
+    handle.send_quota_cmd(refresh::QuotaCmd::Start);
+
+    let mut app = app_v2::App::default();
+    let poll_interval = Duration::from_millis(100);
+
+    let result = (|| -> Result<()> {
+        loop {
+            // 1. Drain snapshots from the background worker.
+            while let Some(msg) = handle.try_recv() {
+                match msg {
+                    refresh::RefreshMsg::Snapshot { analyses, .. } => {
+                        refresh_adapter::apply_analyses(
+                            &analyses,
+                            &mut app.dashboard.header,
+                            &mut app.dashboard.sessions,
+                            &mut app.dashboard.quota,
+                            &mut app.aggregation,
+                            refresh_interval.as_secs(),
+                        );
+                    }
+                    refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
+                        app.dashboard.quota.apply_results(&results);
+                    }
+                    refresh::RefreshMsg::QuotaError { .. }
+                    | refresh::RefreshMsg::Error { .. } => {
+                        // Silently ignore; panels retain their last good data.
+                    }
+                }
+            }
+
+            // 2. Render.
+            terminal.draw(|f| app.render(f, f.area()))?;
+
+            if !app.running {
+                break;
+            }
+
+            // 3. Poll for events.
+            if event::poll(poll_interval)? {
+                let raw = event::read()?;
+                if let Some(ev) = input::AppEvent::from_crossterm(raw) {
+                    if let Some(msg) = app.handle_event(&ev) {
+                        let should_quit = matches!(msg, msg::Msg::Quit);
+                        // Side-effect routing for messages that need to talk
+                        // to the background refresh worker (no app-state
+                        // change, just an out-of-band wakeup).
+                        if matches!(msg, msg::Msg::RefreshQuota) {
+                            handle.trigger_manual();
+                        }
+                        app.update(msg);
+                        if should_quit { break; }
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    restore_terminal(&mut terminal).ok();
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -829,7 +937,8 @@ mod tests {
     use crate::tui::column_config::ColumnId;
     use crate::version;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, ParserState, SessionAnalysis, SessionState, SessionSummary,
+        TokenTotals, WaitReason,
     };
     use chrono::{TimeZone, Utc};
     use ratatui::backend::TestBackend;
@@ -847,7 +956,7 @@ mod tests {
         // > WAITING_STALE_SECS are classified as stale even if waiting).
         let s1_last = Utc::now();
 
-        let s1_summary = SessionSummary::new(
+        let mut s1_summary = SessionSummary::new(
             ClientKind::Claude,
             Some("Claude Max 5x".into()),
             "deadbeef-aaaa-bbbb-cccc-1234".into(),
@@ -856,11 +965,11 @@ mod tests {
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),
-            Some("waiting".into()),
             Some("tool approval pending".into()),
             Some("high".into()),
             Some("reasoning.effort=high".into()),
         );
+        s1_summary.parser_state = ParserState::Waiting(WaitReason::Permission);
         let mut s1_tokens = TokenTotals::default();
         s1_tokens.input = 1_000;
         s1_tokens.output = 500;
@@ -870,7 +979,7 @@ mod tests {
         s1_cost.output = 0.0075;
         s1_cost.cache_read = 0.010;
         s1_cost.total = 0.0205;
-        let s1 = SessionAnalysis::new(
+        let mut s1 = SessionAnalysis::new(
             s1_summary,
             s1_tokens,
             s1_cost,
@@ -882,6 +991,7 @@ mod tests {
             None,
             None,
         );
+        s1.session_state = Some(SessionState::Waiting(WaitReason::Permission));
 
         let s2_summary = SessionSummary::new(
             ClientKind::Codex,
@@ -892,7 +1002,6 @@ mod tests {
             Some("gpt-5".into()),
             Some("/tmp/other".into()),
             PathBuf::from("/tmp/codex.jsonl"),
-            None,
             None,
             None,
             None,
@@ -1027,7 +1136,6 @@ mod tests {
             Some("model".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/working.json"),
-            Some("stopped".into()),
             Some("finish=stop".into()),
             None,
             None,

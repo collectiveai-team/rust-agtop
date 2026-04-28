@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 description = "CLI for agtop: list and inspect AI coding agent sessions with token/cost estimates."
 
+[lib]
+name = "agtop_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "agtop"
 path = "src/main.rs"
@@ -51,3 +55,6 @@ ratatui-image = { version = "8", default-features = false, features = ["crosster
 # Image decoding (SVG → raster) for provider logos from models.dev.
 image = "0.25"
 resvg = { version = "0.44", default-features = false }
+
+[dev-dependencies]
+insta = { version = "1", features = ["yaml"] }

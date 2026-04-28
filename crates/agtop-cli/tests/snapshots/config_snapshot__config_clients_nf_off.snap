@@ -1,0 +1,34 @@
+---
+source: crates/agtop-cli/tests/config_snapshot.rs
+expression: buffer_to_text(&buf)
+---
+ / Search:
+  Appearance                  │Clients
+  Columns                     │────────────────────────────────────────
+  ⟳  Refresh                  │
+  ‹ Clients ›                 │  claude        [x]  [ (default) ]
+  Keybinds                    │  codex         [x]  [ (default) ]
+  Data sources                │  gemini-cli    [x]  [ (default) ]
+  About                       │  copilot       [x]  [ (default) ]
+                              │  cursor        [x]  [ (default) ]
+                              │  antigravity   [x]  [ (default) ]
+                              │  opencode      [x]  [ (default) ]
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+                              │
+ [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help

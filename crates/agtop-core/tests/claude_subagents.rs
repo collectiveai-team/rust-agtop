@@ -30,7 +30,6 @@ fn summary_for_fixture() -> SessionSummary {
         None,
         None,
         None,
-        None,
     )
 }
 

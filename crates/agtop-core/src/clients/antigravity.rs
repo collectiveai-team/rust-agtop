@@ -101,7 +101,6 @@ impl Client for AntigravityClient {
                     None,
                     None,
                     None,
-                    None,
                 )
             })
             .collect();

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Quota-specific helpers that don't belong on `App` itself.
 
 use agtop_core::quota::{ProviderId, Usage, UsageWindow};

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! "Config" tab: client enable/disable + column visibility/order editor.
 //!
 //! Two sections, each a Table widget. Cursor navigates both as one

@@ -21,7 +21,7 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Upper bound on how many recent transcripts we scan for synthetic
@@ -248,18 +248,59 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn state_from_claude_record(v: &serde_json::Value) -> Option<(String, String)> {
+/// Extract the current action (latest tool call) from a set of JSONL records.
+/// Returns a human-readable label like "Bash: cargo test" or "Write: src/main.rs".
+fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
+    for rec in records.iter().rev() {
+        let Some(msg) = rec.get("message") else { continue };
+        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else { continue };
+        for block in content.iter().rev() {
+            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+                let input = block.get("input");
+                let arg = input
+                    .and_then(|i| {
+                        i.get("command")
+                            .or_else(|| i.get("file_path"))
+                            .or_else(|| i.get("description"))
+                    })
+                    .and_then(|v| v.as_str())
+                    .map(|s| {
+                        let mut s = s.to_string();
+                        if s.len() > 40 {
+                            s.truncate(40);
+                            s.push('…');
+                        }
+                        s
+                    });
+                return Some(match arg {
+                    Some(a) => format!("{tool}: {a}"),
+                    None => tool.to_string(),
+                });
+            }
+        }
+        // Stop scanning at the first assistant message (the latest turn).
+        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+            return None;
+        }
+    }
+    None
+}
+
+fn parser_state_from_claude_record(v: &serde_json::Value) -> Option<(ParserState, String)> {
     match v
         .get("message")
         .and_then(|m| m.get("stop_reason"))
         .and_then(|x| x.as_str())
     {
+        // tool_use: agent dispatched a tool call — still mid-turn (Running).
         Some("tool_use") => Some((
-            "waiting".to_string(),
+            ParserState::Running,
             "assistant.stop_reason=tool_use".to_string(),
         )),
+        // end_turn: agent finished its turn cleanly — awaiting user (Idle).
         Some("end_turn") => Some((
-            "stopped".to_string(),
+            ParserState::Idle,
             "assistant.stop_reason=end_turn".to_string(),
         )),
         _ => None,
@@ -406,9 +447,9 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut earliest: Option<DateTime<Utc>> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
-    let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
+    let mut parser_state: ParserState = ParserState::default();
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
@@ -442,8 +483,8 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
                 }
             }
         }
-        if let Some((next_state, detail)) = state_from_claude_record(v) {
-            state = Some(next_state);
+        if let Some((next_parser_state, detail)) = parser_state_from_claude_record(v) {
+            parser_state = next_parser_state;
             state_detail = Some(detail);
         }
         // Claude Code writes an "ai-title" record with an AI-generated session summary.
@@ -464,7 +505,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
-        state,
+        parser_state,
         state_detail,
         model_effort: None,
         model_effort_detail: None,
@@ -482,6 +523,18 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut context_used_pct: Option<f64> = None;
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
+
+    // Collect records for current_action extraction (only for running/waiting sessions).
+    let mut all_records: Vec<serde_json::Value> = Vec::new();
+    let should_extract_action = matches!(
+        summary.parser_state,
+        ParserState::Running | ParserState::Waiting(_) | ParserState::Unknown
+    );
+    if should_extract_action {
+        let _ = for_each_jsonl(path, |v| {
+            all_records.push(v.clone());
+        });
+    }
 
     // Helper to merge a FileTotals' context peak into our running max.
     let mut merge_context = |ft: &FileTotals| {
@@ -557,6 +610,8 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         liveness: None,
         match_confidence: None,
         process_metrics: None,
+        session_state: None,
+        current_action: current_action_from_records(&all_records),
     })
 }
 
@@ -831,16 +886,24 @@ mod tests {
     }
 
     #[test]
-    fn assistant_stop_reason_tool_use_maps_to_waiting() {
+    fn tool_use_maps_to_running() {
         let v = serde_json::json!({
             "message": { "stop_reason": "tool_use" }
         });
         assert_eq!(
-            state_from_claude_record(&v),
-            Some((
-                "waiting".to_string(),
-                "assistant.stop_reason=tool_use".to_string(),
-            ))
+            parser_state_from_claude_record(&v),
+            Some((ParserState::Running, "assistant.stop_reason=tool_use".to_string()))
+        );
+    }
+
+    #[test]
+    fn end_turn_maps_to_idle() {
+        let v = serde_json::json!({
+            "message": { "stop_reason": "end_turn" }
+        });
+        assert_eq!(
+            parser_state_from_claude_record(&v),
+            Some((ParserState::Idle, "assistant.stop_reason=end_turn".to_string()))
         );
     }
 
@@ -1067,7 +1130,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
 
         let children = crate::client::Client::children(&client, &parent).unwrap();
@@ -1115,7 +1177,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
 
         let children = crate::client::Client::children(&client, &parent).unwrap();
@@ -1126,11 +1187,42 @@ mod tests {
         assert_eq!(child.session_id, "subagent-child");
         assert_eq!(child.model.as_deref(), Some("claude-3-5-haiku-20241022"));
         assert_eq!(child.cwd.as_deref(), Some("/tmp/subagent"));
-        assert_eq!(child.state.as_deref(), Some("stopped"));
+        assert_eq!(child.parser_state, ParserState::Idle);
         assert_eq!(
             child.state_detail.as_deref(),
             Some("assistant.stop_reason=end_turn")
         );
         assert_eq!(child.data_path, child_path);
+    }
+
+    #[test]
+    fn current_action_from_records_extracts_tool_use() {
+        let records: Vec<serde_json::Value> = vec![
+            serde_json::json!({
+                "type": "user",
+                "message": {"role": "user", "content": "run tests"},
+                "timestamp": "2026-04-26T10:00:00Z"
+            }),
+            serde_json::json!({
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "Bash",
+                        "input": {"command": "cargo test", "description": "run tests"}
+                    }]
+                },
+                "timestamp": "2026-04-26T10:00:01Z"
+            }),
+        ];
+        let action = current_action_from_records(&records);
+        assert_eq!(action.as_deref(), Some("Bash: cargo test"));
+    }
+
+    #[test]
+    fn current_action_from_records_returns_none_for_empty() {
+        assert_eq!(current_action_from_records(&[]), None);
     }
 }

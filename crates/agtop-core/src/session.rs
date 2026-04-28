@@ -2,6 +2,131 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+// ---------------------------------------------------------------------------
+// SessionState — canonical 6-variant domain state
+// ---------------------------------------------------------------------------
+
+/// Canonical session state. Owned by `agtop-core`; no display-layer mapping.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
+pub enum SessionState {
+    /// Agent actively producing output or executing a tool call.
+    Running,
+    /// Agent paused waiting for user response.
+    Waiting(WaitReason),
+    /// Live but anomalous — stalled past threshold or other warning condition.
+    Warning(WarningReason),
+    /// Ended with an explicit error.
+    Error(ErrorReason),
+    /// Live, ready for input, not currently working.
+    Idle,
+    /// No live process; historical/archival.
+    Closed,
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitReason {
+    Input,
+    Permission,
+    Other(String),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningReason {
+    Stalled { since: chrono::DateTime<chrono::Utc> },
+    Other(String),
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorReason {
+    ExitCode(i32),
+    Crash,
+    ParserDetected(String),
+}
+
+/// Coarse state inferred by a per-client parser from session log content.
+///
+/// This is the *parser's* opinion of what the agent is doing based on the
+/// session file alone (e.g. "the last assistant turn ended"); it is fed
+/// into `state_resolution::resolve_state` along with OS liveness data to
+/// produce the canonical [`SessionState`].
+///
+/// Parsers MUST return a typed `ParserState` value. Callers MUST NOT
+/// inspect parser state via string matching — use this enum.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
+pub enum ParserState {
+    /// Last assistant turn ended cleanly; the agent is awaiting user input.
+    /// Maps to `SessionState::Idle` when the process is live.
+    Idle,
+    /// Agent is mid-turn — actively generating output or running a tool.
+    /// Maps to `SessionState::Running` when the process is live.
+    Running,
+    /// Agent is paused waiting for a specific kind of user response.
+    /// Maps to `SessionState::Waiting(_)` when the process is live.
+    Waiting(WaitReason),
+    /// Parser detected an explicit error in the session log
+    /// (e.g. tool execution failure, crash trace).
+    Error(ErrorReason),
+    /// Parser had no opinion. Resolution falls back to recency + liveness.
+    #[default]
+    Unknown,
+}
+
+impl SessionState {
+    /// Coarse string label (matches the outer tag in serde).
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Running    => "running",
+            Self::Waiting(_) => "waiting",
+            Self::Warning(_) => "warning",
+            Self::Error(_)   => "error",
+            Self::Idle       => "idle",
+            Self::Closed     => "closed",
+        }
+    }
+
+    /// Short label for narrow UI columns.
+    #[must_use]
+    pub const fn compact_label(&self) -> &'static str {
+        // Same as as_str for now — distinct only if a column needs <7 chars.
+        self.as_str()
+    }
+
+    /// True if the session is doing or could resume work without external input.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        matches!(self, Self::Running | Self::Idle | Self::Warning(_))
+    }
+
+    /// Returns `true` for any state other than `Closed`.
+    /// Use this when you want "is the process potentially still active?"
+    /// as opposed to `is_active()` which excludes Idle and Error.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        !matches!(self, SessionState::Closed)
+    }
+
+    /// True if the session is blocked on user response.
+    #[must_use]
+    pub const fn needs_user(&self) -> bool {
+        matches!(self, Self::Waiting(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SessionAnalysis extension: session_state field
+// ---------------------------------------------------------------------------
+
 /// Which agent produced a session.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -70,9 +195,9 @@ pub struct SessionSummary {
     pub model: Option<String>,
     /// Working directory (best-effort). Used for display labels.
     pub cwd: Option<String>,
-    /// Coarse workflow state such as `waiting` or `stopped`.
+    /// Typed parser-side state. Default: `ParserState::Unknown`.
     #[serde(default)]
-    pub state: Option<String>,
+    pub parser_state: ParserState,
     /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
@@ -124,7 +249,6 @@ impl SessionSummary {
         model: Option<String>,
         cwd: Option<String>,
         data_path: std::path::PathBuf,
-        state: Option<String>,
         state_detail: Option<String>,
         model_effort: Option<String>,
         model_effort_detail: Option<String>,
@@ -137,7 +261,7 @@ impl SessionSummary {
             last_active,
             model,
             cwd,
-            state,
+            parser_state: ParserState::default(),
             state_detail,
             model_effort,
             model_effort_detail,
@@ -243,6 +367,15 @@ pub struct SessionAnalysis {
     /// process is matched or the process has stopped.
     #[serde(default)]
     pub process_metrics: Option<crate::process::ProcessMetrics>,
+    /// Canonical domain state for this session, derived from transcript events
+    /// and liveness information. `None` when parsers haven't computed it yet
+    /// (legacy path) or during initial discovery (string-based state only).
+    #[serde(default)]
+    pub session_state: Option<SessionState>,
+    /// Latest in-flight tool call or response status, derived from session log.
+    /// `None` when the session is idle, closed, or the parser doesn't extract this.
+    #[serde(default)]
+    pub current_action: Option<String>,
 }
 
 impl SessionAnalysis {
@@ -282,6 +415,8 @@ impl SessionAnalysis {
             liveness: None,
             match_confidence: None,
             process_metrics: None,
+            session_state: None,
+            current_action: None,
         }
     }
 }
@@ -410,7 +545,6 @@ mod tests {
             "last_active": null,
             "model": null,
             "cwd": null,
-            "state": null,
             "state_detail": null,
             "model_effort": null,
             "model_effort_detail": null,
@@ -422,6 +556,46 @@ mod tests {
             serde_json::from_value(raw).expect("deserialize legacy summary");
         assert_eq!(summary.client, ClientKind::Claude);
         assert_eq!(summary.subscription.as_deref(), Some("Claude Max 5x"));
+    }
+
+    #[test]
+    fn parser_state_default_is_unknown() {
+        assert_eq!(ParserState::default(), ParserState::Unknown);
+    }
+
+    #[test]
+    fn session_summary_default_parser_state_is_unknown() {
+        let s = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "id".to_string(),
+            None,
+            None,
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/x.jsonl"),
+            None,
+            None,
+            None,
+        );
+        assert_eq!(s.parser_state, ParserState::Unknown);
+    }
+
+    #[test]
+    fn parser_state_serde_round_trip() {
+        let cases = [
+            ParserState::Idle,
+            ParserState::Running,
+            ParserState::Waiting(WaitReason::Input),
+            ParserState::Waiting(WaitReason::Permission),
+            ParserState::Error(ErrorReason::ParserDetected("boom".into())),
+            ParserState::Unknown,
+        ];
+        for c in cases {
+            let s = serde_json::to_string(&c).unwrap();
+            let back: ParserState = serde_json::from_str(&s).unwrap();
+            assert_eq!(c, back);
+        }
     }
 
     #[test]
@@ -438,5 +612,105 @@ mod tests {
         let usage: PlanUsage = serde_json::from_value(raw).expect("deserialize legacy plan usage");
         assert_eq!(usage.client, ClientKind::Codex);
         assert_eq!(usage.plan_name.as_deref(), Some("plus"));
+    }
+
+    #[cfg(test)]
+    mod state_tests {
+        use super::*;
+
+        #[test]
+        fn as_str_returns_outer_kind() {
+            assert_eq!(SessionState::Running.as_str(), "running");
+            assert_eq!(SessionState::Waiting(WaitReason::Input).as_str(), "waiting");
+            assert_eq!(SessionState::Waiting(WaitReason::Permission).as_str(), "waiting");
+            assert_eq!(SessionState::Idle.as_str(), "idle");
+            assert_eq!(SessionState::Closed.as_str(), "closed");
+        }
+
+        #[test]
+        fn serialization_is_tagged() {
+            let v = SessionState::Waiting(WaitReason::Permission);
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(
+                json,
+                serde_json::json!({"kind": "waiting", "reason": "permission"})
+            );
+        }
+
+        #[test]
+        fn warning_stalled_carries_since() {
+            let t = chrono::DateTime::parse_from_rfc3339("2026-04-26T10:00:00Z").unwrap().to_utc();
+            let v = SessionState::Warning(WarningReason::Stalled { since: t });
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(json["kind"], "warning");
+            assert!(json["reason"]["stalled"]["since"].is_string());
+        }
+
+        #[test]
+        fn error_exit_code_serializes() {
+            let v = SessionState::Error(ErrorReason::ExitCode(127));
+            let json = serde_json::to_value(&v).unwrap();
+            assert_eq!(json["kind"], "error");
+            assert_eq!(json["reason"]["exit_code"], 127);
+        }
+
+        #[test]
+        fn deserialize_round_trips() {
+            let original = SessionState::Waiting(WaitReason::Permission);
+            let s = serde_json::to_string(&original).unwrap();
+            let back: SessionState = serde_json::from_str(&s).unwrap();
+            assert_eq!(back, original);
+        }
+
+        #[test]
+        fn is_active_matches_expected_variants() {
+            assert!(SessionState::Running.is_active());
+            assert!(SessionState::Idle.is_active());
+            assert!(!SessionState::Waiting(WaitReason::Input).is_active());
+            assert!(!SessionState::Closed.is_active());
+        }
+
+        #[test]
+        fn is_live_returns_false_only_for_closed() {
+            use chrono::Utc;
+            assert!(!SessionState::Closed.is_live());
+            assert!(SessionState::Running.is_live());
+            assert!(SessionState::Idle.is_live());
+            assert!(SessionState::Waiting(WaitReason::Input).is_live());
+            assert!(SessionState::Warning(WarningReason::Stalled { since: Utc::now() }).is_live());
+        }
+
+        #[test]
+        fn session_analysis_has_current_action_field() {
+            let mut a = SessionAnalysis::new(
+                SessionSummary::new(
+                    ClientKind::Claude,
+                    None,
+                    "x".to_string(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    std::path::PathBuf::from("/tmp"),
+                    None,
+                    None,
+                    None,
+                ),
+                TokenTotals::default(),
+                CostBreakdown::default(),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            a.current_action = Some("bash: cargo test".to_string());
+            assert_eq!(a.current_action.as_deref(), Some("bash: cargo test"));
+
+            a.current_action = None;
+            assert!(a.current_action.is_none());
+        }
     }
 }

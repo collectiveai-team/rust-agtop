@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 use chrono::Utc;
 use ratatui::{
     layout::{Constraint, Direction, Layout},

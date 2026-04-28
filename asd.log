@@ -1,0 +1,4 @@
+nohup: ignoring input
+[91m[1mError: [0mUnexpected error, check log file at /home/rbarriga/.local/share/opencode/log/2026-04-27T063739.log for more details
+
+EBADF: bad file descriptor, read

@@ -39,6 +39,7 @@ pub enum RefreshMsg {
         #[allow(dead_code)]
         generation: u64,
         analyses: Vec<agtop_core::session::SessionAnalysis>,
+        #[allow(dead_code)]
         plan_usage: Vec<agtop_core::PlanUsage>,
     },
     /// Analysis failed; the last good snapshot (if any) stays in place.
@@ -46,12 +47,14 @@ pub enum RefreshMsg {
     Error {
         #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         message: String,
     },
     /// Fresh quota results from `fetch_all`.
     QuotaSnapshot {
         #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         results: Vec<ProviderResult>,
     },
     /// `fetch_all` orchestration failed before any per-provider results
@@ -59,11 +62,13 @@ pub enum RefreshMsg {
     QuotaError {
         #[allow(dead_code)]
         generation: u64,
+        #[allow(dead_code)]
         message: String,
     },
 }
 
 /// Command issued by the UI to control the quota fetch loop.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaCmd {
     /// The user entered the quota pane. Start auto-refresh.
@@ -115,6 +120,7 @@ impl RefreshHandle {
     /// Ask the worker to run one refresh ASAP, outside the normal
     /// interval. Any in-flight refresh finishes normally; the next one
     /// fires immediately after.
+    #[allow(dead_code)]
     pub fn trigger_manual(&self) {
         // Incrementing any value the worker is `changed().await`-ing on
         // wakes it up. The value itself isn't meaningful.
@@ -125,6 +131,7 @@ impl RefreshHandle {
         let _ = self.manual_tx.send(v.wrapping_add(1));
     }
 
+    #[allow(dead_code)]
     pub fn send_quota_cmd(&self, cmd: QuotaCmd) {
         let _ = self.quota_trigger_tx.send(cmd);
     }
@@ -736,7 +743,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let child_summary = SessionSummary::new(
             ClientKind::Claude,
@@ -747,7 +753,6 @@ mod tests {
             Some("claude-3".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/proj/child.jsonl"),
-            None,
             None,
             None,
             None,

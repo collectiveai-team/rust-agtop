@@ -1,3 +1,4 @@
+#![allow(dead_code, unused)]
 //! Cost-tab helpers: per-row formatting used by both the widget and tests.
 
 use agtop_core::session::{CostBreakdown, TokenTotals};

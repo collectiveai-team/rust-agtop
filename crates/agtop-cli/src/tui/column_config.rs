@@ -48,6 +48,8 @@ pub enum ColumnId {
     DiskRead,
     /// Cumulative disk bytes written by the matched process.
     DiskWritten,
+    /// Current in-flight tool/action descriptor for running sessions.
+    Action,
 }
 
 impl ColumnId {
@@ -81,6 +83,7 @@ impl ColumnId {
             ColumnId::Project,
             ColumnId::SessionName,
             ColumnId::Cwd,
+            ColumnId::Action,
         ]
     }
 
@@ -114,6 +117,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => "VSZ",
             ColumnId::DiskRead => "DISK R",
             ColumnId::DiskWritten => "DISK W",
+            ColumnId::Action => "ACTION",
         }
     }
 
@@ -147,6 +151,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => "Live virtual memory of the matched process",
             ColumnId::DiskRead => "Cumulative bytes read from disk (since process start)",
             ColumnId::DiskWritten => "Cumulative bytes written to disk (since process start)",
+            ColumnId::Action => "Current in-flight tool/action descriptor for running sessions",
         }
     }
 
@@ -181,6 +186,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => Some(7),
             ColumnId::DiskRead => Some(8),
             ColumnId::DiskWritten => Some(8),
+            ColumnId::Action => Some(20),
         }
     }
 
@@ -215,6 +221,7 @@ impl ColumnId {
             ColumnId::VirtualMemory => None,
             ColumnId::DiskRead => None,
             ColumnId::DiskWritten => None,
+            ColumnId::Action => None, // not sortable (transient string)
         }
     }
 
@@ -222,6 +229,36 @@ impl ColumnId {
     pub fn is_flexible(self) -> bool {
         self.fixed_width().is_none()
     }
+}
+
+/// Returns the spec'd default visible column set for the new Plan 2 sessions table.
+///
+/// Note: The state DOT is not a separate ColumnId — it's rendered by the sessions
+/// table component as a fixed leading cell. The textual STATE column remains
+/// available but hidden by default.
+#[must_use]
+pub fn default_visible_v2() -> Vec<ColumnId> {
+    // Note: ACTION column intentionally omitted — its content was rarely
+    // populated and its presence wasted horizontal space. The
+    // `ColumnId::Action` variant and `render_action_cell()` helper remain
+    // available for users who add it back via config.
+    //
+    // ACTIVITY (sparkline) is rendered by the table component as a
+    // dedicated visualization cell, not via ColumnId; the table inserts it
+    // after the CLIENT column.
+    vec![
+        ColumnId::Session,
+        ColumnId::Age,
+        ColumnId::Client,
+        ColumnId::Subscription,
+        ColumnId::Model,
+        ColumnId::Cpu,
+        ColumnId::Memory,
+        ColumnId::Tokens,
+        ColumnId::Cost,
+        ColumnId::Project,
+        ColumnId::SessionName,
+    ]
 }
 
 /// Returns the default visibility for a column in a fresh or migrated config.
@@ -727,5 +764,18 @@ mod cfg_client_tests {
                 id
             );
         }
+    }
+
+    #[test]
+    fn default_visible_matches_spec() {
+        let v = default_visible_v2();
+        assert_eq!(v.first(), Some(&ColumnId::Session));
+        // ACTION column intentionally omitted from default view.
+        assert!(!v.contains(&ColumnId::Action));
+        assert!(v.contains(&ColumnId::Client));
+        assert!(v.contains(&ColumnId::Subscription));
+        assert!(v.contains(&ColumnId::Cost));
+        // STATE column is hidden by default — should NOT appear.
+        assert!(!v.contains(&ColumnId::State));
     }
 }

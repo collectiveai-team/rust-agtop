@@ -24,7 +24,8 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    WaitReason,
 };
 
 /// Number of most-recently-modified rollout files to scan when looking
@@ -309,10 +310,11 @@ fn effort_from_turn_context(payload: &serde_json::Value) -> Option<(String, Stri
         })
 }
 
-fn state_from_response_item(payload: &serde_json::Value) -> Option<(String, String)> {
+fn parser_state_from_response_item(payload: &serde_json::Value) -> Option<(ParserState, String)> {
     match payload.get("type").and_then(|x| x.as_str()) {
+        // function_call / custom_tool_call: agent dispatching a tool — mid-turn (Running).
         Some("function_call") | Some("custom_tool_call") => Some((
-            "waiting".to_string(),
+            ParserState::Running,
             format!(
                 "response_item:{}",
                 payload
@@ -362,20 +364,22 @@ fn message_text_from_payload(payload: &serde_json::Value) -> Option<String> {
         })
 }
 
-fn state_from_codex_message(payload: &serde_json::Value) -> Option<(String, String)> {
+fn parser_state_from_codex_message(payload: &serde_json::Value) -> Option<(ParserState, String)> {
     if payload.get("role").and_then(|x| x.as_str()) != Some("assistant") {
         return None;
     }
     let phase = payload.get("phase").and_then(|x| x.as_str());
     let text = message_text_from_payload(payload).unwrap_or_default();
     if phase == Some("final_answer") && text.contains('?') {
+        // Ends with a question → waiting for user input.
         Some((
-            "waiting".to_string(),
+            ParserState::Waiting(WaitReason::Input),
             "response_item:assistant-question".to_string(),
         ))
     } else if phase == Some("final_answer") {
+        // Clean end-of-turn → Idle.
         Some((
-            "stopped".to_string(),
+            ParserState::Idle,
             "response_item:assistant-final".to_string(),
         ))
     } else {
@@ -590,8 +594,8 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut cwd: Option<String> = None;
     let mut model_effort: Option<String> = None;
     let mut model_effort_detail: Option<String> = None;
-    let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
+    let mut parser_state: ParserState = ParserState::default();
     let mut session_title: Option<String> = None;
     // `thread_name_updated` is the authoritative AI-generated title; once set
     // it takes precedence over any title derived from raw message content.
@@ -651,18 +655,19 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                             }
                         }
                     }
-                    if let Some((next_state, detail)) = state_from_response_item(p) {
-                        state = Some(next_state);
+                    if let Some((next_parser_state, detail)) = parser_state_from_response_item(p) {
+                        parser_state = next_parser_state.clone();
                         state_detail = Some(detail);
-                    } else if let Some((next_state, detail)) = state_from_codex_message(p) {
-                        state = Some(next_state);
+                    } else if let Some((next_parser_state, detail)) = parser_state_from_codex_message(p) {
+                        parser_state = next_parser_state.clone();
                         state_detail = Some(detail);
                     } else {
                         // A non-waiting response_item (e.g. a text output message)
                         // clears any prior "waiting" state — the tool call completed.
                         let ty = p.get("type").and_then(|x| x.as_str()).unwrap_or("");
                         if matches!(ty, "function_call_output" | "custom_tool_call_output") {
-                            state = Some("stopped".to_string());
+                            // Tool output received — agent is back to Running to process the result.
+                            parser_state = ParserState::Running;
                             state_detail = Some("response_item:tool-output".to_string());
                         }
                     }
@@ -715,7 +720,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
-        state,
+        parser_state,
         state_detail,
         model_effort,
         model_effort_detail,
@@ -879,6 +884,8 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         liveness: None,
         match_confidence: None,
         process_metrics: None,
+        session_state: None,
+        current_action: None,
     })
 }
 
@@ -1276,6 +1283,41 @@ mod tests {
         let children = client.children(parent_summary).unwrap();
         assert_eq!(children.len(), 1, "expected 1 child");
         assert_eq!(children[0].session_id, child_id);
+    }
+
+    #[test]
+    fn function_call_maps_to_running() {
+        let v = serde_json::json!({ "type": "function_call" });
+        assert_eq!(
+            parser_state_from_response_item(&v),
+            Some((ParserState::Running, "response_item:function_call".to_string()))
+        );
+    }
+
+    #[test]
+    fn final_answer_no_question_maps_to_idle() {
+        let v = serde_json::json!({
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": "Here is the result."
+        });
+        assert_eq!(
+            parser_state_from_codex_message(&v),
+            Some((ParserState::Idle, "response_item:assistant-final".to_string()))
+        );
+    }
+
+    #[test]
+    fn final_answer_with_question_maps_to_waiting_input() {
+        let v = serde_json::json!({
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": "What do you want to do next?"
+        });
+        assert_eq!(
+            parser_state_from_codex_message(&v),
+            Some((ParserState::Waiting(WaitReason::Input), "response_item:assistant-question".to_string()))
+        );
     }
 
     #[test]

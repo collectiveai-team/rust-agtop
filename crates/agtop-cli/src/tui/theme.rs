@@ -1,4 +1,6 @@
 //! Centralised style constants for the TUI.
+// Legacy theme module retained for existing tests. New code uses theme_v2.
+#![allow(dead_code, unused)]
 //!
 //! Every `Style` used in the widget layer should be defined here so that
 //! colour choices are easy to audit and change in one place. All items
