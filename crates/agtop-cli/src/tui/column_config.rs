@@ -271,6 +271,7 @@ pub fn default_visible_v2() -> Vec<ColumnId> {
         ColumnId::DiskReadRate,
         ColumnId::DiskWriteRate,
         ColumnId::Tokens,
+        ColumnId::Context,
         ColumnId::Cost,
         ColumnId::Project,
         ColumnId::SessionName,

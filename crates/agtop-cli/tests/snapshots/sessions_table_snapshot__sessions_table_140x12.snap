@@ -1,12 +1,11 @@
 ---
 source: crates/agtop-cli/tests/sessions_table_snapshot.rs
-assertion_line: 134
 expression: buffer_to_text(&buf)
 ---
-      SESSI AGE   CLIENT   ACTIVITY SUB            MODEL         CPU   MEM    R/s      W/s      TOKENS   COST$   PROJECT      NAME
-●     c2d4f 1m    codex    ⠀⠀⠀⠀⠀⠀⠀⠀                              —     —      -        -        0        —
-●     a3f2c 3m    claude-c ⠀⠀⠀⠀⠀⠀⠀⠀                              —     —      -        -        0        —
-●     f1e2d 8m    codex    ⠀⠀⠀⠀⠀⠀⠀⠀                              —     —      -        -        0        —
-●     b81e9 12m   claude-c ⠀⠀⠀⠀⠀⠀⠀⠀                              —     —      -        -        0        —
-●     d9e8a 18m   gemini-c ⠀⠀⠀⠀⠀⠀⠀⠀                              —     —      -        -        0        —
-      e5f4a 2h    copilot                                        —     —      -        -        0        —
+      SESSION AGE   CLIENT         ACTIVITY SUB              MODEL                CPU   MEM    R/s      W/s      TOKENS   CONTEXT  COST$
+●     c2d4f6a 1m    codex          ⠀⠀⠀⠀⠀⠀⠀⠀                                       —     —      -        -        0        —        —
+●     a3f2c1d 3m    claude-code    ⠀⠀⠀⠀⠀⠀⠀⠀                                       —     —      -        -        0        —        —
+●     f1e2d3c 8m    codex          ⠀⠀⠀⠀⠀⠀⠀⠀                                       —     —      -        -        0        —        —
+●     b81e940 12m   claude-code    ⠀⠀⠀⠀⠀⠀⠀⠀                                       —     —      -        -        0        —        —
+●     d9e8a7b 18m   gemini-cli     ⠀⠀⠀⠀⠀⠀⠀⠀                                       —     —      -        -        0        —        —
+      e5f4a3b 2h    copilot                                                       —     —      -        -        0        —        —

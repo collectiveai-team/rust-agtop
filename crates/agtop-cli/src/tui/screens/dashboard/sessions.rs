@@ -299,6 +299,12 @@ impl SessionsTable {
                     .clone()
                     .unwrap_or_default(),
             ),
+            ColumnId::Context => Cell::from(
+                row.analysis
+                    .context_used_pct
+                    .map(|pct| format!("{:.0}%", pct))
+                    .unwrap_or_else(|| "—".into()),
+            ),
             // Defaults for anything else.
             _ => Cell::from(""),
         }
@@ -571,10 +577,15 @@ fn width_for(col: ColumnId) -> Constraint {
         ColumnId::Model => Constraint::Length(20),
         ColumnId::Cpu => Constraint::Length(5),
         ColumnId::Memory => Constraint::Length(6),
-        ColumnId::Tokens => Constraint::Length(8),
-        ColumnId::Cost => Constraint::Length(7),
-        ColumnId::Project => Constraint::Min(12),
-        ColumnId::SessionName => Constraint::Min(14),
+            ColumnId::DiskReadRate => Constraint::Length(8),
+            ColumnId::DiskWriteRate => Constraint::Length(8),
+            ColumnId::Tokens => Constraint::Length(8),
+            ColumnId::Context => Constraint::Length(8),
+            ColumnId::Cost => Constraint::Length(7),
+            // Cap project and session-name so they don't stretch infinitely on
+            // wide terminals. Min(N) ensures the column is always at least N wide.
+            ColumnId::Project => Constraint::Max(25),
+            ColumnId::SessionName => Constraint::Max(40),
         _ => Constraint::Length(8),
     }
 }
