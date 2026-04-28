@@ -68,9 +68,18 @@ Core defines a 6-variant `SessionState` enum:
 The TUI maps state → style via `widgets::state_style` (color, pulse, label).
 No `DisplayState` enum exists — the TUI reads `&SessionState` directly.
 
-State resolution (`state_resolution::resolve_state`) converts string-based
-parser output into the canonical `SessionState` enum with configurable
-stall threshold via `resolve_state_with_threshold`.
+Each client parser writes a typed `ParserState` (`Idle | Running |
+Waiting(WaitReason) | Error(ErrorReason) | Unknown`) to
+`SessionSummary::parser_state`.  State resolution
+(`state_resolution::resolve_state`) converts `(ParserState, Option<Liveness>,
+Option<DateTime<Utc>>, DateTime<Utc>)` into the canonical `SessionState`
+enum.  This is the **single derivation site** — `refresh_adapter` calls it in
+`normalize_analysis`; there is no other place that derives `SessionState`.
+A configurable stall threshold variant is available via
+`resolve_state_with_threshold`.
+
+The `agtop json` output field `display_state` reflects `SessionState::as_str()`
+(canonical vocabulary: `running / idle / waiting / warning / closed / error`).
 
 ## Iconography (T0/T1/T2)
 
