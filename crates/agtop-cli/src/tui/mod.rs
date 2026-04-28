@@ -150,6 +150,7 @@ pub fn run(
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
+        false,
     )
     .context("spawn background refresh worker")?;
     let mut app = App::new();
@@ -819,6 +820,7 @@ pub fn run_v2(
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
+        false,
     )
     .context("spawn background refresh worker")?;
 

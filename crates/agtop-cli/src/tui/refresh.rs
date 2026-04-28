@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -27,6 +27,8 @@ use agtop_core::session::SessionAnalysis;
 use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
+
+use crate::tui::session_cache::{CacheKey, SessionCache as SqliteSessionCache};
 
 /// Message the UI consumes from the refresh task.
 #[derive(Debug, Clone)]
@@ -197,6 +199,7 @@ pub fn spawn(
     enabled: Arc<RwLock<HashSet<ClientKind>>>,
     plan: Plan,
     interval: Duration,
+    no_cache: bool,
 ) -> std::io::Result<RefreshHandle> {
     let interval = if interval.is_zero() {
         Duration::from_secs(1)
@@ -230,7 +233,7 @@ pub fn spawn(
     // For now, hold a keepalive clone in scope so the receiver doesn't
     // observe a closed channel.
     let (stream_tx, stream_rx) = tokio::sync::mpsc::unbounded_channel::<RefreshMsg>();
-    let _stream_tx_keepalive = stream_tx;
+    let stream_tx_worker = stream_tx;
 
     let clients_arc = clients.clone();
     // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
@@ -256,6 +259,7 @@ pub fn spawn(
         let mut plan_cache_key: Option<u64> = None;
         let mut plan_cache_val: Vec<agtop_core::PlanUsage> = Vec::new();
         let mut correlator = ProcessCorrelator::new();
+        let mut is_first_iteration = true;
         loop {
             // Check shutdown flag before starting any new analysis.
             if shutdown_worker.load(Ordering::Acquire) {
@@ -280,74 +284,104 @@ pub fn spawn(
                 .collect();
 
             generation = generation.wrapping_add(1);
-            // Move the caches into the blocking task; recover them in the result.
-            let cache_in = std::mem::take(&mut session_cache);
-            let project_cache_in = std::mem::take(&mut project_name_cache);
-            let plan_cache_key_in = plan_cache_key;
-            let plan_cache_val_in = plan_cache_val.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                let summaries = discover_all(&live);
-                let (analyses, cache_out, project_cache_out) =
-                    cached_analyze_all(&live, &summaries, plan, cache_in, project_cache_in);
 
-                let new_key = hash_summaries_for_cache(&summaries);
-                let (plan_usage, new_cache_key, new_cache_val) =
-                    if Some(new_key) == plan_cache_key_in {
-                        // Summaries unchanged — reuse cached plan usage.
-                        (
-                            plan_cache_val_in.clone(),
-                            plan_cache_key_in,
-                            plan_cache_val_in,
-                        )
-                    } else {
-                        let v = plan_usage_all_from_summaries(&live, &summaries);
-                        (v.clone(), Some(new_key), v)
-                    };
-
-                (
-                    analyses,
-                    plan_usage,
-                    cache_out,
-                    project_cache_out,
-                    new_cache_key,
-                    new_cache_val,
+            if is_first_iteration {
+                // Streaming startup pipeline (Task 3): cache lookup + concurrent miss analysis.
+                run_streaming_initial_load(
+                    &live,
+                    plan,
+                    no_cache,
+                    generation,
+                    &tx,
+                    &stream_tx_worker,
+                    &mut correlator,
                 )
-            })
-            .await;
-            let msg = match result {
-                Ok((mut analyses, plan_usage, cache_out, project_cache_out, new_key, new_val)) => {
-                    session_cache = cache_out;
-                    project_name_cache = project_cache_out;
-                    plan_cache_key = new_key;
-                    plan_cache_val = new_val;
+                .await;
+                is_first_iteration = false;
+            } else {
+                // Periodic refresh path (unchanged from before Task 3).
+                let cache_in = std::mem::take(&mut session_cache);
+                let project_cache_in = std::mem::take(&mut project_name_cache);
+                let plan_cache_key_in = plan_cache_key;
+                let plan_cache_val_in = plan_cache_val.clone();
+                let live_for_blocking = live.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    let summaries = discover_all(&live_for_blocking);
+                    let (analyses, cache_out, project_cache_out) = cached_analyze_all(
+                        &live_for_blocking,
+                        &summaries,
+                        plan,
+                        cache_in,
+                        project_cache_in,
+                    );
 
-                    // Attach OS-process info, propagating each parent's
-                    // PID to its subagents (which run in-process within
-                    // the parent CLI). See process::attach_process_info.
-                    let summaries: Vec<_> = analyses.iter().map(|a| a.summary.clone()).collect();
-                    let info_map = correlator.snapshot(&summaries);
-                    agtop_core::process::attach_process_info(&info_map, &mut analyses);
+                    let new_key = hash_summaries_for_cache(&summaries);
+                    let (plan_usage, new_cache_key, new_cache_val) =
+                        if Some(new_key) == plan_cache_key_in {
+                            // Summaries unchanged — reuse cached plan usage.
+                            (
+                                plan_cache_val_in.clone(),
+                                plan_cache_key_in,
+                                plan_cache_val_in,
+                            )
+                        } else {
+                            let v = plan_usage_all_from_summaries(&live_for_blocking, &summaries);
+                            (v.clone(), Some(new_key), v)
+                        };
 
-                    RefreshMsg::Snapshot {
-                        generation,
+                    (
                         analyses,
                         plan_usage,
+                        cache_out,
+                        project_cache_out,
+                        new_cache_key,
+                        new_cache_val,
+                    )
+                })
+                .await;
+                let msg = match result {
+                    Ok((
+                        mut analyses,
+                        plan_usage,
+                        cache_out,
+                        project_cache_out,
+                        new_key,
+                        new_val,
+                    )) => {
+                        session_cache = cache_out;
+                        project_name_cache = project_cache_out;
+                        plan_cache_key = new_key;
+                        plan_cache_val = new_val;
+
+                        // Attach OS-process info, propagating each parent's
+                        // PID to its subagents (which run in-process within
+                        // the parent CLI). See process::attach_process_info.
+                        let summaries: Vec<_> =
+                            analyses.iter().map(|a| a.summary.clone()).collect();
+                        let info_map = correlator.snapshot(&summaries);
+                        agtop_core::process::attach_process_info(&info_map, &mut analyses);
+
+                        RefreshMsg::Snapshot {
+                            generation,
+                            analyses,
+                            plan_usage,
+                        }
                     }
-                }
-                Err(e) => {
-                    // Cache was moved into the panicking task and is lost.
-                    // session_cache is already an empty HashMap (from mem::take),
-                    // so the next cycle rebuilds cleanly.
-                    RefreshMsg::Error {
-                        generation,
-                        message: format!("analyze_all panicked: {e}"),
+                    Err(e) => {
+                        // Cache was moved into the panicking task and is lost.
+                        // session_cache is already an empty HashMap (from mem::take),
+                        // so the next cycle rebuilds cleanly.
+                        RefreshMsg::Error {
+                            generation,
+                            message: format!("analyze_all panicked: {e}"),
+                        }
                     }
+                };
+                // `send` only errors when all receivers are dropped, which
+                // means the UI is gone and we should exit.
+                if tx.send(msg).is_err() {
+                    break;
                 }
-            };
-            // `send` only errors when all receivers are dropped, which
-            // means the UI is gone and we should exit.
-            if tx.send(msg).is_err() {
-                break;
             }
 
             let work_elapsed = iter_started.elapsed();
@@ -602,6 +636,183 @@ fn cached_analyze_all(
     (out, cache, project_cache)
 }
 
+/// Phase 1 (cache lookup) + Phase 2 (concurrent re-analysis) streaming.
+///
+/// Phase 1: open the SQLite cache, partition `discover_all`'s output into
+/// hits + misses, send the hits as an immediate `RefreshMsg::Snapshot` on
+/// the watch channel so the UI paints cached rows within ~100ms.
+///
+/// Phase 2: spawn one `spawn_blocking` task per miss, bounded by an
+/// 8-permit semaphore. Each task analyses, attaches children, resolves
+/// project_name, writes to SQLite, and emits `SessionAdded` +
+/// `AnalysisProgress` on the streaming mpsc channel. After all tasks
+/// complete, emits `AnalysisComplete`.
+///
+/// Match the spec's Non-Goal #3: this only runs on the *first* worker
+/// iteration; subsequent cycles use the existing `cached_analyze_all`
+/// periodic path.
+#[allow(clippy::too_many_arguments)]
+async fn run_streaming_initial_load(
+    live: &[Arc<dyn Client>],
+    plan: Plan,
+    no_cache: bool,
+    generation: u64,
+    tx: &watch::Sender<RefreshMsg>,
+    stream_tx: &tokio::sync::mpsc::UnboundedSender<RefreshMsg>,
+    correlator: &mut agtop_core::process::ProcessCorrelator,
+) {
+    // ── Phase 1: discover + cache lookup (blocking; ~100ms target) ──
+    let live_owned: Vec<Arc<dyn Client>> = live.to_vec();
+    let phase1 = tokio::task::spawn_blocking(move || {
+        let summaries = discover_all(&live_owned);
+        let cache = match SqliteSessionCache::open(no_cache) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!("session_cache open failed: {e}; treating all sessions as misses");
+                None
+            }
+        };
+        let mut hits: Vec<SessionAnalysis> = Vec::new();
+        let mut misses: Vec<agtop_core::session::SessionSummary> = Vec::new();
+        if let Some(ref c) = cache {
+            for summary in &summaries {
+                let key = CacheKey {
+                    client: summary.client,
+                    session_id: summary.session_id.clone(),
+                    last_active: summary.last_active,
+                };
+                if let Some(a) = c.lookup(&key) {
+                    hits.push(a);
+                } else {
+                    misses.push(summary.clone());
+                }
+            }
+        } else {
+            misses = summaries.clone();
+        }
+        // plan_usage is computed over ALL summaries (hits + misses) so
+        // window totals reflect the full session set, not just cache hits.
+        let plan_usage = plan_usage_all_from_summaries(&live_owned, &summaries);
+        (hits, misses, plan_usage)
+    })
+    .await;
+
+    let (mut hits, misses, plan_usage) = match phase1 {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!("phase1 spawn_blocking panicked: {e}");
+            // Send a minimal Snapshot so the UI doesn't sit on "loading…" forever.
+            let _ = tx.send(RefreshMsg::Snapshot {
+                generation,
+                analyses: Vec::new(),
+                plan_usage: Vec::new(),
+            });
+            let _ = stream_tx.send(RefreshMsg::AnalysisComplete);
+            return;
+        }
+    };
+
+    // Attach process info to cache hits so live PIDs/liveness show on first paint.
+    let hit_summaries: Vec<_> = hits.iter().map(|a| a.summary.clone()).collect();
+    let info_map = correlator.snapshot(&hit_summaries);
+    agtop_core::process::attach_process_info(&info_map, &mut hits);
+
+    let miss_count = misses.len();
+    let _ = tx.send(RefreshMsg::Snapshot {
+        generation,
+        analyses: hits,
+        plan_usage,
+    });
+
+    if miss_count == 0 {
+        let _ = stream_tx.send(RefreshMsg::AnalysisComplete);
+        return;
+    }
+
+    let _ = stream_tx.send(RefreshMsg::AnalysisProgress {
+        done: 0,
+        total: miss_count,
+    });
+
+    // ── Phase 2: stream cache misses with bounded concurrency ──
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let done_counter = std::sync::Arc::new(AtomicUsize::new(0));
+    let total = miss_count;
+
+    let mut handles = Vec::with_capacity(misses.len());
+    for summary in misses {
+        // Acquire-then-spawn ensures we never have more than 8 in-flight
+        // analysers. The permit moves into the spawned task and releases
+        // on drop when the task finishes.
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(p) => p,
+            Err(_) => break, // semaphore closed -> shutdown
+        };
+        let client = match live.iter().find(|c| c.kind() == summary.client).cloned() {
+            Some(c) => c,
+            None => {
+                drop(permit);
+                continue;
+            }
+        };
+        let stream_tx_t = stream_tx.clone();
+        let done_ctr = done_counter.clone();
+        let plan_t = plan;
+
+        handles.push(tokio::task::spawn_blocking(move || {
+            let _permit = permit; // released on drop
+
+            let mut analysis = match client.analyze(&summary, plan_t) {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(
+                        session = %summary.session_id,
+                        "phase2 analyze failed: {e}"
+                    );
+                    return;
+                }
+            };
+
+            // Children: best-effort, errors logged at debug.
+            if let Ok(child_summaries) = client.children(&summary) {
+                for child_summary in &child_summaries {
+                    if let Ok(child_analysis) = client.analyze(child_summary, plan_t) {
+                        analysis.children.push(child_analysis);
+                    }
+                }
+                analysis.subagent_file_count = child_summaries.len();
+            }
+
+            // Project name resolution (best-effort).
+            if analysis.project_name.is_none() {
+                if let Some(cwd) = &summary.cwd {
+                    let path = std::path::PathBuf::from(cwd);
+                    analysis.project_name = agtop_core::project::resolve_project_name(&path);
+                }
+            }
+
+            // Persist to SQLite cache (writes happen even with no_cache=true,
+            // matching spec behaviour: reads are skipped, writes still occur).
+            if let Ok(cache) = SqliteSessionCache::open(no_cache) {
+                let _ = cache.store(&analysis);
+            }
+
+            // Stream result + progress to UI.
+            let done = done_ctr.fetch_add(1, Ordering::Relaxed) + 1;
+            let _ = stream_tx_t.send(RefreshMsg::SessionAdded(analysis));
+            let _ = stream_tx_t.send(RefreshMsg::AnalysisProgress { done, total });
+        }));
+    }
+
+    // Await all Phase 2 tasks. We don't care about per-task `JoinHandle` errors
+    // beyond the warn already emitted above.
+    for h in handles {
+        let _ = h.await;
+    }
+
+    let _ = stream_tx.send(RefreshMsg::AnalysisComplete);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,7 +841,8 @@ mod tests {
                 .collect::<HashSet<_>>(),
         ));
         let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50), false)
+                .expect("spawn worker");
 
         // Poll up to ~5s for a non-loading message.
         let start = std::time::Instant::now();
@@ -700,8 +912,14 @@ mod tests {
         ));
 
         // Very short interval (10ms) — work time (300ms) should dominate.
-        let _handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(10)).expect("spawn");
+        let _handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(10),
+            false,
+        )
+        .expect("spawn");
 
         // Run for ~1s. Without adaptive sleep: ≥3 calls (300ms each, back-to-back).
         // With adaptive sleep (wait = max(10ms, 600ms) = 600ms): ~1 call.
@@ -725,7 +943,8 @@ mod tests {
         let enabled: Arc<RwLock<HashSet<ClientKind>>> = Arc::new(RwLock::new(HashSet::new()));
 
         let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50)).expect("spawn worker");
+            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50), false)
+                .expect("spawn worker");
 
         // Poll for up to 2s. With zero clients + empty enabled set, we
         // should still get an initial Snapshot message (an empty one).
@@ -861,8 +1080,14 @@ mod tests {
         use std::sync::{Arc, RwLock};
         let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled = Arc::new(RwLock::new(HashSet::new()));
-        let handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+        let handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(100),
+            false,
+        )
+        .expect("spawn");
         handle.send_quota_cmd(QuotaCmd::Stop);
     }
 
@@ -894,7 +1119,7 @@ mod tests {
         let enabled = Arc::new(RwLock::new(HashSet::new()));
         // Long interval → any extra snapshot must come from a manual trigger.
         let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_secs(120)).expect("spawn");
+            spawn(clients, enabled, Plan::Retail, Duration::from_secs(120), false).expect("spawn");
 
         handle.send_quota_cmd(QuotaCmd::Start);
 
@@ -935,8 +1160,14 @@ mod tests {
         // an empty Vec which is still a valid QuotaSnapshot.
         let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled = Arc::new(RwLock::new(HashSet::new()));
-        let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+        let mut handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(100),
+            false,
+        )
+        .expect("spawn");
 
         handle.send_quota_cmd(QuotaCmd::Start);
 
@@ -965,8 +1196,14 @@ mod tests {
         // very quickly. We use that to verify the Stop command halts the loop.
         let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled = Arc::new(RwLock::new(HashSet::new()));
-        let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(100)).expect("spawn");
+        let mut handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(100),
+            false,
+        )
+        .expect("spawn");
 
         handle.send_quota_cmd(QuotaCmd::Start);
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
