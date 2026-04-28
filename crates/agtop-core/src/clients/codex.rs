@@ -888,11 +888,9 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         process_metrics: None,
         session_state: None,
         current_action: None,
+        recent_messages: Vec::new(),
     })
 }
-
-// ---------------------------------------------------------------------------
-// Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

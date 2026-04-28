@@ -836,6 +836,7 @@ pub fn run_v2(
                             &mut app.aggregation,
                             refresh_interval.as_secs(),
                         );
+                        app.dashboard.sync_info_selection();
                     }
                     refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
                         app.dashboard.quota.apply_results(&results);

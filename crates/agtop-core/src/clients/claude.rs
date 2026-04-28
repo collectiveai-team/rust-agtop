@@ -616,6 +616,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         process_metrics: None,
         session_state: None,
         current_action: current_action_from_records(&all_records),
+        recent_messages: Vec::new(),
     })
 }
 

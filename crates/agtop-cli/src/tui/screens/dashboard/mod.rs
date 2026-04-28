@@ -3,8 +3,12 @@
 #![allow(dead_code)]
 
 pub mod header;
+// Legacy tab modules — kept for historical reference but no longer used.
+// info_costs, info_general, info_process were replaced by info_details.
 pub mod info_costs;
+pub mod info_details;
 pub mod info_drawer;
+pub mod info_format;
 pub mod info_general;
 pub mod info_process;
 pub mod info_summary;
@@ -84,17 +88,20 @@ impl DashboardState {
             return Some(m);
         }
         if let Some(m) = self.sessions.handle_event(event) {
-            // Sync the drawer's selected row whenever the table selection changes.
-            let row = self
-                .sessions
-                .state
-                .selected()
-                .and_then(|i| self.sessions.rows.get(i))
-                .cloned();
-            self.info.set_row(row);
+            self.sync_info_selection();
             return Some(m);
         }
         None
+    }
+
+    pub fn sync_info_selection(&mut self) {
+        let row = self
+            .sessions
+            .state
+            .selected()
+            .and_then(|i| self.sessions.rows.get(i))
+            .cloned();
+        self.info.set_row(row);
     }
 }
 
