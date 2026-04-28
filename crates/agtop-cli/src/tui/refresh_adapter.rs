@@ -5,6 +5,8 @@
 // Foundation code for Plans 2-4.
 #![allow(dead_code)]
 
+use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+
 use agtop_core::session::{SessionAnalysis, SessionState};
 
 use crate::tui::screens::aggregation::AggregationState;
@@ -114,6 +116,11 @@ pub fn apply_analyses(
         header.mem_used_bytes = total_mem;
     }
 
+    // Populate total system RAM once (it never changes at runtime).
+    if header.mem_total_bytes == 0 {
+        header.mem_total_bytes = read_total_memory_bytes();
+    }
+
     // --- Aggregation ---
     aggregation.sessions = normalized;
     aggregation.recompute();
@@ -137,6 +144,14 @@ fn count_today(analyses: &[SessionAnalysis]) -> usize {
                 .unwrap_or(false)
         })
         .count()
+}
+
+/// Read total system physical RAM via sysinfo. Returns 0 on failure.
+fn read_total_memory_bytes() -> u64 {
+    let sys = System::new_with_specifics(
+        RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+    );
+    sys.total_memory()
 }
 
 fn normalize_analysis(analysis: &SessionAnalysis) -> SessionAnalysis {

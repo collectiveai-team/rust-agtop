@@ -28,6 +28,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "sysinfo",
  "tokio",
  "tracing",
  "tracing-subscriber",

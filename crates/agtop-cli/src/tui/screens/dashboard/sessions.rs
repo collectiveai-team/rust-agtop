@@ -160,6 +160,7 @@ impl SessionsTable {
             .highlight_symbol("▶ ");
         let mut state = self.state.clone();
         frame.render_stateful_widget(table, area, &mut state);
+        *self.state.offset_mut() = state.offset();
     }
 
     fn render_row<'a>(
@@ -509,7 +510,11 @@ impl SessionsTable {
                     // Header row — ignore (sort-by-header not implemented in v2 yet).
                     return Some(Msg::Noop);
                 }
-                let data_idx = (rel as usize).saturating_sub(1);
+                // The visible first data row corresponds to the scroll offset stored in
+                // TableState. We must add that offset so that clicking a row while
+                // scrolled down selects the correct underlying data index.
+                let visible_idx = (rel as usize).saturating_sub(1);
+                let data_idx = self.state.offset() + visible_idx;
                 if data_idx < self.rows.len() {
                     self.state.select(Some(data_idx));
                 }
@@ -524,7 +529,7 @@ impl SessionsTable {
             return;
         }
         let cur = self.state.selected().unwrap_or(0) as i32;
-        let next = (cur + delta).rem_euclid(self.rows.len() as i32) as usize;
+        let next = (cur + delta).clamp(0, self.rows.len() as i32 - 1) as usize;
         self.state.select(Some(next));
     }
 
@@ -706,6 +711,37 @@ mod tests {
     }
 
     #[test]
+    fn left_click_while_scrolled_selects_correct_data_index() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        let mut t = SessionsTable {
+            rows: vec![
+                mock_row("a"),
+                mock_row("b"),
+                mock_row("c"),
+                mock_row("d"),
+                mock_row("e"),
+            ],
+            ..SessionsTable::default()
+        };
+        t.table_area = ratatui::layout::Rect::new(0, 0, 140, 12);
+        // Simulate the user having scrolled down so that data row 3 ("d") is the first visible.
+        *t.state.offset_mut() = 3;
+        // Click on the first visible data row (terminal row 1, which maps to data index 3).
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(
+            t.state.selected(),
+            Some(3),
+            "clicking first visible row when scrolled should select the correct data index"
+        );
+    }
+
+    #[test]
     fn left_click_outside_table_does_nothing() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut t = SessionsTable {
@@ -836,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn up_wraps_from_zero() {
+    fn up_clamps_at_zero() {
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
         let mut t = SessionsTable {
             rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
@@ -850,8 +886,8 @@ mod tests {
             state: KeyEventState::NONE,
         });
         t.handle_event(&ev);
-        // Should wrap to last row.
-        assert_eq!(t.state.selected(), Some(2));
+        // Should stay at index 0 (no wrap).
+        assert_eq!(t.state.selected(), Some(0));
     }
 
     #[test]
@@ -952,6 +988,67 @@ mod tests {
         assert!(
             last_prefix.contains("└──"),
             "last child must render with `└──` glyph; got: {last_prefix:?}"
+        );
+    }
+
+    #[test]
+    fn render_persist_offset_after_selecting_row_beyond_viewport() {
+        use crate::tui::theme_v2::vscode_dark_plus;
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let theme = vscode_dark_plus::theme();
+        let rows: Vec<SessionRow> = (0..50).map(|i| mock_row(&format!("r{i:02}"))).collect();
+        let mut t = SessionsTable {
+            rows,
+            ..SessionsTable::default()
+        };
+        t.state.select(Some(40));
+
+        let area = Rect::new(0, 0, 160, 10);
+        let mut term = Terminal::new(TestBackend::new(160, 10)).unwrap();
+        term.draw(|f| t.render(f, area, &theme)).unwrap();
+
+        assert!(
+            t.state.offset() > 0,
+            "offset should be > 0 after rendering with selection at row 40 in a 10-row viewport, got {}",
+            t.state.offset(),
+        );
+    }
+
+    #[test]
+    fn click_first_visible_row_after_scroll_render_selects_correct_index() {
+        use crate::tui::theme_v2::vscode_dark_plus;
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let theme = vscode_dark_plus::theme();
+        let rows: Vec<SessionRow> = (0..50).map(|i| mock_row(&format!("r{i:02}"))).collect();
+        let mut t = SessionsTable {
+            rows,
+            ..SessionsTable::default()
+        };
+        t.state.select(Some(40));
+
+        let area = Rect::new(0, 0, 160, 10);
+        let mut term = Terminal::new(TestBackend::new(160, 10)).unwrap();
+        term.draw(|f| t.render(f, area, &theme)).unwrap();
+
+        let offset = t.state.offset();
+        assert!(offset > 0, "prerequisite: offset must be > 0 after render");
+
+        let ev = AppEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        t.handle_event(&ev);
+        assert_eq!(
+            t.state.selected(),
+            Some(offset),
+            "clicking first visible data row should select data index at offset ({offset}), not 0"
         );
     }
 
