@@ -287,18 +287,20 @@ fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> 
     None
 }
 
-fn state_from_claude_record(v: &serde_json::Value) -> Option<(String, String)> {
+fn parser_state_from_claude_record(v: &serde_json::Value) -> Option<(ParserState, String)> {
     match v
         .get("message")
         .and_then(|m| m.get("stop_reason"))
         .and_then(|x| x.as_str())
     {
+        // tool_use: agent dispatched a tool call — still mid-turn (Running).
         Some("tool_use") => Some((
-            "waiting".to_string(),
+            ParserState::Running,
             "assistant.stop_reason=tool_use".to_string(),
         )),
+        // end_turn: agent finished its turn cleanly — awaiting user (Idle).
         Some("end_turn") => Some((
-            "stopped".to_string(),
+            ParserState::Idle,
             "assistant.stop_reason=end_turn".to_string(),
         )),
         _ => None,
@@ -448,6 +450,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
+    let mut parser_state: ParserState = ParserState::default();
     let mut seen = 0usize;
 
     for_each_jsonl(path, |v| {
@@ -481,8 +484,14 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
                 }
             }
         }
-        if let Some((next_state, detail)) = state_from_claude_record(v) {
-            state = Some(next_state);
+        if let Some((next_parser_state, detail)) = parser_state_from_claude_record(v) {
+            // Update legacy string state for backward compat (removed in B7).
+            state = Some(match next_parser_state {
+                ParserState::Running => "running".to_string(),
+                ParserState::Idle => "stopped".to_string(),
+                _ => "unknown".to_string(),
+            });
+            parser_state = next_parser_state;
             state_detail = Some(detail);
         }
         // Claude Code writes an "ai-title" record with an AI-generated session summary.
@@ -504,7 +513,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         model,
         cwd,
         state,
-        parser_state: ParserState::default(),
+        parser_state,
         state_detail,
         model_effort: None,
         model_effort_detail: None,
@@ -526,8 +535,8 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     // Collect records for current_action extraction (only for running/waiting sessions).
     let mut all_records: Vec<serde_json::Value> = Vec::new();
     let should_extract_action = matches!(
-        summary.state.as_deref(),
-        Some("waiting") | Some("running") | None
+        summary.parser_state,
+        ParserState::Running | ParserState::Waiting(_) | ParserState::Unknown
     );
     if should_extract_action {
         let _ = for_each_jsonl(path, |v| {
@@ -885,16 +894,24 @@ mod tests {
     }
 
     #[test]
-    fn assistant_stop_reason_tool_use_maps_to_waiting() {
+    fn tool_use_maps_to_running() {
         let v = serde_json::json!({
             "message": { "stop_reason": "tool_use" }
         });
         assert_eq!(
-            state_from_claude_record(&v),
-            Some((
-                "waiting".to_string(),
-                "assistant.stop_reason=tool_use".to_string(),
-            ))
+            parser_state_from_claude_record(&v),
+            Some((ParserState::Running, "assistant.stop_reason=tool_use".to_string()))
+        );
+    }
+
+    #[test]
+    fn end_turn_maps_to_idle() {
+        let v = serde_json::json!({
+            "message": { "stop_reason": "end_turn" }
+        });
+        assert_eq!(
+            parser_state_from_claude_record(&v),
+            Some((ParserState::Idle, "assistant.stop_reason=end_turn".to_string()))
         );
     }
 
