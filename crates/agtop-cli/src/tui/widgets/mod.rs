@@ -18,7 +18,6 @@ pub mod quota_bar;
 pub mod quota_tab;
 pub mod session_table;
 pub mod sparkline_braille;
-pub mod state_display;
 pub mod state_dot;
 pub mod state_style;
 
