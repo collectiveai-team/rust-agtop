@@ -65,6 +65,17 @@ pub enum RefreshMsg {
         #[allow(dead_code)]
         message: String,
     },
+    /// A single session analysis completed during streaming initial load.
+    SessionAdded(#[allow(dead_code)] agtop_core::session::SessionAnalysis),
+    /// Progress counter for streaming initial load.
+    AnalysisProgress {
+        #[allow(dead_code)]
+        done: usize,
+        #[allow(dead_code)]
+        total: usize,
+    },
+    /// All cache-miss sessions have been analyzed; streaming is complete.
+    AnalysisComplete,
 }
 
 /// Command issued by the UI to control the quota fetch loop.
@@ -85,6 +96,11 @@ pub struct RefreshHandle {
     rx: watch::Receiver<RefreshMsg>,
     manual_tx: watch::Sender<u64>,
     quota_trigger_tx: watch::Sender<QuotaCmd>,
+    /// Streaming messages from the Phase 2 pipeline (added by Task 2).
+    /// `pub` so consumers in `mod.rs` can call `try_recv_stream`. Made
+    /// public-via-method only — the field itself stays crate-private here
+    /// because `RefreshHandle` lives in this module.
+    stream_rx: tokio::sync::mpsc::UnboundedReceiver<RefreshMsg>,
     /// Signals the worker loop to stop after the current iteration.
     /// Set to `true` before we drop the runtime so the worker doesn't
     /// start another `analyze_all` call while the runtime is shutting down.
@@ -115,6 +131,12 @@ impl RefreshHandle {
         } else {
             None
         }
+    }
+
+    /// Drain one streaming message (`SessionAdded` / `AnalysisProgress` / `AnalysisComplete`).
+    /// Returns `None` when the queue is empty.
+    pub fn try_recv_stream(&mut self) -> Option<RefreshMsg> {
+        self.stream_rx.try_recv().ok()
     }
 
     /// Ask the worker to run one refresh ASAP, outside the normal
@@ -203,6 +225,12 @@ pub fn spawn(
     let (tx, rx) = watch::channel(initial);
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
     let (quota_trigger_tx, quota_trigger_rx) = watch::channel(QuotaCmd::Stop);
+    // Streaming channel for Phase 1 + Phase 2 messages (Task 2).
+    // The sender will be moved into the worker task when Task 3 lands.
+    // For now, hold a keepalive clone in scope so the receiver doesn't
+    // observe a closed channel.
+    let (stream_tx, stream_rx) = tokio::sync::mpsc::unbounded_channel::<RefreshMsg>();
+    let _stream_tx_keepalive = stream_tx;
 
     let clients_arc = clients.clone();
     // Shutdown flag: `RefreshHandle::drop` sets this to `true` so the
@@ -435,6 +463,7 @@ pub fn spawn(
         rx,
         manual_tx,
         quota_trigger_tx,
+        stream_rx,
         shutdown,
         _runtime: runtime,
     })
@@ -617,6 +646,9 @@ mod tests {
                     RefreshMsg::Error { .. } => "error",
                     RefreshMsg::QuotaSnapshot { .. } => "quota-snapshot",
                     RefreshMsg::QuotaError { .. } => "quota-error",
+                    RefreshMsg::SessionAdded(_) => "session-added",
+                    RefreshMsg::AnalysisProgress { .. } => "analysis-progress",
+                    RefreshMsg::AnalysisComplete => "analysis-complete",
                 };
             }
             std::thread::sleep(Duration::from_millis(20));

@@ -237,6 +237,13 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
                 RefreshMsg::Error { message, .. } => app.set_refresh_error(message),
                 RefreshMsg::QuotaSnapshot { results, .. } => app.apply_quota_results(results),
                 RefreshMsg::QuotaError { message, .. } => app.set_quota_error(message),
+                RefreshMsg::SessionAdded(_)
+                | RefreshMsg::AnalysisProgress { .. }
+                | RefreshMsg::AnalysisComplete => {
+                    // Streaming variants are delivered via `stream_rx` (Task 5).
+                    // The watch channel never carries them; this arm only exists
+                    // to keep the match exhaustive while the build is in flight.
+                }
             }
         }
 
@@ -844,6 +851,13 @@ pub fn run_v2(
                     }
                     refresh::RefreshMsg::QuotaError { .. } | refresh::RefreshMsg::Error { .. } => {
                         // Silently ignore; panels retain their last good data.
+                    }
+                    refresh::RefreshMsg::SessionAdded(_)
+                    | refresh::RefreshMsg::AnalysisProgress { .. }
+                    | refresh::RefreshMsg::AnalysisComplete => {
+                        // Streaming variants are delivered via `stream_rx` (Task 5).
+                        // The watch channel never carries them; this arm only exists
+                        // to keep the match exhaustive while the build is in flight.
                     }
                 }
             }
