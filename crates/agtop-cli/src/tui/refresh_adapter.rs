@@ -14,6 +14,35 @@ use crate::tui::screens::dashboard::{
     sessions::{SessionRow, SessionsTable},
 };
 
+const ACTIVITY_HISTORY_LIMIT: usize = 30;
+const DISK_ACTIVITY_MAX_BYTES_PER_SEC: f64 = 10.0 * 1024.0 * 1024.0;
+
+fn activity_sample(analysis: &SessionAnalysis) -> f32 {
+    let Some(metrics) = analysis.process_metrics.as_ref() else {
+        return 0.0;
+    };
+    let cpu_score = metrics.cpu_percent.clamp(0.0, 100.0);
+    let disk_rate = metrics.disk_read_bytes_per_sec + metrics.disk_written_bytes_per_sec;
+    let disk_score = if disk_rate.is_finite() && disk_rate > 0.0 {
+        ((disk_rate / DISK_ACTIVITY_MAX_BYTES_PER_SEC) * 100.0).clamp(0.0, 100.0) as f32
+    } else {
+        0.0
+    };
+    cpu_score.max(disk_score)
+}
+
+fn next_activity_samples(previous_samples: Option<&Vec<f32>>, analysis: &SessionAnalysis) -> Vec<f32> {
+    let mut samples = previous_samples
+        .cloned()
+        .unwrap_or_default();
+    samples.push(activity_sample(analysis));
+    if samples.len() > ACTIVITY_HISTORY_LIMIT {
+        let drop_count = samples.len() - ACTIVITY_HISTORY_LIMIT;
+        samples.drain(0..drop_count);
+    }
+    samples
+}
+
 /// Apply a fresh set of session analyses to the dashboard component models.
 pub fn apply_analyses(
     analyses: &[SessionAnalysis],
@@ -24,6 +53,12 @@ pub fn apply_analyses(
     refresh_secs: u64,
 ) {
     let normalized: Vec<SessionAnalysis> = analyses.iter().map(normalize_analysis).collect();
+
+    let previous_samples: std::collections::HashMap<String, Vec<f32>> = sessions
+        .rows
+        .iter()
+        .map(|row| (row.analysis.summary.session_id.clone(), row.activity_samples.clone()))
+        .collect();
 
     // --- Sessions ---
     // Auto-collapse newly-observed parents so the tree starts collapsed by
@@ -50,7 +85,7 @@ pub fn apply_analyses(
             analysis: a.clone(),
             client_kind: kind,
             client_label: label.clone(),
-            activity_samples: vec![],
+            activity_samples: next_activity_samples(previous_samples.get(&a.summary.session_id), a),
             depth: 0,
             parent_session_id: None,
             is_last_child: false,
@@ -67,7 +102,10 @@ pub fn apply_analyses(
                     analysis: child.clone(),
                     client_kind: child_kind,
                     client_label: child_kind.as_str().to_string(),
-                    activity_samples: vec![],
+                    activity_samples: next_activity_samples(
+                        previous_samples.get(&child.summary.session_id),
+                        child,
+                    ),
                     depth: 1,
                     parent_session_id: Some(a.summary.session_id.clone()),
                     is_last_child: i == last_idx,
@@ -187,6 +225,20 @@ mod tests {
             None,
             None,
         )
+    }
+
+    fn analysis_with_metrics(id: &str, cpu_percent: f32, read_rate: f64, write_rate: f64) -> SessionAnalysis {
+        let mut a = analysis(id);
+        a.process_metrics = Some(ProcessMetrics {
+            cpu_percent,
+            memory_bytes: 1024,
+            virtual_memory_bytes: 2048,
+            disk_read_bytes: 0,
+            disk_written_bytes: 0,
+            disk_read_bytes_per_sec: read_rate,
+            disk_written_bytes_per_sec: write_rate,
+        });
+        a
     }
 
     fn apply_one(a: SessionAnalysis) -> (HeaderModel, SessionsTable) {
@@ -667,6 +719,69 @@ mod tests {
             child_rows[2].is_last_child,
             "last child must be is_last_child = true"
         );
+    }
+
+    #[test]
+    fn activity_samples_use_max_of_cpu_and_normalized_disk() {
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+
+        let disk_heavy = analysis_with_metrics("disk", 5.0, 5.0 * 1_048_576.0, 0.0);
+        apply_analyses(
+            &[disk_heavy],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
+
+        assert_eq!(sessions.rows.len(), 1);
+        let sample = sessions.rows[0].activity_samples.last().copied().unwrap();
+        assert_eq!(sample, 50.0f32, "5 MiB/s should normalize to exactly 50");
+
+        let cpu_heavy = analysis_with_metrics("disk", 80.0, 1.0 * 1_048_576.0, 0.0);
+        apply_analyses(
+            &[cpu_heavy],
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+            5,
+        );
+
+        assert_eq!(sessions.rows[0].activity_samples.len(), 2);
+        assert_eq!(sessions.rows[0].activity_samples.last().copied(), Some(80.0));
+    }
+
+    #[test]
+    fn activity_samples_are_preserved_capped_and_zero_without_metrics() {
+        let mut header = HeaderModel::default();
+        let mut sessions = SessionsTable::default();
+        let mut quota = QuotaPanel::default();
+        let mut aggregation = AggregationState::default();
+
+        for i in 0..35 {
+            let analysis = if i == 34 {
+                analysis("same")
+            } else {
+                analysis_with_metrics("same", i as f32, 0.0, 0.0)
+            };
+            apply_analyses(
+                &[analysis],
+                &mut header,
+                &mut sessions,
+                &mut quota,
+                &mut aggregation,
+                5,
+            );
+        }
+
+        let samples = &sessions.rows[0].activity_samples;
+        assert_eq!(samples.len(), 30);
+        assert_eq!(samples.last().copied(), Some(0.0));
     }
 
     #[test]
