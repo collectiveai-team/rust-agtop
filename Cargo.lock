@@ -25,6 +25,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "resvg",
+ "rusqlite",
  "rustc-hash",
  "serde",
  "serde_json",
