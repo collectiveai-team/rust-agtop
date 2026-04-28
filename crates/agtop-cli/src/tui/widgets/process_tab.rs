@@ -50,6 +50,16 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_read_bytes));
                 let disk_w =
                     fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes));
+                let disk_r_rate = fmt::compact_rate_opt(
+                    a.process_metrics
+                        .as_ref()
+                        .map(|m| m.disk_read_bytes_per_sec),
+                );
+                let disk_w_rate = fmt::compact_rate_opt(
+                    a.process_metrics
+                        .as_ref()
+                        .map(|m| m.disk_written_bytes_per_sec),
+                );
 
                 let lines = vec![
                     super::kv_line("pid", pid_val),
@@ -59,6 +69,8 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     super::kv_line("virtual_memory", vsz),
                     super::kv_line("disk_read", disk_r),
                     super::kv_line("disk_written", disk_w),
+                    super::kv_line("disk_read/s", disk_r_rate),
+                    super::kv_line("disk_written/s", disk_w_rate),
                 ];
 
                 let inner = block.inner(area);

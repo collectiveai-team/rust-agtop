@@ -24,7 +24,7 @@ When an agent CLI is running, agtop correlates its OS process to the
 session transcript it's writing. The session table's `PID` column shows
 the live PID; the **Process** tab in the bottom panel shows liveness
 state (`live` / `stopped`), match confidence, and live resource metrics
-(CPU usage, resident memory, virtual memory, cumulative disk I/O).
+(CPU usage, resident memory, virtual memory, cumulative disk I/O, and disk I/O throughput).
 
 Correlation uses the session id literal in argv (`--resume <uuid>`,
 `-s <ses_…>`) as the most-confident signal, the transcript file held
@@ -48,12 +48,14 @@ when multiple agents run in the same cwd.
 ## Status
 
 **v0.4** adds live process metrics. Each matched session now surfaces CPU
-usage, resident/virtual memory, and cumulative disk I/O sampled from the
-OS on every refresh. New TUI columns `CPU` and `MEM` are visible by
-default (plus `VSZ`, `DISK R`, `DISK W` in the Config tab); a dedicated
-**Process** bottom-panel tab shows all metrics with room to read them.
-The `--list` table gains `PID`, `CPU`, and `MEM` columns; `--json` adds
-a `process_metrics` field.
+usage, resident/virtual memory, cumulative disk I/O, and disk read/write
+throughput sampled from the OS on every refresh. The dashboard `ACTIVITY`
+sparkline reflects the stronger of CPU load or normalized disk throughput.
+TUI columns `CPU`, `MEM`, `R/s`, and `W/s` are visible by default (plus `VSZ`,
+`DISK R`, `DISK W` in the Config tab); a dedicated **Process** bottom-panel
+tab shows all metrics with room to read them. The `--list` table gains `PID`,
+`CPU`, `MEM`, `R/s`, and `W/s` columns; `--json` includes the expanded
+`process_metrics` field.
 
 **v0.3** adds session ↔ OS-process correlation. When a CLI is running
 agtop binds the right PID to the right session row across all

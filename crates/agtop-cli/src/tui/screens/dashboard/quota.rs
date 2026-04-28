@@ -335,25 +335,52 @@ impl QuotaPanel {
         // Reserve 1 row for overflow indicators if needed.
         let view_h = inner_h.saturating_sub(1).max(1);
 
-        if area.width > 80 && self.cards.len() >= 2 {
-            // 2-column layout.
+        // Determine column count based on available width and card count.
+        // >140 wide with 3+ cards → 3 columns; >80 wide with 2+ cards → 2
+        // columns; otherwise single column.
+        let n_cols = if area.width > 140 && self.cards.len() >= 3 {
+            3usize
+        } else if area.width > 80 && self.cards.len() >= 2 {
+            2
+        } else {
+            1
+        };
+
+        if n_cols > 1 {
             use ratatui::layout::{Constraint, Direction, Layout};
+            // Build equal-percentage column constraints.
+            let col_pct = (100 / n_cols) as u16;
+            let remainder = 100u16 - col_pct * n_cols as u16;
+            let constraints: Vec<Constraint> = (0..n_cols)
+                .map(|i| {
+                    // Give any leftover percentage to the last column.
+                    Constraint::Percentage(col_pct + if i == n_cols - 1 { remainder } else { 0 })
+                })
+                .collect();
+
             let cols = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .constraints(constraints)
                 .split(inner);
 
-            let mid = self.cards.len().div_ceil(2);
-            let left_lines: Vec<Line<'static>> = self.cards[..mid]
-                .iter()
-                .flat_map(|c| build_card_lines(c, label_width, theme))
-                .collect();
-            let right_lines: Vec<Line<'static>> = self.cards[mid..]
-                .iter()
-                .flat_map(|c| build_card_lines(c, label_width, theme))
+            // Distribute cards sequentially across columns.
+            let chunk = self.cards.len().div_ceil(n_cols);
+            let col_card_lines: Vec<Vec<Line<'static>>> = (0..n_cols)
+                .map(|ci| {
+                    let start = ci * chunk;
+                    let end = ((ci + 1) * chunk).min(self.cards.len());
+                    if start >= self.cards.len() {
+                        Vec::new()
+                    } else {
+                        self.cards[start..end]
+                            .iter()
+                            .flat_map(|c| build_card_lines(c, label_width, theme))
+                            .collect()
+                    }
+                })
                 .collect();
 
-            let total = left_lines.len().max(right_lines.len());
+            let total = col_card_lines.iter().map(|l| l.len()).max().unwrap_or(0);
             let offset = self.scroll_offset.min(total.saturating_sub(view_h));
 
             let overflow_below = total.saturating_sub(offset + view_h);
@@ -366,7 +393,7 @@ impl QuotaPanel {
                 frame.render_widget(Paragraph::new(hint), hint_rect);
             }
 
-            let mut render_col = |lines: Vec<Line<'static>>, col_rect: Rect| {
+            for (ci, lines) in col_card_lines.into_iter().enumerate() {
                 let mut visible: Vec<Line<'static>> =
                     lines.into_iter().skip(offset).take(view_h).collect();
                 if offset > 0 && visible.len() == view_h {
@@ -379,11 +406,8 @@ impl QuotaPanel {
                     );
                     visible.truncate(view_h);
                 }
-                frame.render_widget(Paragraph::new(visible), col_rect);
-            };
-
-            render_col(left_lines, cols[0]);
-            render_col(right_lines, cols[1]);
+                frame.render_widget(Paragraph::new(visible), cols[ci]);
+            }
         } else {
             // Single-column layout.
             let all_lines: Vec<Line<'static>> = self

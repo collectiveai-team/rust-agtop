@@ -16,6 +16,7 @@ pub enum Icon {
     Procs,
     // Info drawer hero
     Folder,
+    Tag,
     // Config sections
     Palette,
     TableColumn,
@@ -52,6 +53,8 @@ impl Icon {
             (Self::Procs, false) => "",
             (Self::Folder, true) => "\u{F024B}", // nf-md-folder
             (Self::Folder, false) => "",
+            (Self::Tag, true) => "\u{F04F6}", // nf-md-tag_outline
+            (Self::Tag, false) => "\u{203A}", // ›
             (Self::Palette, true) => "\u{F03D8}", // nf-md-palette
             (Self::Palette, false) => "",
             (Self::TableColumn, true) => "\u{F1377}", // nf-md-table_column

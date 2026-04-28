@@ -14,7 +14,10 @@ expression: buffer_to_text(&buf)
                               │  [x]  MODEL
                               │  [x]  CPU
                               │  [x]  MEM
+                              │  [x]  R/s
+                              │  [x]  W/s
                               │  [x]  TOKENS
+                              │  [x]  CONTEXT
                               │  [x]  COST$
                               │  [x]  PROJECT
                               │  [x]  NAME
@@ -28,7 +31,4 @@ expression: buffer_to_text(&buf)
                               │  [ ]  DISK R
                               │  [ ]  DISK W
                               │  [ ]  OUT
-                              │  [ ]  CACHE
-                              │  [ ]  TOOLS
-                              │  [ ]  AGENT
  [↑↓] navigate  [Tab] switch pane  [Enter] edit  [/] search  [Esc] back  [?] help

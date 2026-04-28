@@ -367,6 +367,22 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
             "disk_written",
             crate::fmt::compact_opt(a.process_metrics.as_ref().map(|m| m.disk_written_bytes)),
         ),
+        ColumnId::DiskReadRate => kv_line(
+            "disk_read/s",
+            crate::fmt::compact_rate_opt(
+                a.process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_read_bytes_per_sec),
+            ),
+        ),
+        ColumnId::DiskWriteRate => kv_line(
+            "disk_written/s",
+            crate::fmt::compact_rate_opt(
+                a.process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_written_bytes_per_sec),
+            ),
+        ),
         // SubscriptionLogo is injected by visible() — not displayed in info tab.
         ColumnId::SubscriptionLogo => Line::default(),
         // Action is a transient field rendered in the new sessions table; not displayed in old info tab.

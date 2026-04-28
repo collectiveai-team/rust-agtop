@@ -11,7 +11,7 @@ use crate::tui::app::{SortColumn, SortDir};
 use agtop_core::ClientKind;
 
 /// All column identifiers in the session table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ColumnId {
     #[serde(alias = "provider")]
@@ -48,6 +48,10 @@ pub enum ColumnId {
     DiskRead,
     /// Cumulative disk bytes written by the matched process.
     DiskWritten,
+    /// Live disk read throughput for the matched process.
+    DiskReadRate,
+    /// Live disk write throughput for the matched process.
+    DiskWriteRate,
     /// Current in-flight tool/action descriptor for running sessions.
     Action,
 }
@@ -72,6 +76,8 @@ impl ColumnId {
             ColumnId::VirtualMemory,
             ColumnId::DiskRead,
             ColumnId::DiskWritten,
+            ColumnId::DiskReadRate,
+            ColumnId::DiskWriteRate,
             ColumnId::Tokens,
             ColumnId::OutputTokens,
             ColumnId::CacheTokens,
@@ -117,6 +123,8 @@ impl ColumnId {
             ColumnId::VirtualMemory => "VSZ",
             ColumnId::DiskRead => "DISK R",
             ColumnId::DiskWritten => "DISK W",
+            ColumnId::DiskReadRate => "R/s",
+            ColumnId::DiskWriteRate => "W/s",
             ColumnId::Action => "ACTION",
         }
     }
@@ -151,6 +159,8 @@ impl ColumnId {
             ColumnId::VirtualMemory => "Live virtual memory of the matched process",
             ColumnId::DiskRead => "Cumulative bytes read from disk (since process start)",
             ColumnId::DiskWritten => "Cumulative bytes written to disk (since process start)",
+            ColumnId::DiskReadRate => "Live disk read throughput of the matched process",
+            ColumnId::DiskWriteRate => "Live disk write throughput of the matched process",
             ColumnId::Action => "Current in-flight tool/action descriptor for running sessions",
         }
     }
@@ -186,6 +196,8 @@ impl ColumnId {
             ColumnId::VirtualMemory => Some(7),
             ColumnId::DiskRead => Some(8),
             ColumnId::DiskWritten => Some(8),
+            ColumnId::DiskReadRate => Some(8),
+            ColumnId::DiskWriteRate => Some(8),
             ColumnId::Action => Some(20),
         }
     }
@@ -221,6 +233,8 @@ impl ColumnId {
             ColumnId::VirtualMemory => None,
             ColumnId::DiskRead => None,
             ColumnId::DiskWritten => None,
+            ColumnId::DiskReadRate => None,
+            ColumnId::DiskWriteRate => None,
             ColumnId::Action => None, // not sortable (transient string)
         }
     }
@@ -254,7 +268,10 @@ pub fn default_visible_v2() -> Vec<ColumnId> {
         ColumnId::Model,
         ColumnId::Cpu,
         ColumnId::Memory,
+        ColumnId::DiskReadRate,
+        ColumnId::DiskWriteRate,
         ColumnId::Tokens,
+        ColumnId::Context,
         ColumnId::Cost,
         ColumnId::Project,
         ColumnId::SessionName,
@@ -524,6 +541,20 @@ impl<'de> Deserialize<'de> for ColumnConfig {
             clients,
         }
         .normalize())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disk_rate_columns_are_visible_by_default() {
+        let visible = default_visible_v2();
+        assert!(visible.contains(&ColumnId::DiskReadRate));
+        assert!(visible.contains(&ColumnId::DiskWriteRate));
+        assert_eq!(ColumnId::DiskReadRate.label(), "R/s");
+        assert_eq!(ColumnId::DiskWriteRate.label(), "W/s");
     }
 }
 
