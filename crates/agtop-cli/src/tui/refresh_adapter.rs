@@ -217,6 +217,8 @@ mod tests {
             virtual_memory_bytes: 2048,
             disk_read_bytes: 0,
             disk_written_bytes: 0,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         });
 
         let (header, sessions) = apply_one(a);
@@ -354,6 +356,8 @@ mod tests {
             virtual_memory_bytes: 1024,
             disk_read_bytes: 0,
             disk_written_bytes: 0,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         });
         a.summary.parser_state = agtop_core::session::ParserState::Idle;
 

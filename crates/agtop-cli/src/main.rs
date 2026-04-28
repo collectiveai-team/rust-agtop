@@ -728,6 +728,8 @@ mod json_output_tests {
             virtual_memory_bytes: 5678,
             disk_read_bytes: 90,
             disk_written_bytes: 12,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         });
         analysis.session_state = Some(SessionState::Running);
 

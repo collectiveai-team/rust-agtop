@@ -47,7 +47,7 @@ pub enum Liveness {
 /// Live OS resource metrics for a matched process.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProcessMetrics {
-    /// Instantaneous CPU usage as a percentage (0.0–100.0 per core, as reported by sysinfo).
+    /// Instantaneous CPU usage as a percentage (0.0-100.0 per core, as reported by sysinfo).
     pub cpu_percent: f32,
     /// Resident set size in bytes.
     pub memory_bytes: u64,
@@ -57,6 +57,10 @@ pub struct ProcessMetrics {
     pub disk_read_bytes: u64,
     /// Cumulative bytes written to disk since process start.
     pub disk_written_bytes: u64,
+    /// Bytes read from disk per second since the previous sample.
+    pub disk_read_bytes_per_sec: f64,
+    /// Bytes written to disk per second since the previous sample.
+    pub disk_written_bytes_per_sec: f64,
 }
 
 /// Per-session OS-process information attached after correlation.
@@ -236,6 +240,8 @@ mod lifecycle_tests {
         const FAKE_VMEM_BYTES: u64 = 512 * 1024 * 1024;
         const FAKE_DISK_READ: u64 = 1_024;
         const FAKE_DISK_WRITE: u64 = 2_048;
+        const FAKE_DISK_READ_RATE: f64 = 128.0;
+        const FAKE_DISK_WRITE_RATE: f64 = 256.0;
 
         let mut parent = analysis("parent-1");
         parent.children = vec![analysis("child-1"), analysis("child-2")];
@@ -255,6 +261,8 @@ mod lifecycle_tests {
                     virtual_memory_bytes: FAKE_VMEM_BYTES,
                     disk_read_bytes: FAKE_DISK_READ,
                     disk_written_bytes: FAKE_DISK_WRITE,
+                    disk_read_bytes_per_sec: FAKE_DISK_READ_RATE,
+                    disk_written_bytes_per_sec: FAKE_DISK_WRITE_RATE,
                 }),
             },
         );
@@ -269,6 +277,16 @@ mod lifecycle_tests {
             p.process_metrics.as_ref().map(|m| m.cpu_percent),
             Some(FAKE_CPU)
         );
+        assert_eq!(
+            p.process_metrics.as_ref().map(|m| m.disk_read_bytes_per_sec),
+            Some(FAKE_DISK_READ_RATE)
+        );
+        assert_eq!(
+            p.process_metrics
+                .as_ref()
+                .map(|m| m.disk_written_bytes_per_sec),
+            Some(FAKE_DISK_WRITE_RATE)
+        );
         for child in &p.children {
             assert_eq!(
                 child.pid,
@@ -281,6 +299,20 @@ mod lifecycle_tests {
             assert_eq!(
                 child.process_metrics.as_ref().map(|m| m.memory_bytes),
                 Some(FAKE_MEM_BYTES)
+            );
+            assert_eq!(
+                child
+                    .process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_written_bytes_per_sec),
+                Some(FAKE_DISK_WRITE_RATE)
+            );
+            assert_eq!(
+                child
+                    .process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_read_bytes_per_sec),
+                Some(FAKE_DISK_READ_RATE)
             );
         }
     }
