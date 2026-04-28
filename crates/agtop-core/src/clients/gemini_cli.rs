@@ -17,7 +17,10 @@ use crate::client::Client;
 use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
-use crate::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
+use crate::session::{
+    ClientKind, CostBreakdown, ErrorReason, ParserState, SessionAnalysis, SessionSummary,
+    TokenTotals,
+};
 
 #[derive(Debug)]
 pub struct GeminiCliClient {
@@ -382,6 +385,7 @@ fn parse_gemini_session(
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut seen = 0usize;
+    let mut parser_state: ParserState = ParserState::default();
 
     for_each_jsonl(path, |v| {
         seen += 1;
@@ -421,7 +425,7 @@ fn parse_gemini_session(
             model = Some(m.to_string());
         }
         if v.get("type").and_then(|x| x.as_str()) == Some("gemini") {
-            update_state_from_gemini_message(v, &mut state, &mut state_detail);
+            update_parser_state_from_gemini_message(v, &mut state, &mut state_detail, &mut parser_state);
         }
     })?;
 
@@ -448,6 +452,7 @@ fn parse_gemini_session(
         None,
         None,
     );
+    summary.parser_state = parser_state;
     summary.session_title = session_title;
     Ok(summary)
 }
@@ -497,10 +502,11 @@ fn parse_gemini_session_json(
 
     let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
+    let mut parser_state: ParserState = ParserState::default();
     if let Some(messages) = v.get("messages").and_then(|messages| messages.as_array()) {
         for message in messages {
             if message.get("type").and_then(|x| x.as_str()) == Some("gemini") {
-                update_state_from_gemini_message(message, &mut state, &mut state_detail);
+                update_parser_state_from_gemini_message(message, &mut state, &mut state_detail, &mut parser_state);
             }
         }
     }
@@ -519,6 +525,7 @@ fn parse_gemini_session_json(
         None,
         None,
     );
+    summary.parser_state = parser_state;
     summary.session_title = v
         .get("messages")
         .and_then(|messages| messages.as_array())
@@ -537,23 +544,38 @@ fn parse_gemini_session_json(
     Ok(summary)
 }
 
-fn update_state_from_gemini_message(
+fn update_parser_state_from_gemini_message(
     message: &serde_json::Value,
     state: &mut Option<String>,
     state_detail: &mut Option<String>,
+    parser_state: &mut ParserState,
 ) {
     if let Some(tool_calls) = gemini_tool_calls(message) {
-        if tool_calls
+        // Check if any tool call errored.
+        let has_error = tool_calls
             .iter()
-            .any(|call| call.get("status").and_then(|x| x.as_str()) != Some("success"))
-        {
-            *state = Some("waiting".to_string());
-            *state_detail = Some("gemini.toolCalls.pending_or_error".to_string());
+            .any(|call| call.get("status").and_then(|x| x.as_str()) == Some("error"));
+        if has_error {
+            let tool_name = tool_calls
+                .iter()
+                .find(|call| call.get("status").and_then(|x| x.as_str()) == Some("error"))
+                .and_then(|c| c.get("name").and_then(|x| x.as_str()))
+                .unwrap_or("unknown_tool");
+            *parser_state = ParserState::Error(ErrorReason::ParserDetected(
+                format!("gemini.tool_error:{}", tool_name),
+            ));
+            *state = Some("running".to_string()); // legacy compat
+            *state_detail = Some("gemini.toolCalls.error".to_string());
         } else if !tool_calls.is_empty() {
-            *state = Some("stopped".to_string());
+            // All tool calls succeeded — agent back to processing results (Running).
+            *parser_state = ParserState::Running;
+            *state = Some("running".to_string());
             *state_detail = Some("gemini.toolCalls.success".to_string());
         }
+        // else: empty tool_calls array — no update (leave previous state)
     } else {
+        // No tool calls → clean end of gemini message → Idle.
+        *parser_state = ParserState::Idle;
         *state = Some("stopped".to_string());
         *state_detail = Some("gemini.message".to_string());
     }
@@ -1267,6 +1289,42 @@ mod tests {
         let children = client.children(&sessions[0]).unwrap();
         assert_eq!(children.len(), 1, "expected one child subagent");
         assert_eq!(children[0].session_id, child_session_id);
+    }
+
+    #[test]
+    fn gemini_no_tool_calls_maps_to_idle() {
+        let msg = serde_json::json!({ "type": "gemini", "content": "Hello!" });
+        let mut state = None;
+        let mut state_detail = None;
+        let mut parser_state = ParserState::default();
+        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        assert_eq!(parser_state, ParserState::Idle);
+    }
+
+    #[test]
+    fn gemini_tool_calls_success_maps_to_running() {
+        let msg = serde_json::json!({
+            "type": "gemini",
+            "toolCalls": [{ "status": "success" }]
+        });
+        let mut state = None;
+        let mut state_detail = None;
+        let mut parser_state = ParserState::default();
+        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        assert_eq!(parser_state, ParserState::Running);
+    }
+
+    #[test]
+    fn gemini_tool_calls_error_maps_to_error() {
+        let msg = serde_json::json!({
+            "type": "gemini",
+            "toolCalls": [{ "status": "error", "name": "read_file" }]
+        });
+        let mut state = None;
+        let mut state_detail = None;
+        let mut parser_state = ParserState::default();
+        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        assert!(matches!(parser_state, ParserState::Error(_)));
     }
 
     /// `gemini --resume <uuid>` writes a NEW jsonl file each invocation but
