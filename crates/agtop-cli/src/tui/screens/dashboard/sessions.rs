@@ -269,6 +269,18 @@ impl SessionsTable {
                     .map(|m| format_bytes_compact(m.memory_bytes))
                     .unwrap_or_else(|| "—".into()),
             ),
+            ColumnId::DiskReadRate => Cell::from(crate::fmt::compact_rate_opt(
+                row.analysis
+                    .process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_read_bytes_per_sec),
+            )),
+            ColumnId::DiskWriteRate => Cell::from(crate::fmt::compact_rate_opt(
+                row.analysis
+                    .process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_written_bytes_per_sec),
+            )),
             ColumnId::Tokens => {
                 Cell::from(format_tokens_compact(row.analysis.tokens.grand_total()))
             }
