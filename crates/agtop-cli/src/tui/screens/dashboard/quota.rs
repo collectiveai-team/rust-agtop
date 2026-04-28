@@ -81,7 +81,6 @@ pub enum CardStatus {
     Error(String),
 }
 
-
 #[derive(Debug, Clone)]
 pub struct WindowModel {
     pub label: String, // e.g. "5h", "weekly"
@@ -129,7 +128,9 @@ fn build_card_from_ok(r: &ProviderResult, now_ms: i64) -> Option<QuotaCardModel>
                 }
                 let h = diff_secs / 3600;
                 let m = (diff_secs % 3600) / 60;
-                Some(if h > 0 {
+                Some(if h > 24 {
+                    format!("resets in {}d {}h", h / 24, h % 24)
+                } else if h > 0 {
                     format!("resets in {h}h {m}m")
                 } else {
                     format!("resets in {m}m")
@@ -365,21 +366,21 @@ impl QuotaPanel {
                 frame.render_widget(Paragraph::new(hint), hint_rect);
             }
 
-        let mut render_col = |lines: Vec<Line<'static>>, col_rect: Rect| {
-            let mut visible: Vec<Line<'static>> =
-                lines.into_iter().skip(offset).take(view_h).collect();
-            if offset > 0 && visible.len() == view_h {
-                visible.insert(
-                    0,
-                    Line::from(Span::styled(
-                        format!(" ↑ {offset} lines above"),
-                        Style::default().fg(theme.fg_muted),
-                    )),
-                );
-                visible.truncate(view_h);
-            }
-            frame.render_widget(Paragraph::new(visible), col_rect);
-        };
+            let mut render_col = |lines: Vec<Line<'static>>, col_rect: Rect| {
+                let mut visible: Vec<Line<'static>> =
+                    lines.into_iter().skip(offset).take(view_h).collect();
+                if offset > 0 && visible.len() == view_h {
+                    visible.insert(
+                        0,
+                        Line::from(Span::styled(
+                            format!("  ↑ {offset} lines above"),
+                            Style::default().fg(theme.fg_muted),
+                        )),
+                    );
+                    visible.truncate(view_h);
+                }
+                frame.render_widget(Paragraph::new(visible), col_rect);
+            };
 
             render_col(left_lines, cols[0]);
             render_col(right_lines, cols[1]);
@@ -411,10 +412,9 @@ impl QuotaPanel {
     /// Behavior per `ProviderResult`:
     ///   * Not configured        → omit (no card).
     ///   * Configured + ok       → fresh card; cached as last_good.
-    /// * Configured + errored → if cached last_good present, render
-    ///   that card with `CardStatus::Stale`;
-    ///   otherwise render an error placeholder
-    ///   with `CardStatus::Error`.
+    ///   * Configured + errored  → if cached last_good present, render
+    ///     that card with `CardStatus::Stale`; otherwise render an error
+    ///     placeholder with `CardStatus::Error`.
     ///
     /// Cached last_good entries persist across calls so transient fetch
     /// failures don't blow the user-visible panel away.
@@ -600,6 +600,53 @@ mod tests {
     }
 
     #[test]
+    fn reset_in_uses_days_and_hours_only_after_24_hours() {
+        use agtop_core::quota::{ProviderId, ProviderResult, Usage, UsageWindow};
+        use indexmap::IndexMap;
+
+        let now_ms = 1_700_000_000_000;
+        let mut windows: IndexMap<String, UsageWindow> = IndexMap::new();
+        windows.insert(
+            "daily".to_string(),
+            UsageWindow {
+                used_percent: Some(10.0),
+                window_seconds: None,
+                reset_at: Some(now_ms + 24 * 60 * 60 * 1000),
+                value_label: None,
+            },
+        );
+        windows.insert(
+            "weekly".to_string(),
+            UsageWindow {
+                used_percent: Some(20.0),
+                window_seconds: None,
+                reset_at: Some(now_ms + 49 * 60 * 60 * 1000),
+                value_label: None,
+            },
+        );
+        let result = ProviderResult::ok(
+            ProviderId::Claude,
+            "Claude",
+            Usage {
+                windows,
+                ..Usage::default()
+            },
+            std::collections::BTreeMap::new(),
+        );
+
+        let card = build_card_from_ok(&result, now_ms).expect("card");
+
+        assert_eq!(
+            card.all_windows[0].reset_in.as_deref(),
+            Some("resets in 24h 0m")
+        );
+        assert_eq!(
+            card.all_windows[1].reset_in.as_deref(),
+            Some("resets in 2d 1h")
+        );
+    }
+
+    #[test]
     fn errored_provider_with_cache_renders_stale_marker() {
         // Sequence: a successful fetch followed by an errored fetch for the
         // same provider must keep the card visible and mark it as stale.
@@ -688,9 +735,11 @@ mod tests {
     #[test]
     fn r_key_in_long_mode_emits_refresh_quota_msg() {
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
-        let mut panel = QuotaPanel::default();
-        panel.mode = QuotaMode::Long;
-        panel.last_area = Some(Rect::new(0, 0, 80, 15));
+        let mut panel = QuotaPanel {
+            mode: QuotaMode::Long,
+            last_area: Some(Rect::new(0, 0, 80, 15)),
+            ..Default::default()
+        };
         let ev = AppEvent::Key(KeyEvent {
             code: KeyCode::Char('r'),
             modifiers: KeyModifiers::NONE,
@@ -723,9 +772,11 @@ mod tests {
     #[test]
     fn click_on_r_button_in_long_mode_emits_refresh() {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-        let mut panel = QuotaPanel::default();
-        panel.mode = QuotaMode::Long;
-        panel.last_area = Some(Rect::new(0, 0, 80, 15));
+        let mut panel = QuotaPanel {
+            mode: QuotaMode::Long,
+            last_area: Some(Rect::new(0, 0, 80, 15)),
+            ..Default::default()
+        };
         // Title in Long mode: " Usage Quota (long)  [u]sage  [r]efresh "
         let title_long = " Usage Quota (long)  [u]sage  [r]efresh ";
         let r_pos = title_long.find("[r]").expect("title must contain [r]");
@@ -779,37 +830,39 @@ mod tests {
         use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         use ratatui::layout::Rect;
 
-        let mut panel = QuotaPanel::default();
-        panel.mode = QuotaMode::Long;
-        panel.last_area = Some(Rect::new(0, 10, 80, 10));
-        // Add enough cards to overflow.
-        panel.cards = (0..4)
-            .map(|i| QuotaCardModel {
-                client_kind: agtop_core::session::ClientKind::Claude,
-                client_label: format!("Provider {i}"),
-                closest: WindowModel {
-                    label: "5h".into(),
-                    used_pct: 0.5,
-                    note: None,
-                    reset_in: None,
-                },
-                all_windows: vec![
-                    WindowModel {
+        let mut panel = QuotaPanel {
+            mode: QuotaMode::Long,
+            last_area: Some(Rect::new(0, 10, 80, 10)),
+            // Add enough cards to overflow.
+            cards: (0..4)
+                .map(|i| QuotaCardModel {
+                    client_kind: agtop_core::session::ClientKind::Claude,
+                    client_label: format!("Provider {i}"),
+                    closest: WindowModel {
                         label: "5h".into(),
                         used_pct: 0.5,
                         note: None,
                         reset_in: None,
                     },
-                    WindowModel {
-                        label: "1d".into(),
-                        used_pct: 0.3,
-                        note: None,
-                        reset_in: None,
-                    },
-                ],
-                status: CardStatus::Ok,
-            })
-            .collect();
+                    all_windows: vec![
+                        WindowModel {
+                            label: "5h".into(),
+                            used_pct: 0.5,
+                            note: None,
+                            reset_in: None,
+                        },
+                        WindowModel {
+                            label: "1d".into(),
+                            used_pct: 0.3,
+                            note: None,
+                            reset_in: None,
+                        },
+                    ],
+                    status: CardStatus::Ok,
+                })
+                .collect(),
+            ..Default::default()
+        };
 
         let scroll_down = AppEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -828,9 +881,11 @@ mod tests {
         use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         use ratatui::layout::Rect;
 
-        let mut panel = QuotaPanel::default();
-        panel.mode = QuotaMode::Long;
-        panel.last_area = Some(Rect::new(0, 0, 80, 10));
+        let mut panel = QuotaPanel {
+            mode: QuotaMode::Long,
+            last_area: Some(Rect::new(0, 0, 80, 10)),
+            ..Default::default()
+        };
         assert_eq!(panel.scroll_offset, 0);
 
         let scroll_up = AppEvent::Mouse(MouseEvent {
@@ -848,9 +903,11 @@ mod tests {
         use crate::tui::input::AppEvent;
         use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
-        let mut panel = QuotaPanel::default();
-        panel.mode = QuotaMode::Long;
-        panel.scroll_offset = 5;
+        let mut panel = QuotaPanel {
+            mode: QuotaMode::Long,
+            scroll_offset: 5,
+            ..Default::default()
+        };
 
         let u_key = AppEvent::Key(KeyEvent {
             code: KeyCode::Char('u'),
@@ -911,8 +968,10 @@ mod tests {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use ratatui::layout::Rect;
 
-        let mut panel = QuotaPanel::default();
-        panel.last_area = Some(Rect::new(0, 5, 80, 10));
+        let mut panel = QuotaPanel {
+            last_area: Some(Rect::new(0, 5, 80, 10)),
+            ..Default::default()
+        };
 
         // Click on column 0 (before title_start=1) on the title row — should not cycle
         let click = AppEvent::Mouse(MouseEvent {

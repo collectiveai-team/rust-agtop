@@ -25,7 +25,8 @@ use crate::clients::util::{dir_exists, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionMessageRole,
+    SessionMessageTurn, SessionSummary, TokenTotals,
 };
 
 const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1216,6 +1217,80 @@ fn latest_message_state_sqlite(
         })
 }
 
+fn recent_messages_sqlite(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Vec<SessionMessageTurn> {
+    let rows: Vec<String> = match conn
+        .prepare(
+            "SELECT data FROM message \
+             WHERE session_id = ?1 \
+             ORDER BY time_created DESC LIMIT 20",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        }) {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut turns: Vec<SessionMessageTurn> = rows
+        .into_iter()
+        .rev()
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .filter_map(|value| message_turn_from_opencode_value(&value))
+        .collect();
+    if turns.len() > 20 {
+        turns.drain(0..turns.len() - 20);
+    }
+    turns
+}
+
+fn message_turn_from_opencode_value(value: &serde_json::Value) -> Option<SessionMessageTurn> {
+    let role = match value.get("role").and_then(|x| x.as_str())? {
+        "user" => SessionMessageRole::User,
+        "assistant" => SessionMessageRole::Agent,
+        "tool" => SessionMessageRole::Tool,
+        _ => return None,
+    };
+    let preview = message_preview(value)?;
+    let mut tools = Vec::new();
+    let mut current_tool = false;
+    if value.get("finish").and_then(|x| x.as_str()) == Some("tool-calls") {
+        tools.push("tool-calls".to_string());
+        current_tool = true;
+    }
+    Some(SessionMessageTurn {
+        role,
+        preview,
+        tools,
+        current_tool,
+    })
+}
+
+fn message_preview(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.get("text").and_then(|x| x.as_str()) {
+        return Some(compact_preview(text));
+    }
+    let parts = value.get("parts")?.as_array()?;
+    for part in parts {
+        if let Some(text) = part.get("text").and_then(|x| x.as_str()) {
+            return Some(compact_preview(text));
+        }
+    }
+    None
+}
+
+fn compact_preview(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() > 160 {
+        format!("{}…", single_line.chars().take(159).collect::<String>())
+    } else {
+        single_line
+    }
+}
+
 fn first_message_identity_sqlite(
     conn: &rusqlite::Connection,
     session_id: &str,
@@ -1427,6 +1502,7 @@ impl TurnAccumulator {
             process_metrics: None,
             session_state: None,
             current_action: None,
+            recent_messages: Vec::new(),
         })
     }
 }
@@ -1475,7 +1551,10 @@ fn analyze_session_sqlite(
     }
 
     acc.user_turns = user_turns;
-    acc.finish(summary, plan)
+    let recent_messages = recent_messages_sqlite(&conn, &summary.session_id);
+    let mut analysis = acc.finish(summary, plan)?;
+    analysis.recent_messages = recent_messages;
+    Ok(analysis)
 }
 
 // ---------------------------------------------------------------------------

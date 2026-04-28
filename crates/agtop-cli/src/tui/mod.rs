@@ -836,6 +836,7 @@ pub fn run_v2(
                             &mut app.aggregation,
                             refresh_interval.as_secs(),
                         );
+                        app.dashboard.sync_info_selection();
                     }
                     refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
                         app.dashboard.quota.apply_results(&results);
@@ -1392,13 +1393,12 @@ mod tests {
     #[test]
     fn clicking_sortable_header_sorts_by_correct_column() {
         use crate::tui::app::SortColumn;
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
         // Test at multiple widths to catch off-by-one in right-anchored columns.
         for &width in &[140u16, 160, 180, 200] {
             let backend = TestBackend::new(width, 30);
             let mut terminal = Terminal::new(backend).unwrap();
-            let app = fixture_app();
+            let mut app = fixture_app();
             let mut state = ratatui::widgets::TableState::default();
             let mut layout = UiLayout::default();
             terminal
@@ -1409,7 +1409,9 @@ mod tests {
             let header_y = layout.table_area.y + 1;
             let row_width = buffer.area.width;
 
-            // Map of rendered label text → expected SortColumn
+            // Map of rendered label text → expected SortColumn.
+            // Each label is the rendered column header (may have sort arrow appended
+            // when it's the active sort, so we use a prefix that won't collide).
             let cases: &[(&[u8], SortColumn)] = &[
                 (b"CLIENT", SortColumn::Client),
                 (b"STARTED", SortColumn::Started),
@@ -1422,7 +1424,8 @@ mod tests {
             ];
 
             for &(label, expected_col) in cases {
-                // Find rendered x of this label
+                // Find rendered x of this label in the header row of the
+                // already-rendered buffer.
                 let mut found_x: Option<u16> = None;
                 'search: for x in 0..=(row_width.saturating_sub(label.len() as u16)) {
                     for (i, &b) in label.iter().enumerate() {
@@ -1444,20 +1447,26 @@ mod tests {
                     None => continue, // column hidden at this width
                 };
 
-                let mut app2 = fixture_app();
-                let event = MouseEvent {
-                    kind: MouseEventKind::Down(MouseButton::Left),
+                // Click at `label_x` on the SAME `app` + `layout` that produced
+                // the buffer. This guarantees header_cols offsets are consistent
+                // with the visual positions (no separate render with potentially
+                // different state or rounding).
+                let event = crossterm::event::MouseEvent {
+                    kind: crossterm::event::MouseEventKind::Down(
+                        crossterm::event::MouseButton::Left,
+                    ),
                     column: label_x,
                     row: header_y,
                     modifiers: crossterm::event::KeyModifiers::NONE,
                 };
-                apply_mouse(&mut app2, event, &layout);
+                apply_mouse(&mut app, event, &layout);
                 assert_eq!(
-                    app2.sort_col(),
+                    app.sort_col(),
                     expected_col,
-                    "width={width}: clicking '{}' header at x={label_x} should sort by {expected_col:?}, got {:?}",
+                    "width={width}: clicking '{}' header at x={label_x} should sort by {expected_col:?}, got {:?}; header_cols={:?}",
                     std::str::from_utf8(label).unwrap(),
-                    app2.sort_col()
+                    app.sort_col(),
+                    layout.header_cols,
                 );
             }
         }

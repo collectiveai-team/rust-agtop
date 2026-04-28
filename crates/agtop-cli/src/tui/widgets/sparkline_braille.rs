@@ -1,4 +1,4 @@
-//! Braille sparkline. Renders a Vec<f32> series as a single line of braille
+//! Braille sparkline. Renders a `Vec<f32>` series as a single line of braille
 // Foundation code for Plans 2-4; not yet wired into the existing TUI.
 #![allow(dead_code)]
 //! characters where each cell encodes 2×4 dots from up to 8 data points.

@@ -1,4 +1,4 @@
-//! Info drawer: bottom-right floating panel with Summary/General/Costs/Process tabs.
+//! Info drawer: bottom-right floating panel with Summary and Details tabs.
 // Foundation code for Plan 2.
 #![allow(dead_code)]
 
@@ -10,7 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use super::{info_costs, info_general, info_process, info_summary};
+use super::{info_details, info_summary};
 use crate::tui::input::AppEvent;
 use crate::tui::msg::Msg;
 use crate::tui::screens::dashboard::sessions::SessionRow;
@@ -28,20 +28,16 @@ pub enum DrawerVis {
 pub enum InfoTab {
     #[default]
     Summary,
-    General,
-    Costs,
-    Process,
+    Details,
 }
 
 impl InfoTab {
-    pub const ALL: [InfoTab; 4] = [Self::Summary, Self::General, Self::Costs, Self::Process];
+    pub const ALL: [InfoTab; 2] = [Self::Summary, Self::Details];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Summary => "Summary",
-            Self::General => "General",
-            Self::Costs => "Costs",
-            Self::Process => "Process",
+            Self::Details => "Details",
         }
     }
 }
@@ -50,17 +46,23 @@ impl InfoTab {
 pub struct InfoDrawer {
     pub vis: DrawerVis,
     pub tab: InfoTab,
-    /// Selected session row from the table; drives all tab bodies.
     pub selected_row: Option<SessionRow>,
-    /// Last area occupied by the drawer (set during render). Used to block
-    /// click-through to the sessions table behind the drawer.
     pub last_area: Option<Rect>,
+    pub summary_message_scroll_from_bottom: usize,
+    pub details_scroll_offset: usize,
+    pub last_selected_session_id: Option<String>,
 }
 
 impl InfoDrawer {
     /// Sync the selected row from the sessions table. Call after every
     /// selection change.
     pub fn set_row(&mut self, row: Option<SessionRow>) {
+        let next_id = row.as_ref().map(|r| r.analysis.summary.session_id.clone());
+        if next_id != self.last_selected_session_id {
+            self.summary_message_scroll_from_bottom = 0;
+            self.details_scroll_offset = 0;
+            self.last_selected_session_id = next_id;
+        }
         self.selected_row = row;
     }
 
@@ -93,8 +95,8 @@ impl InfoDrawer {
         (title, id_cols)
     }
 
-    const TABS_FULL: &'static str = " [1] Summary  [2] General  [3] Costs  [4] Process ";
-    const TABS_SHORT: &'static str = " [1]Sum [2]Gen [3]Cost [4]Proc ";
+    const TABS_FULL: &'static str = " [1] Summary  [2] Details ";
+    const TABS_SHORT: &'static str = " [1]Sum [2]Details ";
 
     /// Compute clickable column ranges for each tab marker, expressed in
     /// absolute terminal coordinates. Returns a Vec of (start_col, end_col, tab)
@@ -119,12 +121,7 @@ impl InfoDrawer {
         // one cell). Find each `[N]` marker's column offset within `title`.
         let chars: Vec<char> = title.chars().collect();
         let mut markers: Vec<(usize, InfoTab)> = Vec::with_capacity(4);
-        for (tab, n) in [
-            (InfoTab::Summary, '1'),
-            (InfoTab::General, '2'),
-            (InfoTab::Costs, '3'),
-            (InfoTab::Process, '4'),
-        ] {
+        for (tab, n) in [(InfoTab::Summary, '1'), (InfoTab::Details, '2')] {
             for i in 0..chars.len().saturating_sub(2) {
                 if chars[i] == '[' && chars[i + 1] == n && chars[i + 2] == ']' {
                     markers.push((i, tab));
@@ -178,19 +175,28 @@ impl InfoDrawer {
                     client_label: &row.client_label,
                     client_kind: row.client_kind,
                     state: &state,
-                    recent_turns: vec![],
+                    recent_turns: row
+                        .analysis
+                        .recent_messages
+                        .iter()
+                        .map(info_summary::MessageTurn::from)
+                        .collect(),
+                    message_scroll_from_bottom: self.summary_message_scroll_from_bottom,
+                    activity_samples: row.activity_samples.clone(),
+                    parent_session_id: row.parent_session_id.as_deref(),
+                    subagent_count: row.analysis.children.len(),
                     nerd_font: false,
                 };
                 info_summary::render(frame, inner, &model, theme);
             }
-            (InfoTab::General, Some(row)) => {
-                info_general::render(frame, inner, &row.analysis, theme);
-            }
-            (InfoTab::Costs, Some(row)) => {
-                info_costs::render(frame, inner, &row.analysis, theme);
-            }
-            (InfoTab::Process, Some(row)) => {
-                info_process::render(frame, inner, &row.analysis, &[], theme);
+            (InfoTab::Details, Some(row)) => {
+                let model = info_details::DetailsModel {
+                    analysis: &row.analysis,
+                    parent_session_id: row.parent_session_id.as_deref(),
+                    subagent_count: row.analysis.children.len(),
+                    scroll_offset: self.details_scroll_offset,
+                };
+                info_details::render(frame, inner, &model, theme);
             }
             (_, None) => {
                 frame.render_widget(
@@ -236,6 +242,52 @@ impl InfoDrawer {
             return None;
         }
 
+        if self.vis == DrawerVis::Open {
+            if let AppEvent::Mouse(MouseEvent {
+                kind, row, column, ..
+            }) = event
+            {
+                let inside = self.last_area.is_some_and(|area| {
+                    *column >= area.x
+                        && *column < area.x + area.width
+                        && *row >= area.y
+                        && *row < area.y + area.height
+                });
+                if inside {
+                    match kind {
+                        MouseEventKind::ScrollUp => {
+                            match self.tab {
+                                InfoTab::Summary => {
+                                    self.summary_message_scroll_from_bottom =
+                                        self.summary_message_scroll_from_bottom.saturating_add(1)
+                                }
+                                InfoTab::Details => {
+                                    self.details_scroll_offset =
+                                        self.details_scroll_offset.saturating_sub(1)
+                                }
+                            }
+                            return Some(Msg::Noop);
+                        }
+                        MouseEventKind::ScrollDown => {
+                            match self.tab {
+                                InfoTab::Summary => {
+                                    self.summary_message_scroll_from_bottom =
+                                        self.summary_message_scroll_from_bottom.saturating_sub(1)
+                                }
+                                InfoTab::Details => {
+                                    self.details_scroll_offset =
+                                        self.details_scroll_offset.saturating_add(1)
+                                }
+                            }
+                            return Some(Msg::Noop);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+
         let AppEvent::Key(KeyEvent {
             code, modifiers, ..
         }) = event
@@ -264,23 +316,16 @@ impl InfoDrawer {
                 Some(Msg::Noop)
             }
             KeyCode::Char('2') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::General;
+                self.tab = InfoTab::Details;
                 Some(Msg::Noop)
             }
-            KeyCode::Char('3') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::Costs;
-                Some(Msg::Noop)
-            }
-            KeyCode::Char('4') if self.vis == DrawerVis::Open => {
-                self.tab = InfoTab::Process;
+            KeyCode::Char('3') | KeyCode::Char('4') if self.vis == DrawerVis::Open => {
                 Some(Msg::Noop)
             }
             KeyCode::Tab if self.vis == DrawerVis::Open => {
                 self.tab = match self.tab {
-                    InfoTab::Summary => InfoTab::General,
-                    InfoTab::General => InfoTab::Costs,
-                    InfoTab::Costs => InfoTab::Process,
-                    InfoTab::Process => InfoTab::Summary,
+                    InfoTab::Summary => InfoTab::Details,
+                    InfoTab::Details => InfoTab::Summary,
                 };
                 Some(Msg::Noop)
             }
@@ -325,11 +370,7 @@ mod tests {
         let mut d = InfoDrawer::default();
         d.handle_event(&k('i'));
         d.handle_event(&k('2'));
-        assert_eq!(d.tab, InfoTab::General);
-        d.handle_event(&k('3'));
-        assert_eq!(d.tab, InfoTab::Costs);
-        d.handle_event(&k('4'));
-        assert_eq!(d.tab, InfoTab::Process);
+        assert_eq!(d.tab, InfoTab::Details);
     }
 
     #[test]
@@ -384,8 +425,8 @@ mod tests {
 
         assert_eq!(
             d.tab,
-            InfoTab::General,
-            "clicking [2] in the drawer title must switch tab to General"
+            InfoTab::Details,
+            "clicking [2] in the drawer title must switch tab to Details"
         );
     }
 

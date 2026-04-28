@@ -49,6 +49,7 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 # the refresh worker. Trusted in-process input only, so SipHash's DoS
 # resistance is not needed; FxHasher is ~2-4x faster on small keys.
 rustc-hash = "2"
+sysinfo = { workspace = true }
 # Provider logo rendering in the dashboard plan panel. Auto-detects
 # terminal protocol (sixel/kitty/iterm2) and falls back to halfblocks.
 ratatui-image = { version = "8", default-features = false, features = ["crossterm", "image-defaults"] }

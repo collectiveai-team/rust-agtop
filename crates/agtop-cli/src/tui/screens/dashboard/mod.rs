@@ -3,8 +3,12 @@
 #![allow(dead_code)]
 
 pub mod header;
+// Legacy tab modules — kept for historical reference but no longer used.
+// info_costs, info_general, info_process were replaced by info_details.
 pub mod info_costs;
+pub mod info_details;
 pub mod info_drawer;
+pub mod info_format;
 pub mod info_general;
 pub mod info_process;
 pub mod info_summary;
@@ -84,17 +88,20 @@ impl DashboardState {
             return Some(m);
         }
         if let Some(m) = self.sessions.handle_event(event) {
-            // Sync the drawer's selected row whenever the table selection changes.
-            let row = self
-                .sessions
-                .state
-                .selected()
-                .and_then(|i| self.sessions.rows.get(i))
-                .cloned();
-            self.info.set_row(row);
+            self.sync_info_selection();
             return Some(m);
         }
         None
+    }
+
+    pub fn sync_info_selection(&mut self) {
+        let row = self
+            .sessions
+            .state
+            .selected()
+            .and_then(|i| self.sessions.rows.get(i))
+            .cloned();
+        self.info.set_row(row);
     }
 }
 
@@ -105,7 +112,7 @@ pub use header::HeaderModel;
 mod overlay_tests {
     use super::*;
     use crate::tui::screens::dashboard::info_drawer::{DrawerVis, InfoDrawer};
-    use crate::tui::screens::dashboard::quota::QuotaMode;
+    use crate::tui::screens::dashboard::quota::{QuotaMode, QuotaPanel};
     use crate::tui::theme_v2::vscode_dark_plus;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
@@ -123,12 +130,17 @@ mod overlay_tests {
         // into the quota row beneath it. Use Long quota mode so the quota
         // row is tall enough that any leakage from a full-area drawer would
         // be visible.
-        let mut state = DashboardState::default();
-        state.info = InfoDrawer {
-            vis: DrawerVis::Open,
-            ..InfoDrawer::default()
+        let mut state = DashboardState {
+            info: InfoDrawer {
+                vis: DrawerVis::Open,
+                ..InfoDrawer::default()
+            },
+            quota: QuotaPanel {
+                mode: QuotaMode::Long,
+                ..Default::default()
+            },
+            ..Default::default()
         };
-        state.quota.mode = QuotaMode::Long;
 
         let total_w: u16 = 200;
         let total_h: u16 = 40;
