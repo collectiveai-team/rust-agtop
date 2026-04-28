@@ -1,6 +1,5 @@
 //! Animation tick + brightness modulation for pulsing widgets.
 // Foundation code for Plans 2-4; not yet wired into the existing TUI.
-#![allow(dead_code)]
 
 use std::time::{Duration, Instant};
 
@@ -22,6 +21,7 @@ impl Default for PulseClock {
 
 impl PulseClock {
     #[must_use]
+    #[allow(dead_code)]
     pub fn with_period(period: Duration) -> Self {
         Self {
             started: Instant::now(),
