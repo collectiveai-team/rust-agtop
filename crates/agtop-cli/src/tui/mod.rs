@@ -858,10 +858,39 @@ pub fn run_v2(
                     refresh::RefreshMsg::SessionAdded(_)
                     | refresh::RefreshMsg::AnalysisProgress { .. }
                     | refresh::RefreshMsg::AnalysisComplete => {
-                        // Streaming variants are delivered via `stream_rx` (Task 5).
-                        // The watch channel never carries them; this arm only exists
-                        // to keep the match exhaustive while the build is in flight.
+                        // Streaming variants are delivered via `stream_rx` below;
+                        // the watch channel only ever carries the legacy variants.
                     }
+                }
+            }
+
+            // Drain streaming messages from the Phase 2 analysis pipeline.
+            while let Some(msg) = handle.try_recv_stream() {
+                match msg {
+                    refresh::RefreshMsg::SessionAdded(analysis) => {
+                        refresh_adapter::apply_session_added(
+                            *analysis,
+                            &mut app.dashboard.header,
+                            &mut app.dashboard.sessions,
+                            &mut app.dashboard.quota,
+                            &mut app.aggregation,
+                        );
+                        app.dashboard.sync_info_selection();
+                    }
+                    refresh::RefreshMsg::AnalysisProgress { done, total } => {
+                        app.dashboard.header.analysis_progress = Some((done, total));
+                    }
+                    refresh::RefreshMsg::AnalysisComplete => {
+                        app.dashboard.header.analysis_progress = None;
+                    }
+                    // The legacy variants are delivered via the watch channel above
+                    // and never appear on `stream_rx`. Including them here keeps the
+                    // match exhaustive without a wildcard so any future variant is
+                    // surfaced as a compile error.
+                    refresh::RefreshMsg::Snapshot { .. }
+                    | refresh::RefreshMsg::Error { .. }
+                    | refresh::RefreshMsg::QuotaSnapshot { .. }
+                    | refresh::RefreshMsg::QuotaError { .. } => {}
                 }
             }
 

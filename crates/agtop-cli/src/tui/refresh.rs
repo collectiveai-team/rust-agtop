@@ -68,7 +68,9 @@ pub enum RefreshMsg {
         message: String,
     },
     /// A single session analysis completed during streaming initial load.
-    SessionAdded(#[allow(dead_code)] agtop_core::session::SessionAnalysis),
+    /// Boxed because `SessionAnalysis` is ~736 bytes and would otherwise
+    /// dominate the enum size (clippy::large_enum_variant).
+    SessionAdded(Box<agtop_core::session::SessionAnalysis>),
     /// Progress counter for streaming initial load.
     AnalysisProgress {
         #[allow(dead_code)]
@@ -799,7 +801,7 @@ async fn run_streaming_initial_load(
 
             // Stream result + progress to UI.
             let done = done_ctr.fetch_add(1, Ordering::Relaxed) + 1;
-            let _ = stream_tx_t.send(RefreshMsg::SessionAdded(analysis));
+            let _ = stream_tx_t.send(RefreshMsg::SessionAdded(Box::new(analysis)));
             let _ = stream_tx_t.send(RefreshMsg::AnalysisProgress { done, total });
         }));
     }
