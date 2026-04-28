@@ -187,11 +187,7 @@ pub struct SessionSummary {
     pub model: Option<String>,
     /// Working directory (best-effort). Used for display labels.
     pub cwd: Option<String>,
-    /// Coarse workflow state such as `waiting` or `stopped`.
-    #[serde(default)]
-    pub state: Option<String>,
-    /// Typed parser-side state. Replaces the legacy `state: Option<String>`
-    /// (kept temporarily during migration). Default: `ParserState::Unknown`.
+    /// Typed parser-side state. Default: `ParserState::Unknown`.
     #[serde(default)]
     pub parser_state: ParserState,
     /// Client-specific explanation of the derived state.
@@ -245,7 +241,6 @@ impl SessionSummary {
         model: Option<String>,
         cwd: Option<String>,
         data_path: std::path::PathBuf,
-        state: Option<String>,
         state_detail: Option<String>,
         model_effort: Option<String>,
         model_effort_detail: Option<String>,
@@ -258,7 +253,6 @@ impl SessionSummary {
             last_active,
             model,
             cwd,
-            state,
             parser_state: ParserState::default(),
             state_detail,
             model_effort,
@@ -543,7 +537,6 @@ mod tests {
             "last_active": null,
             "model": null,
             "cwd": null,
-            "state": null,
             "state_detail": null,
             "model_effort": null,
             "model_effort_detail": null,
@@ -573,7 +566,6 @@ mod tests {
             None,
             None,
             std::path::PathBuf::from("/tmp/x.jsonl"),
-            None,
             None,
             None,
             None,
@@ -682,7 +674,6 @@ mod tests {
                     None,
                     None,
                     std::path::PathBuf::from("/tmp"),
-                    None,
                     None,
                     None,
                     None,

@@ -743,7 +743,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let child_summary = SessionSummary::new(
             ClientKind::Claude,
@@ -754,7 +753,6 @@ mod tests {
             Some("claude-3".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/proj/child.jsonl"),
-            None,
             None,
             None,
             None,

@@ -206,7 +206,6 @@ mod lifecycle_tests {
             None,
             None,
             None,
-            None,
         )
     }
 

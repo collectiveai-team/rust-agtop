@@ -32,7 +32,6 @@ fn mk_session(client: ClientKind, hours_ago: i64, tokens: u64, cost: f64, durati
         None,
         None,
         None,
-        None,
     );
     #[allow(clippy::field_reassign_with_default)]
     let tok = {

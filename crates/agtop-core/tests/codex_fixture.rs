@@ -14,6 +14,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::clients::codex::CodexClient;
 use agtop_core::{Client, ClientKind, Plan, SessionSummary};
+use agtop_core::session::ParserState;
 
 // ---------------------------------------------------------------------------
 // Minimal temp-dir helper (mirrors the one in the codex unit tests)
@@ -193,7 +194,7 @@ fn codex_fixture_extracts_effort_and_waiting_state() {
         summary.model_effort_detail.as_deref(),
         Some("turn_context.effort")
     );
-    assert_eq!(summary.state.as_deref(), Some("running"));
+    assert_eq!(summary.parser_state, ParserState::Running);
     assert_eq!(
         summary.state_detail.as_deref(),
         Some("response_item:function_call")
@@ -218,7 +219,6 @@ fn codex_fixture_token_counts_are_summed() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
-        None,
         None,
         None,
         None,
@@ -260,7 +260,6 @@ fn codex_fixture_tool_call_count() {
         None,
         None,
         None,
-        None,
     );
 
     let client = CodexClient {
@@ -294,7 +293,6 @@ fn codex_fixture_duration_from_timestamps() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
-        None,
         None,
         None,
         None,
@@ -332,7 +330,6 @@ fn codex_fixture_retail_cost_is_positive() {
         Some("codex-mini-latest".into()),
         Some("/tmp/test-project".into()),
         fixture_path,
-        None,
         None,
         None,
         None,

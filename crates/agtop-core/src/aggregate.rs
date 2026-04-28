@@ -161,7 +161,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         #[allow(clippy::field_reassign_with_default)]
         let tok = {

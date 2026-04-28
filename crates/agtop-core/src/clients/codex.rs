@@ -387,16 +387,6 @@ fn parser_state_from_codex_message(payload: &serde_json::Value) -> Option<(Parse
     }
 }
 
-fn legacy_state_string_codex(ps: &ParserState) -> Option<String> {
-    match ps {
-        ParserState::Running => Some("running".to_string()),
-        ParserState::Idle => Some("stopped".to_string()),
-        ParserState::Waiting(_) => Some("waiting".to_string()),
-        ParserState::Error(_) => Some("running".to_string()),
-        ParserState::Unknown => None,
-    }
-}
-
 /// Scan the newest rollout jsonl files for the latest `rate_limits`
 /// snapshot. Returns whichever windows we find (`primary` / `secondary`)
 /// and whether any rollout files were present.
@@ -604,7 +594,6 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
     let mut cwd: Option<String> = None;
     let mut model_effort: Option<String> = None;
     let mut model_effort_detail: Option<String> = None;
-    let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut parser_state: ParserState = ParserState::default();
     let mut session_title: Option<String> = None;
@@ -668,11 +657,9 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                     }
                     if let Some((next_parser_state, detail)) = parser_state_from_response_item(p) {
                         parser_state = next_parser_state.clone();
-                        state = legacy_state_string_codex(&next_parser_state);
                         state_detail = Some(detail);
                     } else if let Some((next_parser_state, detail)) = parser_state_from_codex_message(p) {
                         parser_state = next_parser_state.clone();
-                        state = legacy_state_string_codex(&next_parser_state);
                         state_detail = Some(detail);
                     } else {
                         // A non-waiting response_item (e.g. a text output message)
@@ -681,7 +668,6 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
                         if matches!(ty, "function_call_output" | "custom_tool_call_output") {
                             // Tool output received — agent is back to Running to process the result.
                             parser_state = ParserState::Running;
-                            state = Some("running".to_string());
                             state_detail = Some("response_item:tool-output".to_string());
                         }
                     }
@@ -734,7 +720,6 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
-        state,
         parser_state,
         state_detail,
         model_effort,

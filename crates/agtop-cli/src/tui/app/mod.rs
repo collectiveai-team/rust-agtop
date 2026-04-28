@@ -1133,7 +1133,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let mut token_totals = TokenTotals::default();
         token_totals.input = tokens;

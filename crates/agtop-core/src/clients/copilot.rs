@@ -281,7 +281,6 @@ fn parse_session_all(
         None,
         None,
         None,
-        None,
     );
     let parsed = CopilotParsed {
         tool_call_count: if tool_calls > 0 {
@@ -417,11 +416,6 @@ fn parse_session_jsonl_all(
         model,
         None,
         path.to_path_buf(),
-        if waiting {
-            Some("waiting".into())
-        } else {
-            None
-        },
         if waiting {
             Some("copilot.questionCarousel".into())
         } else {

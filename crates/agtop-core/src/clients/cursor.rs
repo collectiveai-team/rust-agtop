@@ -218,7 +218,6 @@ fn parse_cursor_transcript(
         None,
         None,
         None,
-        None,
     ))
 }
 

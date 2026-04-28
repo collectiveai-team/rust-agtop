@@ -35,7 +35,6 @@ fn correlator_matches_own_open_file() {
         None,
         None,
         None,
-        None,
     );
 
     let mut c = ProcessCorrelator::new();

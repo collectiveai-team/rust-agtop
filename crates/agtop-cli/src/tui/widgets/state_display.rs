@@ -19,7 +19,7 @@ pub fn display_state(
         .map(|ts| (now - ts).num_seconds())
         .unwrap_or(i64::MAX);
 
-    if a.summary.state.as_deref() == Some("waiting") && age_secs <= WAITING_STALE_SECS {
+    if matches!(a.summary.parser_state, agtop_core::session::ParserState::Waiting(_)) && age_secs <= WAITING_STALE_SECS {
         return ("waiting", th::STATE_WAITING);
     }
 
@@ -36,27 +36,31 @@ pub fn display_state(
 mod tests {
     use super::*;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, ParserState, SessionAnalysis, SessionSummary, TokenTotals,
+        WaitReason,
     };
     use chrono::TimeZone;
     use std::path::PathBuf;
 
-    fn analysis(state: Option<&str>, last_active: Option<DateTime<Utc>>) -> SessionAnalysis {
+    fn analysis(state: Option<ParserState>, last_active: Option<DateTime<Utc>>) -> SessionAnalysis {
+        let mut summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "sess".into(),
+            last_active,
+            last_active,
+            Some("model".into()),
+            Some("/tmp".into()),
+            PathBuf::from("/tmp/sess.jsonl"),
+            None,
+            None,
+            None,
+        );
+        if let Some(ps) = state {
+            summary.parser_state = ps;
+        }
         SessionAnalysis::new(
-            SessionSummary::new(
-                ClientKind::Claude,
-                None,
-                "sess".into(),
-                last_active,
-                last_active,
-                Some("model".into()),
-                Some("/tmp".into()),
-                PathBuf::from("/tmp/sess.jsonl"),
-                state.map(str::to_string),
-                None,
-                None,
-                None,
-            ),
+            summary,
             TokenTotals::default(),
             CostBreakdown::default(),
             None,
@@ -72,7 +76,7 @@ mod tests {
     #[test]
     fn waiting_state_maps_to_waiting_style() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now));
+        let a = analysis(Some(ParserState::Waiting(WaitReason::Input)), Some(now));
 
         let (label, style) = display_state(&a, now);
 
@@ -83,7 +87,7 @@ mod tests {
     #[test]
     fn recent_non_waiting_session_maps_to_working() {
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 0, 30).unwrap();
-        let a = analysis(Some("stopped"), Some(now - chrono::Duration::seconds(10)));
+        let a = analysis(Some(ParserState::Idle), Some(now - chrono::Duration::seconds(10)));
 
         let (label, style) = display_state(&a, now);
 
@@ -106,7 +110,7 @@ mod tests {
     fn waiting_state_older_than_stale_threshold_maps_to_stale() {
         // A session stuck in "waiting" for > 5 minutes is stale (agent died).
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(301)));
+        let a = analysis(Some(ParserState::Waiting(WaitReason::Input)), Some(now - chrono::Duration::seconds(301)));
 
         let (label, style) = display_state(&a, now);
 
@@ -118,7 +122,7 @@ mod tests {
     fn waiting_state_within_stale_threshold_maps_to_waiting() {
         // A session in "waiting" for < 5 minutes is still shown as waiting.
         let now = Utc.with_ymd_and_hms(2026, 4, 19, 12, 10, 0).unwrap();
-        let a = analysis(Some("waiting"), Some(now - chrono::Duration::seconds(120)));
+        let a = analysis(Some(ParserState::Waiting(WaitReason::Input)), Some(now - chrono::Duration::seconds(120)));
 
         let (label, style) = display_state(&a, now);
 

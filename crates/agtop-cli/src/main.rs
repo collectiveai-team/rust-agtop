@@ -611,7 +611,6 @@ struct JsonSession {
     cwd: Option<String>,
     started_at: Option<DateTime<Utc>>,
     last_active: Option<DateTime<Utc>>,
-    state: Option<String>,
     display_state: String,
     state_detail: Option<String>,
     model_effort: Option<String>,
@@ -665,7 +664,6 @@ impl JsonSession {
             cwd: a.summary.cwd.clone(),
             started_at: a.summary.started_at,
             last_active: a.summary.last_active,
-            state: a.summary.state.clone(),
             display_state: display_state_label.to_string(),
             state_detail: a.summary.state_detail.clone(),
             model_effort: a.summary.model_effort.clone(),
@@ -694,7 +692,7 @@ mod json_output_tests {
     use std::path::PathBuf;
 
     #[test]
-    fn json_session_keeps_raw_state_and_adds_display_state() {
+    fn json_session_display_state_and_process_metrics() {
         let now = Utc::now();
         let summary = SessionSummary::new(
             ClientKind::OpenCode,
@@ -705,7 +703,6 @@ mod json_output_tests {
             Some("model".into()),
             Some("/tmp".into()),
             PathBuf::from("/tmp/sess.json"),
-            Some("stopped".into()),
             Some("finish=stop".into()),
             None,
             None,
@@ -732,7 +729,6 @@ mod json_output_tests {
 
         let json = JsonSession::from_analysis(&analysis, now);
 
-        assert_eq!(json.state.as_deref(), Some("stopped"));
         assert_eq!(json.display_state, "working");
         assert_eq!(
             json.process_metrics.as_ref().map(|m| m.cpu_percent),
@@ -756,7 +752,6 @@ mod json_output_tests {
             Some("claude-opus".into()),
             Some("/tmp/demo".into()),
             PathBuf::from("/tmp/demo/session.jsonl"),
-            None,
             None,
             None,
             None,

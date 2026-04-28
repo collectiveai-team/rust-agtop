@@ -937,7 +937,8 @@ mod tests {
     use crate::tui::column_config::ColumnId;
     use crate::version;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        ClientKind, CostBreakdown, ParserState, SessionAnalysis, SessionSummary, TokenTotals,
+        WaitReason,
     };
     use chrono::{TimeZone, Utc};
     use ratatui::backend::TestBackend;
@@ -955,7 +956,7 @@ mod tests {
         // > WAITING_STALE_SECS are classified as stale even if waiting).
         let s1_last = Utc::now();
 
-        let s1_summary = SessionSummary::new(
+        let mut s1_summary = SessionSummary::new(
             ClientKind::Claude,
             Some("Claude Max 5x".into()),
             "deadbeef-aaaa-bbbb-cccc-1234".into(),
@@ -964,11 +965,11 @@ mod tests {
             Some("claude-opus-4-6".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/deadbeef.jsonl"),
-            Some("waiting".into()),
             Some("tool approval pending".into()),
             Some("high".into()),
             Some("reasoning.effort=high".into()),
         );
+        s1_summary.parser_state = ParserState::Waiting(WaitReason::Permission);
         let mut s1_tokens = TokenTotals::default();
         s1_tokens.input = 1_000;
         s1_tokens.output = 500;
@@ -1000,7 +1001,6 @@ mod tests {
             Some("gpt-5".into()),
             Some("/tmp/other".into()),
             PathBuf::from("/tmp/codex.jsonl"),
-            None,
             None,
             None,
             None,
@@ -1135,7 +1135,6 @@ mod tests {
             Some("model".into()),
             Some("/tmp/proj".into()),
             PathBuf::from("/tmp/working.json"),
-            Some("stopped".into()),
             Some("finish=stop".into()),
             None,
             None,

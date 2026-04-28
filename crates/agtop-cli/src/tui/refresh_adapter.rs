@@ -171,7 +171,7 @@ fn derive_state(analysis: &SessionAnalysis) -> SessionState {
         return SessionState::Closed;
     }
 
-    let parser_state = analysis.summary.state.as_deref();
+    let parser_state = &analysis.summary.parser_state;
     let now = chrono::Utc::now();
     let age = analysis
         .summary
@@ -183,9 +183,18 @@ fn derive_state(analysis: &SessionAnalysis) -> SessionState {
     // marked otherwise).
     if matches!(analysis.liveness, Some(Liveness::Live)) {
         return match parser_state {
-            Some("waiting") => SessionState::Waiting(WaitReason::Input),
-            Some("idle") => SessionState::Idle,
-            Some("stopped" | "closed") => SessionState::Closed,
+            agtop_core::session::ParserState::Waiting(_) => SessionState::Waiting(WaitReason::Input),
+            agtop_core::session::ParserState::Idle => SessionState::Idle,
+            agtop_core::session::ParserState::Unknown => {
+                if let Some(a) = age {
+                    if a >= CLOSED_AFTER {
+                        return SessionState::Warning(WarningReason::Stalled {
+                            since: analysis.summary.last_active.unwrap(),
+                        });
+                    }
+                }
+                SessionState::Running
+            }
             _ => {
                 if let Some(a) = age {
                     if a >= CLOSED_AFTER {
@@ -206,15 +215,14 @@ fn derive_state(analysis: &SessionAnalysis) -> SessionState {
     // `crates/agtop-cli/src/tui/widgets/state_display.rs::display_state`
     // for the v1 implementation we mirror here.
     match parser_state {
-        Some("waiting") => match age {
+        agtop_core::session::ParserState::Waiting(_) => match age {
             Some(a) if a < WAITING_STALE => SessionState::Waiting(WaitReason::Input),
             _ => SessionState::Closed,
         },
-        Some("idle") => match age {
+        agtop_core::session::ParserState::Idle => match age {
             Some(a) if a < CLOSED_AFTER => SessionState::Idle,
             _ => SessionState::Closed,
         },
-        Some("stopped" | "closed") => SessionState::Closed,
         _ => match age {
             Some(a) if a < RUNNING_WINDOW => SessionState::Running,
             Some(a) if a < CLOSED_AFTER => SessionState::Warning(WarningReason::Stalled {
@@ -244,7 +252,6 @@ mod tests {
                 None,
                 None,
                 std::path::PathBuf::from("/tmp/session.jsonl"),
-                None,
                 None,
                 None,
                 None,
@@ -355,7 +362,6 @@ mod tests {
         a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(5));
         // No liveness, no parser state.
         a.liveness = None;
-        a.summary.state = None;
 
         let (header, sessions) = apply_one(a);
 
@@ -380,7 +386,7 @@ mod tests {
         let mut a = analysis("unmatched-waiting");
         a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(10));
         a.liveness = None;
-        a.summary.state = Some("waiting".into());
+        a.summary.parser_state = agtop_core::session::ParserState::Waiting(agtop_core::session::WaitReason::Input);
 
         let (_header, sessions) = apply_one(a);
 
@@ -401,7 +407,7 @@ mod tests {
         let mut a = analysis("unmatched-stalled");
         a.summary.last_active = Some(chrono::Utc::now() - chrono::Duration::seconds(120));
         a.liveness = None;
-        a.summary.state = None;
+        // No parser state, no summary state.
 
         let (_header, sessions) = apply_one(a);
 
@@ -428,7 +434,7 @@ mod tests {
             disk_read_bytes: 0,
             disk_written_bytes: 0,
         });
-        a.summary.state = Some("idle".to_string());
+        a.summary.parser_state = agtop_core::session::ParserState::Idle;
 
         let (header, sessions) = apply_one(a);
 
@@ -459,7 +465,6 @@ mod tests {
             None,
             None,
             std::path::PathBuf::from("/tmp/child.jsonl"),
-            None,
             None,
             None,
             None,
@@ -513,7 +518,6 @@ mod tests {
             None,
             None,
             std::path::PathBuf::from("/tmp/c.jsonl"),
-            None,
             None,
             None,
             None,
@@ -587,7 +591,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         parent.children = vec![SessionAnalysis::new(
             child_summary,
@@ -639,8 +642,7 @@ mod tests {
         parent.liveness = Some(Liveness::Live);
         let child_summary = SessionSummary::new(
             ClientKind::Claude, None, "child-collapsed".to_string(), None,
-            Some(Utc::now()), None, None, std::path::PathBuf::from("/tmp/c.jsonl"),
-            None, None, None, None,
+            Some(Utc::now()), None, None, std::path::PathBuf::from("/tmp/c.jsonl"), None, None, None,
         );
         let child = SessionAnalysis::new(
             child_summary, TokenTotals::default(), CostBreakdown::default(),
@@ -677,7 +679,6 @@ mod tests {
                 None,
                 None,
                 std::path::PathBuf::from(format!("/tmp/{id}.jsonl")),
-                None,
                 None,
                 None,
                 None,

@@ -447,7 +447,6 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
     let mut earliest: Option<DateTime<Utc>> = None;
     let mut model: Option<String> = None;
     let mut cwd: Option<String> = None;
-    let mut state: Option<String> = None;
     let mut state_detail: Option<String> = None;
     let mut session_title: Option<String> = None;
     let mut parser_state: ParserState = ParserState::default();
@@ -485,12 +484,6 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
             }
         }
         if let Some((next_parser_state, detail)) = parser_state_from_claude_record(v) {
-            // Update legacy string state for backward compat (removed in B7).
-            state = Some(match next_parser_state {
-                ParserState::Running => "running".to_string(),
-                ParserState::Idle => "stopped".to_string(),
-                _ => "unknown".to_string(),
-            });
             parser_state = next_parser_state;
             state_detail = Some(detail);
         }
@@ -512,7 +505,6 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         last_active,
         model,
         cwd,
-        state,
         parser_state,
         state_detail,
         model_effort: None,
@@ -1138,7 +1130,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
 
         let children = crate::client::Client::children(&client, &parent).unwrap();
@@ -1186,7 +1177,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
 
         let children = crate::client::Client::children(&client, &parent).unwrap();
@@ -1197,7 +1187,7 @@ mod tests {
         assert_eq!(child.session_id, "subagent-child");
         assert_eq!(child.model.as_deref(), Some("claude-3-5-haiku-20241022"));
         assert_eq!(child.cwd.as_deref(), Some("/tmp/subagent"));
-        assert_eq!(child.state.as_deref(), Some("stopped"));
+        assert_eq!(child.parser_state, ParserState::Idle);
         assert_eq!(
             child.state_detail.as_deref(),
             Some("assistant.stop_reason=end_turn")

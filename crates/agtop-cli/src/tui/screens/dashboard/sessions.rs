@@ -776,7 +776,6 @@ mod tests {
             None,
             None,
             None,
-            None,
         );
         let analysis = SessionAnalysis::new(
             summary,

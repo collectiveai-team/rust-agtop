@@ -32,7 +32,6 @@ fn mk(
         None,
         None,
         None,
-        None,
     );
     let mut analysis = SessionAnalysis::new(
         summary,
