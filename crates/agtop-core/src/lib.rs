@@ -32,7 +32,8 @@ pub use error::{Error, Result};
 pub use pricing::{Plan, PlanMode, Rates};
 pub use process::{Confidence, Liveness, ProcessCorrelator, ProcessInfo};
 pub use session::{
-    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, CostBreakdown, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionState,
+    SessionSummary, TokenTotals,
 };
 
 use std::sync::Arc;
