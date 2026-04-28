@@ -542,20 +542,16 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
         let mem_str =
             fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
-        let disk_read_rate_str = fmt::compact_rate_opt(
-            a.and_then(|a| {
-                a.process_metrics
-                    .as_ref()
-                    .map(|m| m.disk_read_bytes_per_sec)
-            }),
-        );
-        let disk_write_rate_str = fmt::compact_rate_opt(
-            a.and_then(|a| {
-                a.process_metrics
-                    .as_ref()
-                    .map(|m| m.disk_written_bytes_per_sec)
-            }),
-        );
+        let disk_read_rate_str = fmt::compact_rate_opt(a.and_then(|a| {
+            a.process_metrics
+                .as_ref()
+                .map(|m| m.disk_read_bytes_per_sec)
+        }));
+        let disk_write_rate_str = fmt::compact_rate_opt(a.and_then(|a| {
+            a.process_metrics
+                .as_ref()
+                .map(|m| m.disk_written_bytes_per_sec)
+        }));
         println!(
             "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}  {:>8}  {:>8}",
             s.client.as_str(),
@@ -709,7 +705,9 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals};
+    use agtop_core::session::{
+        ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals,
+    };
     use std::path::PathBuf;
 
     #[test]

@@ -1,15 +1,15 @@
 mod snapshot_helpers;
 
 use ratatui::layout::Rect;
-use ratatui::widgets::Paragraph;
 use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 
 use agtop_cli::tui::animation::PulseClock;
 use agtop_cli::tui::theme_v2::vscode_dark_plus;
 use agtop_cli::tui::widgets::state_dot;
 use agtop_core::session::{SessionState, WaitReason, WarningReason};
 
-use snapshot_helpers::{render_to_buffer, buffer_to_text};
+use snapshot_helpers::{buffer_to_text, render_to_buffer};
 
 fn render_dots_row(animations: bool) -> String {
     let theme = vscode_dark_plus::theme();
@@ -17,7 +17,9 @@ fn render_dots_row(animations: bool) -> String {
     let states: Vec<SessionState> = vec![
         SessionState::Running,
         SessionState::Waiting(WaitReason::Input),
-        SessionState::Warning(WarningReason::Stalled { since: chrono::Utc::now() }),
+        SessionState::Warning(WarningReason::Stalled {
+            since: chrono::Utc::now(),
+        }),
         SessionState::Error(agtop_core::session::ErrorReason::Crash),
         SessionState::Idle,
         SessionState::Closed,

@@ -42,12 +42,7 @@ pub fn rect_for(area: Rect, anchor: Anchor, width_pct: f32, height_pct: f32) -> 
 
 /// Render the drawer's outer block (clears the area + draws border + title).
 /// Returns the inner content area for the caller to fill.
-pub fn render_chrome(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    title: &str,
-    theme: &Theme,
-) -> Rect {
+pub fn render_chrome(frame: &mut Frame<'_>, area: Rect, title: &str, theme: &Theme) -> Rect {
     frame.render_widget(Clear, area);
     let block = Block::default()
         .title(title.to_string())

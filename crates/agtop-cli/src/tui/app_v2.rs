@@ -2,11 +2,16 @@
 // Foundation code for Plans 2-4.
 #![allow(dead_code)]
 
-use ratatui::{layout::{Constraint, Direction, Layout, Rect}, Frame};
+use ratatui::{
+    layout::{Constraint, Direction, Layout, Rect},
+    Frame,
+};
 
 use crate::tui::input::AppEvent;
 use crate::tui::msg::{Msg, ScreenId};
-use crate::tui::screens::{aggregation::AggregationState, config::ConfigState, dashboard::DashboardState};
+use crate::tui::screens::{
+    aggregation::AggregationState, config::ConfigState, dashboard::DashboardState,
+};
 use crate::tui::theme_v2::{self, Theme};
 use crate::tui::widgets::tab_bar;
 
@@ -55,8 +60,12 @@ impl App {
             | Msg::DrillIntoGroup(_)
             | Msg::CloseDrillDown => {}
             // Config messages: update local config state; persistence is best-effort.
-            Msg::SelectConfigSection(s) => { self.config.current_section = s; }
-            Msg::SetNerdFont(b) => { self.config.nerd_font = b; }
+            Msg::SelectConfigSection(s) => {
+                self.config.current_section = s;
+            }
+            Msg::SetNerdFont(b) => {
+                self.config.nerd_font = b;
+            }
             // Other Set* / Toggle* / Save config messages — state changes handled
             // within ConfigState.handle_event or not yet fully persisted (v1).
             Msg::SetThemeName(_)
@@ -88,7 +97,13 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Min(0)])
             .split(area);
-        self.tab_bar.render(frame, layout[0], self.current, env!("CARGO_PKG_VERSION"), &self.theme);
+        self.tab_bar.render(
+            frame,
+            layout[0],
+            self.current,
+            env!("CARGO_PKG_VERSION"),
+            &self.theme,
+        );
         match self.current {
             ScreenId::Dashboard => self.dashboard.render(frame, layout[1], &self.theme),
             ScreenId::Aggregation => self.aggregation.render(frame, layout[1], &self.theme),
@@ -99,7 +114,9 @@ impl App {
     pub fn handle_event(&mut self, event: &AppEvent) -> Option<Msg> {
         // Global keymap first.
         if let AppEvent::Key(k) = event {
-            if let Some(m) = self.global_keymap(*k) { return Some(m); }
+            if let Some(m) = self.global_keymap(*k) {
+                return Some(m);
+            }
         }
         // Tab bar mouse click: switch screen.
         if let AppEvent::Mouse(me) = event {
@@ -199,19 +216,28 @@ mod keymap_tests {
     #[test]
     fn d_switches_to_dashboard() {
         let app = App::default();
-        assert_eq!(app.global_keymap(k('d')), Some(Msg::SwitchScreen(ScreenId::Dashboard)));
+        assert_eq!(
+            app.global_keymap(k('d')),
+            Some(Msg::SwitchScreen(ScreenId::Dashboard))
+        );
     }
 
     #[test]
     fn a_switches_to_aggregation() {
         let app = App::default();
-        assert_eq!(app.global_keymap(k('a')), Some(Msg::SwitchScreen(ScreenId::Aggregation)));
+        assert_eq!(
+            app.global_keymap(k('a')),
+            Some(Msg::SwitchScreen(ScreenId::Aggregation))
+        );
     }
 
     #[test]
     fn c_switches_to_config() {
         let app = App::default();
-        assert_eq!(app.global_keymap(k('c')), Some(Msg::SwitchScreen(ScreenId::Config)));
+        assert_eq!(
+            app.global_keymap(k('c')),
+            Some(Msg::SwitchScreen(ScreenId::Config))
+        );
     }
 
     #[test]

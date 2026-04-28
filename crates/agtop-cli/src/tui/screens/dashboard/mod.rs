@@ -34,8 +34,8 @@ impl DashboardState {
         let layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),               // header
-                Constraint::Min(0),                  // sessions
+                Constraint::Length(3), // header
+                Constraint::Min(0),    // sessions
                 Constraint::Length(quota_rows),
             ])
             .split(area);
@@ -154,8 +154,7 @@ mod overlay_tests {
         // Drawer must be fully inside the sessions area.
         assert!(
             drawer_area.y >= sessions_area.y
-                && drawer_area.y + drawer_area.height
-                    <= sessions_area.y + sessions_area.height,
+                && drawer_area.y + drawer_area.height <= sessions_area.y + sessions_area.height,
             "drawer y-range {:?} must be inside sessions y-range {:?}",
             (drawer_area.y, drawer_area.y + drawer_area.height),
             (sessions_area.y, sessions_area.y + sessions_area.height),

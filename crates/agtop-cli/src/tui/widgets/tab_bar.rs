@@ -38,7 +38,9 @@ impl TabBar {
         let sep = "│ ";
         spans.push(Span::styled(
             logo,
-            Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.fg_emphasis)
+                .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(sep, Style::default().fg(theme.border_muted)));
 
@@ -54,7 +56,9 @@ impl TabBar {
             x_offset += w;
 
             let style = if id == current {
-                Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(theme.accent_primary)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(theme.fg_muted)
             };
@@ -66,7 +70,10 @@ impl TabBar {
         }
 
         spans.push(Span::styled("│  ", Style::default().fg(theme.border_muted)));
-        spans.push(Span::styled("q=quit  ?=help", Style::default().fg(theme.fg_muted)));
+        spans.push(Span::styled(
+            "q=quit  ?=help",
+            Style::default().fg(theme.fg_muted),
+        ));
 
         // Spacer pushing version to the right edge.
         let prefix_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -106,8 +113,16 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut bar = TabBar::default();
-        term.draw(|f| bar.render(f, Rect::new(0, 0, 40, 1), ScreenId::Dashboard, "0.4.0", &theme))
-            .unwrap();
+        term.draw(|f| {
+            bar.render(
+                f,
+                Rect::new(0, 0, 40, 1),
+                ScreenId::Dashboard,
+                "0.4.0",
+                &theme,
+            )
+        })
+        .unwrap();
     }
 
     #[test]
@@ -116,8 +131,16 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut bar = TabBar::default();
-        term.draw(|f| bar.render(f, Rect::new(0, 0, 200, 1), ScreenId::Aggregation, "0.4.0", &theme))
-            .unwrap();
+        term.draw(|f| {
+            bar.render(
+                f,
+                Rect::new(0, 0, 200, 1),
+                ScreenId::Aggregation,
+                "0.4.0",
+                &theme,
+            )
+        })
+        .unwrap();
     }
 
     #[test]
@@ -126,8 +149,16 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut bar = TabBar::default();
-        term.draw(|f| bar.render(f, Rect::new(0, 0, 120, 1), ScreenId::Dashboard, "0.4.0", &theme))
-            .unwrap();
+        term.draw(|f| {
+            bar.render(
+                f,
+                Rect::new(0, 0, 120, 1),
+                ScreenId::Dashboard,
+                "0.4.0",
+                &theme,
+            )
+        })
+        .unwrap();
         // " agtop " (7) + "│ " (2) = 9 chars before first tab.
         // "[d]ashboard" is 11 chars wide, x = 9..=19.
         assert_eq!(bar.hit_test(14, 0), Some(ScreenId::Dashboard));
@@ -147,8 +178,16 @@ mod tests {
         let mut term = Terminal::new(backend).unwrap();
         let theme = vscode_dark_plus::theme();
         let mut bar = TabBar::default();
-        term.draw(|f| bar.render(f, Rect::new(0, 0, 120, 1), ScreenId::Dashboard, "0.4.0", &theme))
-            .unwrap();
+        term.draw(|f| {
+            bar.render(
+                f,
+                Rect::new(0, 0, 120, 1),
+                ScreenId::Dashboard,
+                "0.4.0",
+                &theme,
+            )
+        })
+        .unwrap();
         assert_eq!(bar.hit_test(14, 1), None);
     }
 }

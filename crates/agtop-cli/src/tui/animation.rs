@@ -23,7 +23,10 @@ impl Default for PulseClock {
 impl PulseClock {
     #[must_use]
     pub fn with_period(period: Duration) -> Self {
-        Self { started: Instant::now(), period }
+        Self {
+            started: Instant::now(),
+            period,
+        }
     }
 
     /// Returns a brightness factor in [0.7, 1.0]. Sinusoidal.

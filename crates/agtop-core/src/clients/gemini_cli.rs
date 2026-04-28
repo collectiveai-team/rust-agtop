@@ -425,7 +425,12 @@ fn parse_gemini_session(
             model = Some(m.to_string());
         }
         if v.get("type").and_then(|x| x.as_str()) == Some("gemini") {
-            update_parser_state_from_gemini_message(v, &mut state, &mut state_detail, &mut parser_state);
+            update_parser_state_from_gemini_message(
+                v,
+                &mut state,
+                &mut state_detail,
+                &mut parser_state,
+            );
         }
     })?;
 
@@ -505,7 +510,12 @@ fn parse_gemini_session_json(
     if let Some(messages) = v.get("messages").and_then(|messages| messages.as_array()) {
         for message in messages {
             if message.get("type").and_then(|x| x.as_str()) == Some("gemini") {
-                update_parser_state_from_gemini_message(message, &mut state, &mut state_detail, &mut parser_state);
+                update_parser_state_from_gemini_message(
+                    message,
+                    &mut state,
+                    &mut state_detail,
+                    &mut parser_state,
+                );
             }
         }
     }
@@ -559,9 +569,10 @@ fn update_parser_state_from_gemini_message(
                 .find(|call| call.get("status").and_then(|x| x.as_str()) == Some("error"))
                 .and_then(|c| c.get("name").and_then(|x| x.as_str()))
                 .unwrap_or("unknown_tool");
-            *parser_state = ParserState::Error(ErrorReason::ParserDetected(
-                format!("gemini.tool_error:{}", tool_name),
-            ));
+            *parser_state = ParserState::Error(ErrorReason::ParserDetected(format!(
+                "gemini.tool_error:{}",
+                tool_name
+            )));
             *state = Some("running".to_string()); // legacy compat
             *state_detail = Some("gemini.toolCalls.error".to_string());
         } else if !tool_calls.is_empty() {
@@ -1295,7 +1306,12 @@ mod tests {
         let mut state = None;
         let mut state_detail = None;
         let mut parser_state = ParserState::default();
-        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        update_parser_state_from_gemini_message(
+            &msg,
+            &mut state,
+            &mut state_detail,
+            &mut parser_state,
+        );
         assert_eq!(parser_state, ParserState::Idle);
     }
 
@@ -1308,7 +1324,12 @@ mod tests {
         let mut state = None;
         let mut state_detail = None;
         let mut parser_state = ParserState::default();
-        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        update_parser_state_from_gemini_message(
+            &msg,
+            &mut state,
+            &mut state_detail,
+            &mut parser_state,
+        );
         assert_eq!(parser_state, ParserState::Running);
     }
 
@@ -1321,7 +1342,12 @@ mod tests {
         let mut state = None;
         let mut state_detail = None;
         let mut parser_state = ParserState::default();
-        update_parser_state_from_gemini_message(&msg, &mut state, &mut state_detail, &mut parser_state);
+        update_parser_state_from_gemini_message(
+            &msg,
+            &mut state,
+            &mut state_detail,
+            &mut parser_state,
+        );
         assert!(matches!(parser_state, ParserState::Error(_)));
     }
 

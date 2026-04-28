@@ -13,8 +13,8 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::clients::codex::CodexClient;
-use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 use agtop_core::session::ParserState;
+use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------
 // Minimal temp-dir helper (mirrors the one in the codex unit tests)

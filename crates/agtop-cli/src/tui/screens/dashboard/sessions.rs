@@ -201,15 +201,9 @@ impl SessionsTable {
             //   ├── for non-last children
             //   └── for the last child of a parent
             let glyph = if row.is_last_child {
-                Span::styled(
-                    "└── ",
-                    Style::default().fg(theme.fg_muted),
-                )
+                Span::styled("└── ", Style::default().fg(theme.fg_muted))
             } else {
-                Span::styled(
-                    "├── ",
-                    Style::default().fg(theme.fg_muted),
-                )
+                Span::styled("├── ", Style::default().fg(theme.fg_muted))
             };
             Cell::from(Line::from(vec![glyph, dot_span]))
         } else {
@@ -477,8 +471,10 @@ impl SessionsTable {
             }) => {
                 // Only scroll when the pointer is inside the table area.
                 let area = self.table_area;
-                if *column < area.x || *column >= area.x + area.width
-                    || *row < area.y || *row >= area.y + area.height
+                if *column < area.x
+                    || *column >= area.x + area.width
+                    || *row < area.y
+                    || *row >= area.y + area.height
                 {
                     return None;
                 }
@@ -493,8 +489,10 @@ impl SessionsTable {
             }) => {
                 // Only scroll when the pointer is inside the table area.
                 let area = self.table_area;
-                if *column < area.x || *column >= area.x + area.width
-                    || *row < area.y || *row >= area.y + area.height
+                if *column < area.x
+                    || *column >= area.x + area.width
+                    || *row < area.y
+                    || *row >= area.y + area.height
                 {
                     return None;
                 }
@@ -696,7 +694,7 @@ mod tests {
 
     #[test]
     fn left_click_on_first_data_row_selects_index_zero() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut t = SessionsTable {
             rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
             ..SessionsTable::default()
@@ -712,12 +710,16 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         t.handle_event(&ev);
-        assert_eq!(t.state.selected(), Some(0), "clicking first data row should select index 0");
+        assert_eq!(
+            t.state.selected(),
+            Some(0),
+            "clicking first data row should select index 0"
+        );
     }
 
     #[test]
     fn left_click_outside_table_does_nothing() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         let mut t = SessionsTable {
             rows: vec![mock_row("a"), mock_row("b")],
             ..SessionsTable::default()
@@ -731,7 +733,11 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         t.handle_event(&ev);
-        assert_eq!(t.state.selected(), None, "click outside table must not change selection");
+        assert_eq!(
+            t.state.selected(),
+            None,
+            "click outside table must not change selection"
+        );
     }
 
     #[test]
@@ -743,8 +749,8 @@ mod tests {
 
     #[test]
     fn closed_row_style_does_not_use_dim_modifier() {
-        use ratatui::style::Modifier;
         use crate::tui::theme_v2::vscode_dark_plus;
+        use ratatui::style::Modifier;
         let theme = vscode_dark_plus::theme();
         // Simulate closed row style selection (same logic as render_row)
         let state = SessionState::Closed;
@@ -761,8 +767,8 @@ mod tests {
 
     #[test]
     fn highlight_style_does_not_use_reversed_modifier() {
-        use ratatui::style::Modifier;
         use crate::tui::theme_v2::vscode_dark_plus;
+        use ratatui::style::Modifier;
         let theme = vscode_dark_plus::theme();
         // Simulate the row_highlight_style (same tokens as render())
         let highlight = Style::default()
@@ -862,7 +868,7 @@ mod tests {
 
     #[test]
     fn scroll_outside_table_area_is_ignored() {
-        use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         let mut t = SessionsTable {
             rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
             ..SessionsTable::default()
@@ -876,12 +882,16 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         t.handle_event(&ev);
-        assert_eq!(t.state.selected(), Some(1), "scroll outside table must not change selection");
+        assert_eq!(
+            t.state.selected(),
+            Some(1),
+            "scroll outside table must not change selection"
+        );
     }
 
     #[test]
     fn scroll_inside_table_area_moves_selection() {
-        use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
         let mut t = SessionsTable {
             rows: vec![mock_row("a"), mock_row("b"), mock_row("c")],
             ..SessionsTable::default()
@@ -895,7 +905,11 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         t.handle_event(&ev);
-        assert_eq!(t.state.selected(), Some(1), "scroll inside table must advance selection");
+        assert_eq!(
+            t.state.selected(),
+            Some(1),
+            "scroll inside table must advance selection"
+        );
     }
 
     #[test]

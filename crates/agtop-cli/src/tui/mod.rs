@@ -5,18 +5,18 @@
 //! the user quits. All state mutation happens through [`app::App`]
 //! methods; all rendering through [`widgets`].
 
+pub mod animation;
 pub mod app;
 pub mod app_v2;
 pub mod column_config;
-pub mod refresh_adapter;
-pub mod screens;
-mod events;
-pub mod input;
 pub mod component;
+mod events;
 pub mod focus;
-pub mod animation;
+pub mod input;
 pub mod msg;
 mod refresh;
+pub mod refresh_adapter;
+pub mod screens;
 pub mod theme;
 pub mod theme_v2;
 pub mod widgets;
@@ -840,8 +840,7 @@ pub fn run_v2(
                     refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
                         app.dashboard.quota.apply_results(&results);
                     }
-                    refresh::RefreshMsg::QuotaError { .. }
-                    | refresh::RefreshMsg::Error { .. } => {
+                    refresh::RefreshMsg::QuotaError { .. } | refresh::RefreshMsg::Error { .. } => {
                         // Silently ignore; panels retain their last good data.
                     }
                 }
@@ -867,7 +866,9 @@ pub fn run_v2(
                             handle.trigger_manual();
                         }
                         app.update(msg);
-                        if should_quit { break; }
+                        if should_quit {
+                            break;
+                        }
                     }
                 }
             }

@@ -10,25 +10,37 @@ use ratatui::{
     Frame,
 };
 
-use agtop_core::session::SessionAnalysis;
 use crate::tui::theme_v2::Theme;
 use crate::tui::widgets::sparkline_braille;
+use agtop_core::session::SessionAnalysis;
 
-pub fn render(frame: &mut Frame<'_>, area: Rect, a: &SessionAnalysis, cpu_hist: &[f32], theme: &Theme) {
+pub fn render(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    a: &SessionAnalysis,
+    cpu_hist: &[f32],
+    theme: &Theme,
+) {
     let pid = a.pid.map(|p| p.to_string()).unwrap_or_else(|| "—".into());
-    let cpu = a.process_metrics
+    let cpu = a
+        .process_metrics
         .as_ref()
         .map(|m| format!("{:.1}%", m.cpu_percent))
         .unwrap_or_else(|| "—".into());
-    let resident = a.process_metrics
+    let resident = a
+        .process_metrics
         .as_ref()
         .map(|m| format!("{:.1}M", m.memory_bytes as f32 / 1_048_576.0))
         .unwrap_or_else(|| "—".into());
     let disk_read_rate = crate::fmt::compact_rate_opt(
-        a.process_metrics.as_ref().map(|m| m.disk_read_bytes_per_sec),
+        a.process_metrics
+            .as_ref()
+            .map(|m| m.disk_read_bytes_per_sec),
     );
     let disk_write_rate = crate::fmt::compact_rate_opt(
-        a.process_metrics.as_ref().map(|m| m.disk_written_bytes_per_sec),
+        a.process_metrics
+            .as_ref()
+            .map(|m| m.disk_written_bytes_per_sec),
     );
 
     let spark = sparkline_braille::render_braille(cpu_hist, 16, 100.0);

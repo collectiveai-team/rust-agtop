@@ -252,8 +252,12 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
 /// Returns a human-readable label like "Bash: cargo test" or "Write: src/main.rs".
 fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
     for rec in records.iter().rev() {
-        let Some(msg) = rec.get("message") else { continue };
-        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else { continue };
+        let Some(msg) = rec.get("message") else {
+            continue;
+        };
+        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
+            continue;
+        };
         for block in content.iter().rev() {
             if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
                 let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
@@ -892,7 +896,10 @@ mod tests {
         });
         assert_eq!(
             parser_state_from_claude_record(&v),
-            Some((ParserState::Running, "assistant.stop_reason=tool_use".to_string()))
+            Some((
+                ParserState::Running,
+                "assistant.stop_reason=tool_use".to_string()
+            ))
         );
     }
 
@@ -903,7 +910,10 @@ mod tests {
         });
         assert_eq!(
             parser_state_from_claude_record(&v),
-            Some((ParserState::Idle, "assistant.stop_reason=end_turn".to_string()))
+            Some((
+                ParserState::Idle,
+                "assistant.stop_reason=end_turn".to_string()
+            ))
         );
     }
 

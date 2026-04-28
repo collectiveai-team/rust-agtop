@@ -337,7 +337,9 @@ mod lifecycle_tests {
             Some(FAKE_CPU)
         );
         assert_eq!(
-            p.process_metrics.as_ref().map(|m| m.disk_read_bytes_per_sec),
+            p.process_metrics
+                .as_ref()
+                .map(|m| m.disk_read_bytes_per_sec),
             Some(FAKE_DISK_READ_RATE)
         );
         assert_eq!(

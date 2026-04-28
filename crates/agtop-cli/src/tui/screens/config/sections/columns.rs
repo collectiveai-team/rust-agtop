@@ -36,9 +36,14 @@ impl Default for ColumnsModel {
 pub fn render(frame: &mut Frame<'_>, area: Rect, m: &ColumnsModel, theme: &Theme) {
     let title = Line::from(Span::styled(
         "Columns",
-        Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(theme.fg_emphasis)
+            .add_modifier(Modifier::BOLD),
     ));
-    let rule = Line::from(Span::styled("─".repeat(40), Style::default().fg(theme.border_muted)));
+    let rule = Line::from(Span::styled(
+        "─".repeat(40),
+        Style::default().fg(theme.border_muted),
+    ));
     let hint = Line::from(Span::styled(
         "  Space toggles · J/K reorders · Enter saves",
         Style::default().fg(theme.fg_muted),
@@ -54,7 +59,11 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, m: &ColumnsModel, theme: &Theme
         let cb = controls::checkbox(*visible, theme);
         let label = Span::styled(
             format!("  {}", col.label()),
-            Style::default().fg(if *visible { theme.fg_default } else { theme.fg_muted }),
+            Style::default().fg(if *visible {
+                theme.fg_default
+            } else {
+                theme.fg_muted
+            }),
         );
         lines.push(Line::from(vec![marker, cb, label]));
     }

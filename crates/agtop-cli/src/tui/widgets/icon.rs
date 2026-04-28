@@ -39,36 +39,36 @@ impl Icon {
     pub fn render(self, nerd_font: bool) -> &'static str {
         match (self, nerd_font) {
             // T2 with T0 fallback
-            (Self::Refresh, true)  => "\u{F01DA}", // nf-md-refresh
-            (Self::Refresh, false) => "\u{27F3}",  // ⟳
-            (Self::Pause, true)    => "\u{F03E4}", // nf-md-pause
-            (Self::Pause, false)   => "\u{2016}",  // ‖
-            (Self::Search, true)   => "\u{F0349}", // nf-md-magnify
-            (Self::Search, false)  => "/",
+            (Self::Refresh, true) => "\u{F01DA}", // nf-md-refresh
+            (Self::Refresh, false) => "\u{27F3}", // ⟳
+            (Self::Pause, true) => "\u{F03E4}",   // nf-md-pause
+            (Self::Pause, false) => "\u{2016}",   // ‖
+            (Self::Search, true) => "\u{F0349}",  // nf-md-magnify
+            (Self::Search, false) => "/",
             // T2 with no fallback (omitted when NF off)
-            (Self::Clock, true)    => "\u{F0954}", // nf-md-clock_outline
-            (Self::Clock, false)   => "",
-            (Self::Procs, true)    => "\u{F08BB}", // nf-md-cog_outline
-            (Self::Procs, false)   => "",
-            (Self::Folder, true)   => "\u{F024B}", // nf-md-folder
-            (Self::Folder, false)  => "",
-            (Self::Palette, true)  => "\u{F03D8}", // nf-md-palette
+            (Self::Clock, true) => "\u{F0954}", // nf-md-clock_outline
+            (Self::Clock, false) => "",
+            (Self::Procs, true) => "\u{F08BB}", // nf-md-cog_outline
+            (Self::Procs, false) => "",
+            (Self::Folder, true) => "\u{F024B}", // nf-md-folder
+            (Self::Folder, false) => "",
+            (Self::Palette, true) => "\u{F03D8}", // nf-md-palette
             (Self::Palette, false) => "",
-            (Self::TableColumn, true)  => "\u{F1377}", // nf-md-table_column
+            (Self::TableColumn, true) => "\u{F1377}", // nf-md-table_column
             (Self::TableColumn, false) => "",
-            (Self::AccountMultiple, true)  => "\u{F08C9}", // nf-md-account_multiple_outline
+            (Self::AccountMultiple, true) => "\u{F08C9}", // nf-md-account_multiple_outline
             (Self::AccountMultiple, false) => "",
-            (Self::KeyboardOutline, true)  => "\u{F097B}", // nf-md-keyboard_outline
+            (Self::KeyboardOutline, true) => "\u{F097B}", // nf-md-keyboard_outline
             (Self::KeyboardOutline, false) => "",
-            (Self::DatabaseOutline, true)  => "\u{F01BC}", // nf-md-database_outline
+            (Self::DatabaseOutline, true) => "\u{F01BC}", // nf-md-database_outline
             (Self::DatabaseOutline, false) => "",
-            (Self::InformationOutline, true)  => "\u{F02FD}", // nf-md-information_outline
+            (Self::InformationOutline, true) => "\u{F02FD}", // nf-md-information_outline
             (Self::InformationOutline, false) => "",
-            (Self::Tray, true)     => "\u{F0DF9}", // nf-md-tray
-            (Self::Tray, false)    => "",
-            (Self::DatabaseOff, true)  => "\u{F0A8E}", // nf-md-database_off_outline (approximate)
+            (Self::Tray, true) => "\u{F0DF9}", // nf-md-tray
+            (Self::Tray, false) => "",
+            (Self::DatabaseOff, true) => "\u{F0A8E}", // nf-md-database_off_outline (approximate)
             (Self::DatabaseOff, false) => "",
-            (Self::AlertCircle, true)  => "\u{F015A}", // nf-md-alert_circle_outline
+            (Self::AlertCircle, true) => "\u{F015A}", // nf-md-alert_circle_outline
             (Self::AlertCircle, false) => "",
         }
     }

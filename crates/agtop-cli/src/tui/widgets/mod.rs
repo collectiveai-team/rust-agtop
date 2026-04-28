@@ -4,12 +4,11 @@
 
 pub mod colored_label;
 pub mod config_tab;
-pub mod drawer;
-pub mod tab_bar;
 pub mod cost_tab;
 pub mod dashboard_cost;
 pub mod dashboard_plan;
 pub mod dashboard_usage;
+pub mod drawer;
 pub mod gradient_bar;
 pub mod icon;
 pub mod info_tab;
@@ -20,6 +19,7 @@ pub mod session_table;
 pub mod sparkline_braille;
 pub mod state_dot;
 pub mod state_style;
+pub mod tab_bar;
 
 /// Right-aligned key–value row used by Info and Process tabs.
 #[allow(dead_code)]

@@ -63,11 +63,14 @@ pub fn aggregate(
     let start = range.start(now);
     let mut by_label: std::collections::BTreeMap<String, Vec<&SessionAnalysis>> =
         Default::default();
-    for s in sessions.iter().filter(|s| match (start, s.summary.last_active) {
-        (Some(start), Some(last)) => last >= start,
-        (Some(_), None) => false,
-        (None, _) => true,
-    }) {
+    for s in sessions
+        .iter()
+        .filter(|s| match (start, s.summary.last_active) {
+            (Some(start), Some(last)) => last >= start,
+            (Some(_), None) => false,
+            (None, _) => true,
+        })
+    {
         let key = group_key(s, group_by);
         by_label.entry(key).or_default().push(s);
     }
@@ -76,10 +79,7 @@ pub fn aggregate(
         .into_iter()
         .map(|(label, members)| {
             let session_count = members.len();
-            let total_tokens: u64 = members
-                .iter()
-                .map(|s| s.tokens.grand_total())
-                .sum();
+            let total_tokens: u64 = members.iter().map(|s| s.tokens.grand_total()).sum();
             // A session has a known cost if cost.total > 0 or it's included in plan.
             // We treat sessions with cost.included as having Some(0.0) cost.
             // If any session's cost data is unavailable (total=0 and not included),
@@ -96,11 +96,23 @@ pub fn aggregate(
                     .iter()
                     .filter_map(|s| s.duration_secs.map(|d| d as i64))
                     .collect();
-                if durs.is_empty() { 0 } else { (durs.iter().sum::<i64>() / durs.len() as i64) as u64 }
+                if durs.is_empty() {
+                    0
+                } else {
+                    (durs.iter().sum::<i64>() / durs.len() as i64) as u64
+                }
             };
             let last_active = members.iter().filter_map(|s| s.summary.last_active).max();
             let activity = build_activity_buckets(&members, range, now, activity_buckets);
-            AggregateGroup { label, session_count, total_tokens, total_cost, avg_duration_secs, last_active, activity }
+            AggregateGroup {
+                label,
+                session_count,
+                total_tokens,
+                total_cost,
+                avg_duration_secs,
+                last_active,
+                activity,
+            }
         })
         .collect()
 }
@@ -109,11 +121,22 @@ fn group_key(s: &SessionAnalysis, by: GroupBy) -> String {
     match by {
         GroupBy::Client | GroupBy::Provider => s.summary.client.as_str().to_string(),
         GroupBy::Model => s.summary.model.clone().unwrap_or_else(|| "unknown".into()),
-        GroupBy::Project => s.summary.cwd
+        GroupBy::Project => s
+            .summary
+            .cwd
             .as_deref()
-            .map(|p| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string()))
+            .map(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| p.to_string())
+            })
             .unwrap_or_else(|| "unknown".into()),
-        GroupBy::Subscription => s.summary.subscription.clone().unwrap_or_else(|| "unknown".into()),
+        GroupBy::Subscription => s
+            .summary
+            .subscription
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
     }
 }
 
@@ -123,8 +146,12 @@ fn build_activity_buckets(
     now: DateTime<Utc>,
     n_buckets: usize,
 ) -> Vec<f32> {
-    if n_buckets == 0 { return Vec::new(); }
-    let start = range.start(now).unwrap_or_else(|| now - Duration::days(365));
+    if n_buckets == 0 {
+        return Vec::new();
+    }
+    let start = range
+        .start(now)
+        .unwrap_or_else(|| now - Duration::days(365));
     let span = (now - start).num_seconds().max(1);
     let bucket_secs = span / n_buckets as i64;
     let mut buckets = vec![0.0_f32; n_buckets];
@@ -145,10 +172,17 @@ mod tests {
     use crate::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
 
     fn now() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z").unwrap().to_utc()
+        DateTime::parse_from_rfc3339("2026-04-26T12:00:00Z")
+            .unwrap()
+            .to_utc()
     }
 
-    fn mk_session(client: ClientKind, when: DateTime<Utc>, tokens: u64, cost: f64) -> SessionAnalysis {
+    fn mk_session(
+        client: ClientKind,
+        when: DateTime<Utc>,
+        tokens: u64,
+        cost: f64,
+    ) -> SessionAnalysis {
         let summary = SessionSummary::new(
             client,
             None,
@@ -212,7 +246,12 @@ mod tests {
     #[test]
     fn time_range_all_includes_everything() {
         let n = now();
-        let s = vec![mk_session(ClientKind::Claude, n - Duration::days(365), 1, 0.0)];
+        let s = vec![mk_session(
+            ClientKind::Claude,
+            n - Duration::days(365),
+            1,
+            0.0,
+        )];
         let groups = aggregate(&s, GroupBy::Client, TimeRange::All, n, 6);
         assert_eq!(groups.len(), 1);
     }
@@ -220,7 +259,12 @@ mod tests {
     #[test]
     fn activity_buckets_have_correct_length() {
         let n = now();
-        let s = vec![mk_session(ClientKind::Claude, n - Duration::hours(1), 100, 0.0)];
+        let s = vec![mk_session(
+            ClientKind::Claude,
+            n - Duration::hours(1),
+            100,
+            0.0,
+        )];
         let groups = aggregate(&s, GroupBy::Client, TimeRange::Today, n, 12);
         assert_eq!(groups[0].activity.len(), 12);
     }

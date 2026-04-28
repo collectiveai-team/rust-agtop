@@ -19,7 +19,7 @@ use crate::tui::widgets::{gradient_bar, sparkline_braille};
 pub struct HeaderModel {
     pub procs: usize,
     pub cpu_history: Vec<f32>, // recent CPU% samples; last is current
-    pub cpu_max: f32,           // typically 100.0 or n_cores * 100
+    pub cpu_max: f32,          // typically 100.0 or n_cores * 100
     pub mem_used_bytes: u64,
     pub mem_total_bytes: u64,
     pub sessions_active: usize,
@@ -52,7 +52,10 @@ fn render_row1(frame: &mut Frame<'_>, area: Rect, m: &HeaderModel, theme: &Theme
     let cpu_pct = format!("  {pct:>3.0}%", pct = cpu_now);
     let right = format!("⟳ {s}s · {clk} ", s = m.refresh_secs, clk = m.clock);
 
-    let total_chars = left.chars().count() + spark.chars().count() + cpu_pct.chars().count() + right.chars().count();
+    let total_chars = left.chars().count()
+        + spark.chars().count()
+        + cpu_pct.chars().count()
+        + right.chars().count();
     let pad = (area.width as usize).saturating_sub(total_chars);
 
     let line = Line::from(vec![
@@ -85,7 +88,11 @@ fn render_row2(frame: &mut Frame<'_>, area: Rect, m: &HeaderModel, theme: &Theme
     );
 
     let prefix = " Mem ";
-    let used_chars = prefix.chars().count() + filled.chars().count() + empty.chars().count() + mem_label.chars().count() + sessions.chars().count();
+    let used_chars = prefix.chars().count()
+        + filled.chars().count()
+        + empty.chars().count()
+        + mem_label.chars().count()
+        + sessions.chars().count();
     let pad = (area.width as usize).saturating_sub(used_chars);
 
     let line = Line::from(vec![

@@ -13,13 +13,13 @@ use crate::tui::theme_v2::Theme;
 #[must_use]
 pub fn dot_color(state: &SessionState, theme: &Theme) -> Option<Color> {
     match state {
-        SessionState::Running       => Some(theme.status_warning),
-        SessionState::Waiting(_)    => Some(theme.accent_secondary),
-        SessionState::Warning(_)    => Some(theme.status_attention),
-        SessionState::Error(_)      => Some(theme.status_error),
-        SessionState::Idle          => Some(theme.status_success),
-        SessionState::Closed        => None,
-        _                           => None, // future variants are non-rendering
+        SessionState::Running => Some(theme.status_warning),
+        SessionState::Waiting(_) => Some(theme.accent_secondary),
+        SessionState::Warning(_) => Some(theme.status_attention),
+        SessionState::Error(_) => Some(theme.status_error),
+        SessionState::Idle => Some(theme.status_success),
+        SessionState::Closed => None,
+        _ => None, // future variants are non-rendering
     }
 }
 
@@ -47,16 +47,16 @@ pub fn action_needs_warning_modifier(state: &SessionState) -> bool {
 #[must_use]
 pub fn label_for(state: &SessionState) -> &'static str {
     match state {
-        SessionState::Running                                       => "running",
-        SessionState::Waiting(WaitReason::Input)                    => "waiting:input",
-        SessionState::Waiting(WaitReason::Permission)               => "waiting:perm",
-        SessionState::Waiting(_)                                    => "waiting",
-        SessionState::Warning(WarningReason::Stalled { .. })        => "stalled",
-        SessionState::Warning(_)                                    => "warning",
-        SessionState::Error(_)                                      => "error",
-        SessionState::Idle                                          => "idle",
-        SessionState::Closed                                        => "closed",
-        _                                                            => "?",
+        SessionState::Running => "running",
+        SessionState::Waiting(WaitReason::Input) => "waiting:input",
+        SessionState::Waiting(WaitReason::Permission) => "waiting:perm",
+        SessionState::Waiting(_) => "waiting",
+        SessionState::Warning(WarningReason::Stalled { .. }) => "stalled",
+        SessionState::Warning(_) => "warning",
+        SessionState::Error(_) => "error",
+        SessionState::Idle => "idle",
+        SessionState::Closed => "closed",
+        _ => "?",
     }
 }
 
@@ -65,12 +65,17 @@ mod tests {
     use super::*;
     use crate::tui::theme_v2::vscode_dark_plus;
 
-    fn theme() -> Theme { vscode_dark_plus::theme() }
+    fn theme() -> Theme {
+        vscode_dark_plus::theme()
+    }
 
     #[test]
     fn running_dot_is_status_warning() {
         let t = theme();
-        assert_eq!(dot_color(&SessionState::Running, &t), Some(t.status_warning));
+        assert_eq!(
+            dot_color(&SessionState::Running, &t),
+            Some(t.status_warning)
+        );
     }
 
     #[test]
@@ -116,12 +121,12 @@ mod tests {
 
     #[test]
     fn permission_waiting_triggers_action_warning() {
-        assert!(action_needs_warning_modifier(
-            &SessionState::Waiting(WaitReason::Permission)
-        ));
-        assert!(!action_needs_warning_modifier(
-            &SessionState::Waiting(WaitReason::Input)
-        ));
+        assert!(action_needs_warning_modifier(&SessionState::Waiting(
+            WaitReason::Permission
+        )));
+        assert!(!action_needs_warning_modifier(&SessionState::Waiting(
+            WaitReason::Input
+        )));
         assert!(!action_needs_warning_modifier(&SessionState::Running));
     }
 
