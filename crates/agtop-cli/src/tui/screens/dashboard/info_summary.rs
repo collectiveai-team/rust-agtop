@@ -213,10 +213,7 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme:
             ),
             Span::raw("    "),
             Span::styled("Tool ", Style::default().fg(theme.fg_muted)),
-            Span::styled(
-                action.to_string(),
-                Style::default().fg(theme.fg_default),
-            ),
+            Span::styled(action.to_string(), Style::default().fg(theme.fg_default)),
         ]),
         Line::from(vec![
             Span::styled("Session  ", Style::default().fg(theme.fg_muted)),
@@ -254,11 +251,7 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, them
     let plot = if m.activity_samples.is_empty() {
         "no activity samples".to_string()
     } else {
-        crate::tui::widgets::sparkline_braille::render_braille(
-            &m.activity_samples,
-            width,
-            100.0,
-        )
+        crate::tui::widgets::sparkline_braille::render_braille(&m.activity_samples, width, 100.0)
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![

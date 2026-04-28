@@ -121,10 +121,7 @@ impl InfoDrawer {
         // one cell). Find each `[N]` marker's column offset within `title`.
         let chars: Vec<char> = title.chars().collect();
         let mut markers: Vec<(usize, InfoTab)> = Vec::with_capacity(4);
-        for (tab, n) in [
-            (InfoTab::Summary, '1'),
-            (InfoTab::Details, '2'),
-        ] {
+        for (tab, n) in [(InfoTab::Summary, '1'), (InfoTab::Details, '2')] {
             for i in 0..chars.len().saturating_sub(2) {
                 if chars[i] == '[' && chars[i + 1] == n && chars[i + 2] == ']' {
                     markers.push((i, tab));
@@ -178,7 +175,12 @@ impl InfoDrawer {
                     client_label: &row.client_label,
                     client_kind: row.client_kind,
                     state: &state,
-                    recent_turns: row.analysis.recent_messages.iter().map(info_summary::MessageTurn::from).collect(),
+                    recent_turns: row
+                        .analysis
+                        .recent_messages
+                        .iter()
+                        .map(info_summary::MessageTurn::from)
+                        .collect(),
                     message_scroll_from_bottom: self.summary_message_scroll_from_bottom,
                     activity_samples: row.activity_samples.clone(),
                     parent_session_id: row.parent_session_id.as_deref(),
@@ -241,8 +243,11 @@ impl InfoDrawer {
         }
 
         if self.vis == DrawerVis::Open {
-            if let AppEvent::Mouse(MouseEvent { kind, row, column, .. }) = event {
-                let inside = self.last_area.map_or(false, |area| {
+            if let AppEvent::Mouse(MouseEvent {
+                kind, row, column, ..
+            }) = event
+            {
+                let inside = self.last_area.is_some_and(|area| {
                     *column >= area.x
                         && *column < area.x + area.width
                         && *row >= area.y
@@ -252,15 +257,27 @@ impl InfoDrawer {
                     match kind {
                         MouseEventKind::ScrollUp => {
                             match self.tab {
-                                InfoTab::Summary => self.summary_message_scroll_from_bottom = self.summary_message_scroll_from_bottom.saturating_add(1),
-                                InfoTab::Details => self.details_scroll_offset = self.details_scroll_offset.saturating_sub(1),
+                                InfoTab::Summary => {
+                                    self.summary_message_scroll_from_bottom =
+                                        self.summary_message_scroll_from_bottom.saturating_add(1)
+                                }
+                                InfoTab::Details => {
+                                    self.details_scroll_offset =
+                                        self.details_scroll_offset.saturating_sub(1)
+                                }
                             }
                             return Some(Msg::Noop);
                         }
                         MouseEventKind::ScrollDown => {
                             match self.tab {
-                                InfoTab::Summary => self.summary_message_scroll_from_bottom = self.summary_message_scroll_from_bottom.saturating_sub(1),
-                                InfoTab::Details => self.details_scroll_offset = self.details_scroll_offset.saturating_add(1),
+                                InfoTab::Summary => {
+                                    self.summary_message_scroll_from_bottom =
+                                        self.summary_message_scroll_from_bottom.saturating_sub(1)
+                                }
+                                InfoTab::Details => {
+                                    self.details_scroll_offset =
+                                        self.details_scroll_offset.saturating_add(1)
+                                }
                             }
                             return Some(Msg::Noop);
                         }

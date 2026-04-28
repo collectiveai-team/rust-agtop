@@ -35,7 +35,9 @@ pub fn human_bytes(value: u64) -> String {
 
 #[must_use]
 pub fn human_duration_secs(value: Option<u64>) -> String {
-    let Some(secs) = value else { return "-".to_string() };
+    let Some(secs) = value else {
+        return "-".to_string();
+    };
     if secs < 60 {
         format!("{secs}s")
     } else if secs < 3600 {
@@ -47,12 +49,20 @@ pub fn human_duration_secs(value: Option<u64>) -> String {
 
 #[must_use]
 pub fn money_summary(value: f64) -> String {
-    if value > 0.0 { format!("${value:.2}") } else { "-".to_string() }
+    if value > 0.0 {
+        format!("${value:.2}")
+    } else {
+        "-".to_string()
+    }
 }
 
 #[must_use]
 pub fn money_details(value: f64) -> String {
-    if value > 0.0 { format!("${value:.4}") } else { "-".to_string() }
+    if value > 0.0 {
+        format!("${value:.4}")
+    } else {
+        "-".to_string()
+    }
 }
 
 #[must_use]

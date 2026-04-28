@@ -1,10 +1,19 @@
 //! Merged Details tab for the dashboard info drawer.
 
-use ratatui::{layout::Rect, style::{Modifier, Style}, text::{Line, Span}, widgets::Paragraph, Frame};
 use agtop_core::session::SessionAnalysis;
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::Paragraph,
+    Frame,
+};
 
+use super::info_format::{
+    dash_if_empty, human_bytes, human_duration_secs, human_tokens, kv_line, money_details,
+    truncate_to,
+};
 use crate::tui::theme_v2::Theme;
-use super::info_format::{dash_if_empty, human_bytes, human_duration_secs, human_tokens, kv_line, money_details, truncate_to};
 
 pub struct DetailsModel<'a> {
     pub analysis: &'a SessionAnalysis,
@@ -26,49 +35,167 @@ fn build_lines(model: &DetailsModel<'_>, theme: &Theme, width: usize) -> Vec<Lin
     let max_value = width.saturating_sub(18).max(8);
     let mut lines = Vec::new();
     section(&mut lines, "Identity", theme);
-    lines.push(kv_line("Client", a.summary.client.as_str().to_string(), theme));
-    lines.push(kv_line("Subscription", dash_if_empty(a.summary.subscription.as_deref()), theme));
-    lines.push(kv_line("Model", dash_if_empty(a.summary.model.as_deref()), theme));
-    lines.push(kv_line("Effort", dash_if_empty(a.summary.model_effort.as_deref()), theme));
-    lines.push(kv_line("Project", truncate_to(a.summary.cwd.as_deref().unwrap_or("-"), max_value), theme));
-    lines.push(kv_line("Session id", truncate_to(&a.summary.session_id, max_value), theme));
-    lines.push(kv_line("Parent", model.parent_session_id.map(|s| truncate_to(s, max_value)).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Subagents", model.subagent_count.to_string(), theme));
+    lines.push(kv_line(
+        "Client",
+        a.summary.client.as_str().to_string(),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Subscription",
+        dash_if_empty(a.summary.subscription.as_deref()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Model",
+        dash_if_empty(a.summary.model.as_deref()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Effort",
+        dash_if_empty(a.summary.model_effort.as_deref()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Project",
+        truncate_to(a.summary.cwd.as_deref().unwrap_or("-"), max_value),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Session id",
+        truncate_to(&a.summary.session_id, max_value),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Parent",
+        model
+            .parent_session_id
+            .map(|s| truncate_to(s, max_value))
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Subagents",
+        model.subagent_count.to_string(),
+        theme,
+    ));
     lines.push(Line::from(""));
 
     section(&mut lines, "Usage", theme);
     let cache_write = a.tokens.cache_write_5m + a.tokens.cache_write_1h;
     lines.push(kv_line("Total cost", money_details(a.cost.total), theme));
-    lines.push(kv_line("Tokens", format!("{} total", human_tokens(a.tokens.grand_total())), theme));
+    lines.push(kv_line(
+        "Tokens",
+        format!("{} total", human_tokens(a.tokens.grand_total())),
+        theme,
+    ));
     lines.push(kv_line("Input", human_tokens(a.tokens.input), theme));
     lines.push(kv_line("Output", human_tokens(a.tokens.output), theme));
-    lines.push(kv_line("Reasoning", human_tokens(a.tokens.reasoning_output), theme));
-    lines.push(kv_line("Cache read", human_tokens(a.tokens.cache_read), theme));
+    lines.push(kv_line(
+        "Reasoning",
+        human_tokens(a.tokens.reasoning_output),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Cache read",
+        human_tokens(a.tokens.cache_read),
+        theme,
+    ));
     lines.push(kv_line("Cache write", human_tokens(cache_write), theme));
-    lines.push(kv_line("Tool calls", a.tool_call_count.map(|n| n.to_string()).unwrap_or_else(|| "-".into()), theme));
+    lines.push(kv_line(
+        "Tool calls",
+        a.tool_call_count
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
     lines.push(kv_line("Turns", turns_value(a), theme));
     lines.push(kv_line("Context", context_value(a), theme));
     lines.push(Line::from(""));
 
     section(&mut lines, "Process", theme);
     let metrics = a.process_metrics.as_ref();
-    lines.push(kv_line("PID", a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Liveness", a.liveness.as_ref().map(|l| format!("{l:?}")).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Confidence", a.match_confidence.as_ref().map(|c| format!("{c:?}")).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("CPU", metrics.map(|m| format!("{:.1}%", m.cpu_percent)).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Memory", metrics.map(|m| format!("{} RSS", human_bytes(m.memory_bytes))).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Disk", metrics.map(|m| format!("{} read / {} written", human_bytes(m.disk_read_bytes), human_bytes(m.disk_written_bytes))).unwrap_or_else(|| "-".into()), theme));
+    lines.push(kv_line(
+        "PID",
+        a.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Liveness",
+        a.liveness
+            .as_ref()
+            .map(|l| format!("{l:?}"))
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Confidence",
+        a.match_confidence
+            .as_ref()
+            .map(|c| format!("{c:?}"))
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "CPU",
+        metrics
+            .map(|m| format!("{:.1}%", m.cpu_percent))
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Memory",
+        metrics
+            .map(|m| format!("{} RSS", human_bytes(m.memory_bytes)))
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Disk",
+        metrics
+            .map(|m| {
+                format!(
+                    "{} read / {} written",
+                    human_bytes(m.disk_read_bytes),
+                    human_bytes(m.disk_written_bytes)
+                )
+            })
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
     lines.push(Line::from(""));
 
     section(&mut lines, "Timing", theme);
-    lines.push(kv_line("Started", a.summary.started_at.map(|t| t.to_rfc3339()).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Last active", a.summary.last_active.map(|t| t.to_rfc3339()).unwrap_or_else(|| "-".into()), theme));
-    lines.push(kv_line("Duration", human_duration_secs(a.duration_secs), theme));
+    lines.push(kv_line(
+        "Started",
+        a.summary
+            .started_at
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Last active",
+        a.summary
+            .last_active
+            .map(|t| t.to_rfc3339())
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
+    lines.push(kv_line(
+        "Duration",
+        human_duration_secs(a.duration_secs),
+        theme,
+    ));
     lines
 }
 
 fn section(lines: &mut Vec<Line<'static>>, title: &'static str, theme: &Theme) {
-    lines.push(Line::from(Span::styled(title, Style::default().fg(theme.fg_emphasis).add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(Span::styled(
+        title,
+        Style::default()
+            .fg(theme.fg_emphasis)
+            .add_modifier(Modifier::BOLD),
+    )));
 }
 
 fn turns_value(a: &SessionAnalysis) -> String {
@@ -82,7 +209,11 @@ fn turns_value(a: &SessionAnalysis) -> String {
 
 fn context_value(a: &SessionAnalysis) -> String {
     match (a.context_used_pct, a.context_used_tokens, a.context_window) {
-        (Some(pct), Some(used), Some(window)) => format!("{pct:.0}%  {} / {}", human_tokens(used), human_tokens(window)),
+        (Some(pct), Some(used), Some(window)) => format!(
+            "{pct:.0}%  {} / {}",
+            human_tokens(used),
+            human_tokens(window)
+        ),
         _ => "-".into(),
     }
 }
@@ -90,7 +221,9 @@ fn context_value(a: &SessionAnalysis) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals};
+    use agtop_core::session::{
+        ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+    };
     use ratatui::{backend::TestBackend, Terminal};
 
     fn text(buf: &ratatui::buffer::Buffer) -> String {
@@ -148,7 +281,12 @@ mod tests {
     fn details_renders_identity_usage_process_and_timing() {
         let theme = crate::tui::theme_v2::vscode_dark_plus::theme();
         let mut term = Terminal::new(TestBackend::new(100, 50)).unwrap();
-        let model = DetailsModel { analysis: &analysis(), parent_session_id: None, subagent_count: 2, scroll_offset: 0 };
+        let model = DetailsModel {
+            analysis: &analysis(),
+            parent_session_id: None,
+            subagent_count: 2,
+            scroll_offset: 0,
+        };
         term.draw(|f| render(f, f.area(), &model, &theme)).unwrap();
         let out = text(term.backend().buffer());
         assert!(out.contains("Identity"));

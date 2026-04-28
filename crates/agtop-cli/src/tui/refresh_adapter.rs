@@ -733,7 +733,18 @@ mod tests {
                 None,
                 None,
             );
-            let mut a = SessionAnalysis::new(summary, TokenTotals::default(), CostBreakdown::default(), None, 0, None, None, None, None, None);
+            let mut a = SessionAnalysis::new(
+                summary,
+                TokenTotals::default(),
+                CostBreakdown::default(),
+                None,
+                0,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
             match state {
                 SessionState::Running => {
                     a.liveness = Some(Liveness::Live);
@@ -755,12 +766,44 @@ mod tests {
         let mut dashboard = DashboardState::default();
         dashboard.sessions.state.select(Some(0));
         let mut aggregation = AggregationState::default();
-        apply_analyses(&[sync_analysis(SessionState::Running)], &mut dashboard.header, &mut dashboard.sessions, &mut dashboard.quota, &mut aggregation, 2);
+        apply_analyses(
+            &[sync_analysis(SessionState::Running)],
+            &mut dashboard.header,
+            &mut dashboard.sessions,
+            &mut dashboard.quota,
+            &mut aggregation,
+            2,
+        );
         dashboard.sync_info_selection();
-        assert!(matches!(dashboard.info.selected_row.as_ref().unwrap().analysis.session_state, Some(SessionState::Running)));
+        assert!(matches!(
+            dashboard
+                .info
+                .selected_row
+                .as_ref()
+                .unwrap()
+                .analysis
+                .session_state,
+            Some(SessionState::Running)
+        ));
 
-        apply_analyses(&[sync_analysis(SessionState::Idle)], &mut dashboard.header, &mut dashboard.sessions, &mut dashboard.quota, &mut aggregation, 2);
+        apply_analyses(
+            &[sync_analysis(SessionState::Idle)],
+            &mut dashboard.header,
+            &mut dashboard.sessions,
+            &mut dashboard.quota,
+            &mut aggregation,
+            2,
+        );
         dashboard.sync_info_selection();
-        assert!(matches!(dashboard.info.selected_row.as_ref().unwrap().analysis.session_state, Some(SessionState::Idle)));
+        assert!(matches!(
+            dashboard
+                .info
+                .selected_row
+                .as_ref()
+                .unwrap()
+                .analysis
+                .session_state,
+            Some(SessionState::Idle)
+        ));
     }
 }

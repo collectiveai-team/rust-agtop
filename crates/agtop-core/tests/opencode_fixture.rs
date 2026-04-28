@@ -519,7 +519,12 @@ fn opencode_sqlite_analysis_includes_recent_messages() {
     ] {
         conn.execute(
             "INSERT INTO message(id, session_id, time_created, data) VALUES(?1, ?2, ?3, ?4)",
-            rusqlite::params![id, "ses_recent", created, serde_json::to_string(&data).unwrap()],
+            rusqlite::params![
+                id,
+                "ses_recent",
+                created,
+                serde_json::to_string(&data).unwrap()
+            ],
         )
         .unwrap();
     }
