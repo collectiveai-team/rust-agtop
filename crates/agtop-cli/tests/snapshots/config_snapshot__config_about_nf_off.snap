@@ -6,7 +6,7 @@ expression: buffer_to_text(&buf)
   Appearance                  │About
   Columns                     │────────────────────────────────────────
   ⟳  Refresh                  │
-  Clients                     │  Version       0.4.4
+  Clients                     │  Version       0.5.0
   Keybinds                    │  Git SHA       dev
   Data sources                │  Config file   /home/user/.config/agtop/config.toml
   ‹ About ›                   │  Repository    https://github.com/collectiveai-team/rust-agtop
