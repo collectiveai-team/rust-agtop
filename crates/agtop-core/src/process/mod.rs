@@ -18,6 +18,7 @@ pub(crate) mod scanner;
 pub(crate) mod transcript_paths;
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
@@ -84,6 +85,15 @@ pub struct ProcessCorrelator {
     /// Sessions that already emitted their `Stopped` frame last snapshot
     /// and should now disappear from the map.
     drop_next: std::collections::HashSet<String>,
+    /// Prior disk I/O counters per PID for computing per-second rates.
+    disk_samples: HashMap<u32, DiskIoSample>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DiskIoSample {
+    read_bytes: u64,
+    written_bytes: u64,
+    sampled_at: Instant,
 }
 
 impl Default for ProcessCorrelator {
@@ -106,7 +116,54 @@ impl ProcessCorrelator {
             fd_scanner,
             prior: HashMap::new(),
             drop_next: std::collections::HashSet::new(),
+            disk_samples: HashMap::new(),
         }
+    }
+
+    fn enrich_disk_rates(&mut self, fresh: &mut HashMap<String, ProcessInfo>, now: Instant) {
+        let mut live_pids = std::collections::HashSet::new();
+
+        for info in fresh.values_mut() {
+            if info.liveness != Liveness::Live {
+                continue;
+            }
+            let Some(metrics) = info.metrics.as_mut() else {
+                continue;
+            };
+
+            live_pids.insert(info.pid);
+            let current = DiskIoSample {
+                read_bytes: metrics.disk_read_bytes,
+                written_bytes: metrics.disk_written_bytes,
+                sampled_at: now,
+            };
+
+            if let Some(prior) = self.disk_samples.get(&info.pid) {
+                let elapsed = now.duration_since(prior.sampled_at).as_secs_f64();
+                if elapsed >= 0.001
+                    && current.read_bytes >= prior.read_bytes
+                    && current.written_bytes >= prior.written_bytes
+                {
+                    metrics.disk_read_bytes_per_sec =
+                        (current.read_bytes - prior.read_bytes) as f64 / elapsed;
+                    metrics.disk_written_bytes_per_sec =
+                        (current.written_bytes - prior.written_bytes) as f64 / elapsed;
+                } else {
+                    metrics.disk_read_bytes_per_sec = 0.0;
+                    metrics.disk_written_bytes_per_sec = 0.0;
+                }
+            } else {
+                metrics.disk_read_bytes_per_sec = 0.0;
+                metrics.disk_written_bytes_per_sec = 0.0;
+            }
+
+            // Always update the sample, even when rates are zeroed. On PID reuse or counter
+            // reset this seeds the next cycle with the current counters so rates accumulate
+            // normally from that point forward.
+            self.disk_samples.insert(info.pid, current);
+        }
+
+        self.disk_samples.retain(|pid, _| live_pids.contains(pid));
     }
 
     pub fn snapshot(&mut self, sessions: &[SessionSummary]) -> HashMap<String, ProcessInfo> {
@@ -116,6 +173,8 @@ impl ProcessCorrelator {
         }
         self.scanner.refresh();
         let mut fresh = correlate(self.scanner.as_ref(), self.fd_scanner.as_ref(), sessions);
+        let now = Instant::now();
+        self.enrich_disk_rates(&mut fresh, now);
 
         // Live candidate PIDs we saw this cycle; used to decide whether a
         // previously-matched session's pid is gone.
@@ -328,6 +387,91 @@ mod lifecycle_tests {
 
         assert!(analyses[0].pid.is_none());
         assert!(analyses[0].children[0].pid.is_none());
+    }
+
+    fn candidate_with_disk(pid: u32, path: &str, read: u64, written: u64) -> Candidate {
+        Candidate {
+            pid,
+            parent_pid: Some(1),
+            binary: "claude".into(),
+            argv: vec!["claude".into()],
+            cwd: None,
+            start_time: 1700000000,
+            metrics: Some(ProcessMetrics {
+                cpu_percent: 1.0,
+                memory_bytes: 2,
+                virtual_memory_bytes: 3,
+                disk_read_bytes: read,
+                disk_written_bytes: written,
+                disk_read_bytes_per_sec: 0.0,
+                disk_written_bytes_per_sec: 0.0,
+            }),
+        }
+    }
+
+    #[test]
+    fn disk_io_rates_are_zero_on_first_sample_then_derived_from_deltas() {
+        const SID: &str = "22222222-2222-4222-8222-222222222222";
+        let path_str = format!("/tmp/{SID}.jsonl");
+        let sessions = vec![session(SID, &path_str)];
+        let path = PathBuf::from(&path_str);
+
+        let scanner = Box::new(FakeScanner {
+            processes: vec![candidate_with_disk(42, &path_str, 1_000, 2_000)],
+        });
+        let mut fd_map = std::collections::HashMap::new();
+        fd_map.insert(42u32, vec![path.clone()]);
+        let fd = Box::new(FakeFdScanner { map: fd_map });
+
+        let mut c = ProcessCorrelator::with_scanners(scanner, fd);
+        let first = c.snapshot(&sessions);
+        let first_metrics = first.get(SID).and_then(|i| i.metrics.as_ref()).unwrap();
+        assert_eq!(first_metrics.disk_read_bytes_per_sec, 0.0);
+        assert_eq!(first_metrics.disk_written_bytes_per_sec, 0.0);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        c.scanner = Box::new(FakeScanner {
+            processes: vec![candidate_with_disk(42, &path_str, 1_200, 2_400)],
+        });
+        let mut fd_map = std::collections::HashMap::new();
+        fd_map.insert(42u32, vec![path]);
+        c.fd_scanner = Box::new(FakeFdScanner { map: fd_map });
+
+        let second = c.snapshot(&sessions);
+        let second_metrics = second.get(SID).and_then(|i| i.metrics.as_ref()).unwrap();
+        assert!(second_metrics.disk_read_bytes_per_sec > 0.0);
+        assert!(second_metrics.disk_written_bytes_per_sec > second_metrics.disk_read_bytes_per_sec);
+    }
+
+    #[test]
+    fn disk_io_rates_are_zero_when_counters_decrease() {
+        const SID: &str = "33333333-3333-4333-8333-333333333333";
+        let path_str = format!("/tmp/{SID}.jsonl");
+        let sessions = vec![session(SID, &path_str)];
+        let path = PathBuf::from(&path_str);
+
+        let scanner = Box::new(FakeScanner {
+            processes: vec![candidate_with_disk(77, &path_str, 5_000, 8_000)],
+        });
+        let mut fd_map = std::collections::HashMap::new();
+        fd_map.insert(77u32, vec![path.clone()]);
+        let fd = Box::new(FakeFdScanner { map: fd_map });
+
+        let mut c = ProcessCorrelator::with_scanners(scanner, fd);
+        let _ = c.snapshot(&sessions);
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        c.scanner = Box::new(FakeScanner {
+            processes: vec![candidate_with_disk(77, &path_str, 4_000, 7_000)],
+        });
+        let mut fd_map = std::collections::HashMap::new();
+        fd_map.insert(77u32, vec![path]);
+        c.fd_scanner = Box::new(FakeFdScanner { map: fd_map });
+
+        let second = c.snapshot(&sessions);
+        let metrics = second.get(SID).and_then(|i| i.metrics.as_ref()).unwrap();
+        assert_eq!(metrics.disk_read_bytes_per_sec, 0.0);
+        assert_eq!(metrics.disk_written_bytes_per_sec, 0.0);
     }
 
     #[test]
