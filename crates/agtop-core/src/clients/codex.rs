@@ -24,7 +24,7 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Number of most-recently-modified rollout files to scan when looking
@@ -716,6 +716,7 @@ fn summarize_codex_file(path: &Path) -> Result<SessionSummary> {
         model,
         cwd,
         state,
+        parser_state: ParserState::default(),
         state_detail,
         model_effort,
         model_effort_detail,

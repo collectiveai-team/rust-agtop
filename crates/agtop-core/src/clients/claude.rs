@@ -21,7 +21,7 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 /// Upper bound on how many recent transcripts we scan for synthetic
@@ -504,6 +504,7 @@ fn summarize_claude_file(path: &Path) -> Result<SessionSummary> {
         model,
         cwd,
         state,
+        parser_state: ParserState::default(),
         state_detail,
         model_effort: None,
         model_effort_detail: None,

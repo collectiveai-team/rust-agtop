@@ -190,6 +190,10 @@ pub struct SessionSummary {
     /// Coarse workflow state such as `waiting` or `stopped`.
     #[serde(default)]
     pub state: Option<String>,
+    /// Typed parser-side state. Replaces the legacy `state: Option<String>`
+    /// (kept temporarily during migration). Default: `ParserState::Unknown`.
+    #[serde(default)]
+    pub parser_state: ParserState,
     /// Client-specific explanation of the derived state.
     #[serde(default)]
     pub state_detail: Option<String>,
@@ -255,6 +259,7 @@ impl SessionSummary {
             model,
             cwd,
             state,
+            parser_state: ParserState::default(),
             state_detail,
             model_effort,
             model_effort_detail,
@@ -555,6 +560,25 @@ mod tests {
     #[test]
     fn parser_state_default_is_unknown() {
         assert_eq!(ParserState::default(), ParserState::Unknown);
+    }
+
+    #[test]
+    fn session_summary_default_parser_state_is_unknown() {
+        let s = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "id".to_string(),
+            None,
+            None,
+            None,
+            None,
+            std::path::PathBuf::from("/tmp/x.jsonl"),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert_eq!(s.parser_state, ParserState::Unknown);
     }
 
     #[test]

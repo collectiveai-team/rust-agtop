@@ -25,7 +25,7 @@ use crate::clients::util::{dir_exists, DiscoverCache};
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
 };
 
 const LIVE_USAGE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -1099,6 +1099,7 @@ fn list_sessions_sqlite(
                 model,
                 cwd,
                 state,
+                parser_state: ParserState::default(),
                 state_detail,
                 model_effort,
                 model_effort_detail,
@@ -1158,6 +1159,7 @@ fn list_child_sessions_sqlite(
                 model,
                 cwd,
                 state,
+                parser_state: ParserState::default(),
                 state_detail,
                 model_effort,
                 model_effort_detail,
@@ -1569,6 +1571,7 @@ fn summarize_opencode_session_json(
         model,
         cwd,
         state,
+        parser_state: ParserState::default(),
         state_detail,
         model_effort,
         model_effort_detail,
