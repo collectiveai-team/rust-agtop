@@ -810,6 +810,7 @@ pub fn run_v2(
     plan: Plan,
     refresh_interval: Duration,
     _start_dashboard: bool,
+    no_cache: bool,
 ) -> Result<()> {
     let mut terminal = setup_terminal().context("set up terminal for TUI (v2)")?;
     install_panic_hook();
@@ -820,7 +821,7 @@ pub fn run_v2(
         std::sync::Arc::clone(&enabled_arc),
         plan,
         refresh_interval,
-        false,
+        no_cache,
     )
     .context("spawn background refresh worker")?;
 
