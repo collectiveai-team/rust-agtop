@@ -455,8 +455,8 @@ mod client_parse_tests {
 }
 
 fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAnalysis]) {
-    // 14 columns (10+16+10+16+4+20+18+9+9+9+8+7+6+7) + 13 × 2-space gaps
-    const TABLE_WIDTH: usize = 175;
+    // 16 columns plus 15 two-space gaps.
+    const TABLE_WIDTH: usize = 195;
     // Index analyses by session_id for quick lookup.
     use std::collections::HashMap;
     let by_id: HashMap<&str, &SessionAnalysis> = analyses
@@ -466,7 +466,7 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
 
     let now = Utc::now();
     println!(
-        "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
+        "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}  {:>8}  {:>8}",
         "CLIENT",
         "SUBSCRIPTION",
         "SESSION",
@@ -480,7 +480,9 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
         "COST$",
         "PID",
         "CPU",
-        "MEM"
+        "MEM",
+        "R/s",
+        "W/s"
     );
     println!("{}", "-".repeat(TABLE_WIDTH));
 
@@ -540,8 +542,18 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             fmt::format_percent(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.cpu_percent)));
         let mem_str =
             fmt::compact_opt(a.and_then(|a| a.process_metrics.as_ref().map(|m| m.memory_bytes)));
+        let disk_read_rate_str = fmt::compact_rate_opt(a.and_then(|a| {
+            a.process_metrics
+                .as_ref()
+                .map(|m| m.disk_read_bytes_per_sec)
+        }));
+        let disk_write_rate_str = fmt::compact_rate_opt(a.and_then(|a| {
+            a.process_metrics
+                .as_ref()
+                .map(|m| m.disk_written_bytes_per_sec)
+        }));
         println!(
-            "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}",
+            "{:<10}  {:<16}  {:<10}  {:<16}  {:>4}  {:<20}  {:<18}  {:>9}  {:>9}  {:>9}  {:>8}  {:>7}  {:>6}  {:>7}  {:>8}  {:>8}",
             s.client.as_str(),
             fmt::fit(&subscription, 16),
             fmt::fit(&short_session, 10),
@@ -556,6 +568,8 @@ fn render_table(summaries: &[agtop_core::SessionSummary], analyses: &[SessionAna
             pid_str,
             cpu_str,
             mem_str,
+            disk_read_rate_str,
+            disk_write_rate_str,
         );
         printed += 1;
         if printed >= 200 {
@@ -730,6 +744,8 @@ mod json_output_tests {
             virtual_memory_bytes: 5678,
             disk_read_bytes: 90,
             disk_written_bytes: 12,
+            disk_read_bytes_per_sec: 45.0,
+            disk_written_bytes_per_sec: 6.0,
         });
         analysis.session_state = Some(SessionState::Running);
 
@@ -743,6 +759,18 @@ mod json_output_tests {
         assert_eq!(
             json.process_metrics.as_ref().map(|m| m.disk_written_bytes),
             Some(12)
+        );
+        assert_eq!(
+            json.process_metrics
+                .as_ref()
+                .map(|m| m.disk_read_bytes_per_sec),
+            Some(45.0)
+        );
+        assert_eq!(
+            json.process_metrics
+                .as_ref()
+                .map(|m| m.disk_written_bytes_per_sec),
+            Some(6.0)
         );
     }
 

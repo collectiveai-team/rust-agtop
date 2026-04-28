@@ -218,6 +218,10 @@ impl Scanner for SysinfoScanner {
                 virtual_memory_bytes: proc.virtual_memory(),
                 disk_read_bytes: disk.total_read_bytes,
                 disk_written_bytes: disk.total_written_bytes,
+                // Rate fields are always 0.0 here; rates are derived by ProcessCorrelator which
+                // has access to prior samples and elapsed time.
+                disk_read_bytes_per_sec: 0.0,
+                disk_written_bytes_per_sec: 0.0,
             });
             self.candidates.push(Candidate {
                 pid: pid.as_u32(),

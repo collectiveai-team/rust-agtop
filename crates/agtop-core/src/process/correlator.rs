@@ -1039,6 +1039,8 @@ mod tests {
             virtual_memory_bytes: 20,
             disk_read_bytes: 30,
             disk_written_bytes: 40,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         };
         let scanner = FakeScanner {
             processes: vec![Candidate {
@@ -1074,6 +1076,8 @@ mod tests {
             virtual_memory_bytes: 200,
             disk_read_bytes: 300,
             disk_written_bytes: 400,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         };
         // Candidate has a different argv so Tier A won't match.
         let scanner = FakeScanner {
@@ -1122,6 +1126,8 @@ mod tests {
             virtual_memory_bytes: 222,
             disk_read_bytes: 333,
             disk_written_bytes: 444,
+            disk_read_bytes_per_sec: 0.0,
+            disk_written_bytes_per_sec: 0.0,
         };
         // Binary matches, cwd matches, start_time inside window => score 3.
         let scanner = FakeScanner {

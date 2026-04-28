@@ -414,6 +414,16 @@ fn row_for<'a>(
             ColumnId::DiskWritten => Cell::from(crate::fmt::compact_opt(
                 a.process_metrics.as_ref().map(|m| m.disk_written_bytes),
             )),
+            ColumnId::DiskReadRate => Cell::from(crate::fmt::compact_rate_opt(
+                a.process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_read_bytes_per_sec),
+            )),
+            ColumnId::DiskWriteRate => Cell::from(crate::fmt::compact_rate_opt(
+                a.process_metrics
+                    .as_ref()
+                    .map(|m| m.disk_written_bytes_per_sec),
+            )),
             // SubscriptionLogo is injected by visible() — rendered as empty for now.
             ColumnId::SubscriptionLogo => Cell::from(""),
             // Action is a new v2 column; fallback to current_action in old table.

@@ -162,6 +162,19 @@ fn build_lines(model: &DetailsModel<'_>, theme: &Theme, width: usize) -> Vec<Lin
             .unwrap_or_else(|| "-".into()),
         theme,
     ));
+    lines.push(kv_line(
+        "Disk I/O",
+        metrics
+            .map(|m| {
+                format!(
+                    "{} / {}",
+                    crate::fmt::compact_rate_opt(Some(m.disk_read_bytes_per_sec)),
+                    crate::fmt::compact_rate_opt(Some(m.disk_written_bytes_per_sec))
+                )
+            })
+            .unwrap_or_else(|| "-".into()),
+        theme,
+    ));
     lines.push(Line::from(""));
 
     section(&mut lines, "Timing", theme);

@@ -32,6 +32,16 @@ pub fn render(
         .as_ref()
         .map(|m| format!("{:.1}M", m.memory_bytes as f32 / 1_048_576.0))
         .unwrap_or_else(|| "—".into());
+    let disk_read_rate = crate::fmt::compact_rate_opt(
+        a.process_metrics
+            .as_ref()
+            .map(|m| m.disk_read_bytes_per_sec),
+    );
+    let disk_write_rate = crate::fmt::compact_rate_opt(
+        a.process_metrics
+            .as_ref()
+            .map(|m| m.disk_written_bytes_per_sec),
+    );
 
     let spark = sparkline_braille::render_braille(cpu_hist, 16, 100.0);
 
@@ -47,6 +57,14 @@ pub fn render(
         Line::from(vec![
             Span::styled("  Resident mem ", Style::default().fg(theme.fg_muted)),
             Span::styled(resident, Style::default().fg(theme.fg_default)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Disk read/s  ", Style::default().fg(theme.fg_muted)),
+            Span::styled(disk_read_rate, Style::default().fg(theme.fg_default)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Disk write/s ", Style::default().fg(theme.fg_muted)),
+            Span::styled(disk_write_rate, Style::default().fg(theme.fg_default)),
         ]),
         Line::from(""),
         Line::from(vec![

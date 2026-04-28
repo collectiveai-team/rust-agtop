@@ -119,6 +119,16 @@ pub fn compact_opt(value: Option<u64>) -> String {
     value.map(compact).unwrap_or_else(|| "-".to_string())
 }
 
+/// Format an optional byte-per-second rate using [`compact`] plus `/s`.
+/// Returns `"-"` when the value is absent.
+pub fn compact_rate_opt(value: Option<f64>) -> String {
+    match value {
+        Some(v) if v.is_finite() && v > 0.0 => format!("{}/s", compact(v.round() as u64)),
+        Some(_) => "0/s".to_string(),
+        None => "-".to_string(),
+    }
+}
+
 /// Fit `s` into a field of exactly `w` display columns: pad with spaces if
 /// shorter, truncate with an ellipsis (`…`) if longer.
 pub fn fit(s: &str, w: usize) -> String {
@@ -128,5 +138,19 @@ pub fn fit(s: &str, w: usize) -> String {
         let mut t: String = s.chars().take(w.saturating_sub(1)).collect();
         t.push('…');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_rate_formats_optional_bytes_per_second() {
+        assert_eq!(compact_rate_opt(None), "-");
+        assert_eq!(compact_rate_opt(Some(0.0)), "0/s");
+        assert_eq!(compact_rate_opt(Some(512.0)), "512/s");
+        assert_eq!(compact_rate_opt(Some(1_280.0)), "1.3K/s");
+        assert_eq!(compact_rate_opt(Some(1_250_000.0)), "1.2M/s");
     }
 }
