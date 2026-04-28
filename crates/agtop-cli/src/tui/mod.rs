@@ -17,6 +17,7 @@ pub mod msg;
 mod refresh;
 pub mod refresh_adapter;
 pub mod screens;
+pub mod session_cache;
 pub mod theme;
 pub mod theme_v2;
 pub mod widgets;

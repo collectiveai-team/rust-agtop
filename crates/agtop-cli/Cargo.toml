@@ -29,6 +29,7 @@ anyhow.workspace = true
 clap.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+rusqlite.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 # Used by `--watch` for cross-platform screen clearing; also the terminal
