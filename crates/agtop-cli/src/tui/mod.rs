@@ -937,8 +937,8 @@ mod tests {
     use crate::tui::column_config::ColumnId;
     use crate::version;
     use agtop_core::session::{
-        ClientKind, CostBreakdown, ParserState, SessionAnalysis, SessionSummary, TokenTotals,
-        WaitReason,
+        ClientKind, CostBreakdown, ParserState, SessionAnalysis, SessionState, SessionSummary,
+        TokenTotals, WaitReason,
     };
     use chrono::{TimeZone, Utc};
     use ratatui::backend::TestBackend;
@@ -979,7 +979,7 @@ mod tests {
         s1_cost.output = 0.0075;
         s1_cost.cache_read = 0.010;
         s1_cost.total = 0.0205;
-        let s1 = SessionAnalysis::new(
+        let mut s1 = SessionAnalysis::new(
             s1_summary,
             s1_tokens,
             s1_cost,
@@ -991,6 +991,7 @@ mod tests {
             None,
             None,
         );
+        s1.session_state = Some(SessionState::Waiting(WaitReason::Permission));
 
         let s2_summary = SessionSummary::new(
             ClientKind::Codex,

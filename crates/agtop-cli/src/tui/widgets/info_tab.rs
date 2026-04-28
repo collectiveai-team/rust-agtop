@@ -12,8 +12,7 @@ use crate::fmt;
 use crate::tui::app::App;
 use crate::tui::column_config::ColumnId;
 use crate::tui::theme as th;
-use crate::tui::widgets::state_display::display_state;
-use agtop_core::session::SessionAnalysis;
+use agtop_core::session::{SessionAnalysis, SessionState};
 
 pub fn render(frame: &mut Frame<'_>, area: Rect, app: &App) {
     let block = Block::default().borders(Borders::ALL).title(" Info ");
@@ -266,7 +265,14 @@ fn column_line(col: ColumnId, a: &SessionAnalysis, now: DateTime<Utc>) -> Line<'
         }
         ColumnId::LastActive => kv_line("last_active", fmt_dt(s.last_active)),
         ColumnId::State => {
-            let (label, style) = display_state(a, now);
+            let closed = SessionState::Closed;
+            let session_state = a.session_state.as_ref().unwrap_or(&closed);
+            let label = session_state.as_str();
+            let style = match session_state {
+                SessionState::Running => th::STATE_WORKING,
+                SessionState::Waiting(_) => th::STATE_WAITING,
+                _ => th::STATE_STALE,
+            };
             kv_line_styled("state", label.to_string(), style)
         }
         ColumnId::Effort => kv_line(
