@@ -3,6 +3,8 @@
 #![allow(dead_code)]
 
 pub mod header;
+// Legacy tab modules — kept for historical reference but no longer used.
+// info_costs, info_general, info_process were replaced by info_details.
 pub mod info_costs;
 pub mod info_details;
 pub mod info_drawer;

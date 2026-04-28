@@ -190,8 +190,8 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme:
     let session_id = truncate_to(&m.analysis.summary.session_id, 20);
     let relation = if m.subagent_count > 0 {
         format!("Subagents {}", m.subagent_count)
-    } else if m.parent_session_id.is_some() {
-        "Parent → child".to_string()
+    } else if let Some(parent_id) = m.parent_session_id {
+        format!("Parent {}", truncate_to(parent_id, 20))
     } else {
         "Standalone".to_string()
     };

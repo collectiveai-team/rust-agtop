@@ -1,4 +1,4 @@
-//! Info drawer: bottom-right floating panel with Summary/General/Costs/Process tabs.
+//! Info drawer: bottom-right floating panel with Summary and Details tabs.
 // Foundation code for Plan 2.
 #![allow(dead_code)]
 
