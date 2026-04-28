@@ -172,7 +172,11 @@ impl InfoDrawer {
                     client_label: &row.client_label,
                     client_kind: row.client_kind,
                     state: &state,
-                    recent_turns: vec![],
+                    recent_turns: row.analysis.recent_messages.iter().map(info_summary::MessageTurn::from).collect(),
+                    message_scroll_from_bottom: 0,
+                    activity_samples: row.activity_samples.clone(),
+                    parent_session_id: row.parent_session_id.as_deref(),
+                    subagent_count: row.analysis.children.len(),
                     nerd_font: false,
                 };
                 info_summary::render(frame, inner, &model, theme);
