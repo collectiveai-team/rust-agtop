@@ -21,7 +21,8 @@ use crate::clients::util::{for_each_jsonl, mtime, DiscoverCache};
 use crate::error::Result;
 use crate::pricing::Plan;
 use crate::session::{
-    ClientKind, CostBreakdown, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, CostBreakdown, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary,
+    TokenTotals, WaitReason,
 };
 
 /// Quota API cache TTL.
@@ -319,6 +320,7 @@ fn parse_session_jsonl_all(
     let mut last_active = mtime(path);
     let mut tool_calls = 0u64;
     let mut waiting = false;
+    let mut parser_state: ParserState = ParserState::default();
     let mut request_count: u64 = 0;
 
     for_each_jsonl(path, |record| {
@@ -392,7 +394,10 @@ fn parse_session_jsonl_all(
                         for item in response {
                             match item.get("kind").and_then(|x| x.as_str()) {
                                 Some("toolInvocationSerialized") => tool_calls += 1,
-                                Some("questionCarousel") => waiting = true,
+                                Some("questionCarousel") => {
+                                    waiting = true;
+                                    parser_state = ParserState::Waiting(WaitReason::Input);
+                                }
                                 _ => {}
                             }
                         }
@@ -425,6 +430,7 @@ fn parse_session_jsonl_all(
         None,
         None,
     );
+    summary.parser_state = parser_state;
     summary.session_title = title;
     let parsed = CopilotParsed {
         tool_call_count: if tool_calls > 0 {
@@ -789,5 +795,14 @@ mod tests {
         fs::remove_file(&session_file).unwrap();
         let analysis = p.analyze(&sessions[0], Plan::Retail).unwrap();
         assert_eq!(analysis.tool_call_count, Some(2));
+    }
+
+    #[test]
+    fn copilot_question_carousel_parser_state_type_check() {
+        // Confirms WaitReason::Input is used for questionCarousel.
+        let ps = ParserState::Waiting(WaitReason::Input);
+        assert!(matches!(ps, ParserState::Waiting(WaitReason::Input)));
+        // Also confirm default is Unknown (belt-and-suspenders).
+        assert_eq!(ParserState::default(), ParserState::Unknown);
     }
 }
