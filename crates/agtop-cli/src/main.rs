@@ -13,7 +13,6 @@ use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde::Serialize;
 
-use crate::tui::widgets::state_display::display_state;
 use agtop_core::{
     analyze_all, default_clients, discover_all, pricing::Plan, session::SessionAnalysis, ClientKind,
 };
@@ -653,8 +652,12 @@ impl From<&SessionAnalysis> for JsonSession {
 }
 
 impl JsonSession {
-    fn from_analysis(a: &SessionAnalysis, now: DateTime<Utc>) -> Self {
-        let (display_state_label, _) = display_state(a, now);
+    fn from_analysis(a: &SessionAnalysis, _now: DateTime<Utc>) -> Self {
+        let display_state_label = a
+            .session_state
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("unknown");
         Self {
             client: a.summary.client.as_str(),
             subscription: a.summary.subscription.clone(),
@@ -688,7 +691,7 @@ impl JsonSession {
 #[cfg(test)]
 mod json_output_tests {
     use super::*;
-    use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
+    use agtop_core::session::{ClientKind, CostBreakdown, SessionState, SessionSummary, TokenTotals};
     use std::path::PathBuf;
 
     #[test]
@@ -726,10 +729,11 @@ mod json_output_tests {
             disk_read_bytes: 90,
             disk_written_bytes: 12,
         });
+        analysis.session_state = Some(SessionState::Running);
 
         let json = JsonSession::from_analysis(&analysis, now);
 
-        assert_eq!(json.display_state, "working");
+        assert_eq!(json.display_state, "running");
         assert_eq!(
             json.process_metrics.as_ref().map(|m| m.cpu_percent),
             Some(3.5)
