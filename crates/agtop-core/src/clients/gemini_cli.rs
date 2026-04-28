@@ -251,6 +251,7 @@ impl Client for GeminiCliClient {
             process_metrics: None,
             session_state: None,
             current_action: None,
+            recent_messages: Vec::new(),
         })
     }
 }

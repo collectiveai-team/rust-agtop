@@ -302,6 +302,23 @@ pub struct CostBreakdown {
     pub included: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SessionMessageRole {
+    User,
+    Agent,
+    Tool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionMessageTurn {
+    pub role: SessionMessageRole,
+    pub preview: String,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub current_tool: bool,
+}
+
 /// Full analysis of a single session.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -378,6 +395,9 @@ pub struct SessionAnalysis {
     /// `None` when the session is idle, closed, or the parser doesn't extract this.
     #[serde(default)]
     pub current_action: Option<String>,
+    /// Recent messages from this session, newest last.
+    #[serde(default)]
+    pub recent_messages: Vec<SessionMessageTurn>,
 }
 
 impl SessionAnalysis {
@@ -419,6 +439,7 @@ impl SessionAnalysis {
             process_metrics: None,
             session_state: None,
             current_action: None,
+            recent_messages: Vec::new(),
         }
     }
 }

@@ -71,6 +71,25 @@ fn make_summary(data_path: PathBuf) -> SessionSummary {
     )
 }
 
+fn make_summary_with_id(data_path: PathBuf, session_id: &str) -> SessionSummary {
+    use chrono::{TimeZone, Utc};
+    let started = Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap();
+    let ended = Utc.with_ymd_and_hms(2026, 4, 17, 10, 5, 0).unwrap();
+    SessionSummary::new(
+        ClientKind::OpenCode,
+        None,
+        session_id.into(),
+        Some(started),
+        Some(ended),
+        Some(MODEL_ID.into()),
+        Some("/tmp/opencode-test".into()),
+        data_path,
+        None,
+        None,
+        None,
+    )
+}
+
 /// Return two assistant-message JSON values that together contribute:
 ///   turn1: input=200 output=80 cache.read=40 cache.write=10
 ///   turn2: input=150 output=60 cache.read=30 cache.write=5
@@ -473,4 +492,48 @@ fn opencode_json_retail_cost_is_positive() {
         "retail cost should be positive (got {})",
         analysis.cost.total
     );
+}
+
+#[test]
+fn opencode_sqlite_analysis_includes_recent_messages() {
+    let tmp = TmpDir::new("sqlite-recent-messages");
+    let db_path = init_db(&tmp.0);
+    insert_session(&tmp.0, "ses_recent", None, "/tmp/recent", 1000, 4000);
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    for (id, created, data) in [
+        (
+            "m1",
+            1000i64,
+            serde_json::json!({"role":"user","parts":[{"type":"text","text":"please run tests"}]}),
+        ),
+        (
+            "m2",
+            2000i64,
+            serde_json::json!({"role":"assistant","parts":[{"type":"text","text":"I will run cargo test"}],"tokens":{"input":1000,"output":200},"finish":"tool-calls"}),
+        ),
+        (
+            "m3",
+            3000i64,
+            serde_json::json!({"role":"tool","parts":[{"type":"text","text":"cargo test passed"}]}),
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO message(id, session_id, time_created, data) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![id, "ses_recent", created, serde_json::to_string(&data).unwrap()],
+        )
+        .unwrap();
+    }
+
+    let client = OpenCodeClient {
+        storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
+    };
+    let summary = make_summary_with_id(db_path, "ses_recent");
+    let analysis = client.analyze(&summary, Plan::Retail).unwrap();
+
+    assert_eq!(analysis.recent_messages.len(), 3);
+    assert_eq!(analysis.recent_messages[0].preview, "please run tests");
+    assert_eq!(analysis.recent_messages[1].preview, "I will run cargo test");
+    assert_eq!(analysis.recent_messages[1].tools, vec!["tool-calls"]);
+    assert!(analysis.recent_messages[1].current_tool);
 }
