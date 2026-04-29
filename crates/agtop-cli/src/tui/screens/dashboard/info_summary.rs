@@ -313,6 +313,50 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, them
     );
 }
 
+/// Wraps `text` into multiple `Line`s that fit within `text_width` columns.
+/// The first line is prefixed with `first_prefix`; continuation lines are
+/// indented with `indent` (a string of spaces the same width as the prefix).
+fn wrap_text_lines<'a>(
+    text: &str,
+    text_width: usize,
+    first_prefix: Span<'a>,
+    indent: &'static str,
+    text_style: Style,
+) -> Vec<Line<'a>> {
+    if text_width == 0 {
+        return vec![Line::from(first_prefix)];
+    }
+
+    // Split into chunks that fit within text_width (by char count).
+    let chars: Vec<char> = text.chars().collect();
+    let mut chunks: Vec<String> = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let end = (start + text_width).min(chars.len());
+        chunks.push(chars[start..end].iter().collect());
+        start = end;
+    }
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+
+    let mut lines: Vec<Line<'a>> = Vec::new();
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        if i == 0 {
+            lines.push(Line::from(vec![
+                first_prefix.clone(),
+                Span::styled(chunk, text_style),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw(indent),
+                Span::styled(chunk, text_style),
+            ]));
+        }
+    }
+    lines
+}
+
 fn render_messages(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -329,17 +373,36 @@ fn render_messages(
         return;
     }
 
+    // Role label is always 9 chars: "  user │ " / " agent │ " / "  tool │ "
+    const LABEL_WIDTH: usize = 9;
+    let text_width = (area.width as usize).saturating_sub(LABEL_WIDTH);
+    const INDENT: &str = "         "; // 9 spaces matching LABEL_WIDTH
+
     let mut message_lines: Vec<Line<'static>> = Vec::new();
     for t in turns {
-        let role_label = match t.role {
-            Role::User => Span::styled("  user │ ", Style::default().fg(theme.accent_primary)),
-            Role::Agent => Span::styled(" agent │ ", Style::default().fg(theme.status_success)),
-            Role::Tool => Span::styled("  tool │ ", Style::default().fg(theme.fg_muted)),
+        let (role_label, label_style) = match t.role {
+            Role::User => (
+                "  user │ ",
+                Style::default().fg(theme.accent_primary),
+            ),
+            Role::Agent => (
+                " agent │ ",
+                Style::default().fg(theme.status_success),
+            ),
+            Role::Tool => (
+                "  tool │ ",
+                Style::default().fg(theme.fg_muted),
+            ),
         };
-        message_lines.push(Line::from(vec![
-            role_label,
-            Span::styled(t.preview.clone(), Style::default().fg(theme.fg_default)),
-        ]));
+        let text_style = Style::default().fg(theme.fg_default);
+        let wrapped = wrap_text_lines(
+            &t.preview,
+            text_width,
+            Span::styled(role_label, label_style),
+            INDENT,
+            text_style,
+        );
+        message_lines.extend(wrapped);
         for tool in &t.tools {
             let marker = if t.current_tool { "▸ " } else { "  " };
             message_lines.push(Line::from(vec![
