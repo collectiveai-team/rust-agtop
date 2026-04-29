@@ -24,7 +24,7 @@ use agtop_core::quota::ProviderResult;
 
 const QUOTA_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 const INITIAL_ANALYSIS_CONCURRENCY: usize = 2;
-const REFRESH_MAX_BLOCKING_THREADS: usize = 2;
+const REFRESH_MAX_BLOCKING_THREADS: usize = 4;
 use agtop_core::session::SessionAnalysis;
 use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn refresh_blocking_threads_are_memory_bounded() {
-        assert_eq!(REFRESH_MAX_BLOCKING_THREADS, 2);
+        assert_eq!(REFRESH_MAX_BLOCKING_THREADS, 4);
     }
 
     /// Smoke test: the worker should publish *something* within a short
