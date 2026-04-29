@@ -278,6 +278,17 @@ impl ClaudeDisplayWindow {
     }
 }
 
+/// Return the current action string from the last assistant tool-use block
+/// found across `records`. Returns `None` if no tool-use block is present.
+#[cfg(test)]
+fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
+    let mut window = ClaudeDisplayWindow::default();
+    for record in records {
+        window.ingest(record);
+    }
+    window.finish().0
+}
+
 fn recent_message_from_record(record: &serde_json::Value) -> Option<SessionMessageTurn> {
     let message = record.get("message")?;
     let role = match message.get("role").and_then(|x| x.as_str())? {

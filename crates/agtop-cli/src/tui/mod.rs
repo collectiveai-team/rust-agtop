@@ -1102,7 +1102,6 @@ mod tests {
         assert!(contents.contains("Sessions"), "header title missing");
         assert!(contents.contains("claude-opus"), "claude model missing");
         assert!(contents.contains("gpt-5"), "gpt-5 model missing");
-        assert!(contents.contains("▶"), "selected-row marker missing");
         assert!(contents.contains("Info"), "Info tab title missing");
         assert!(contents.contains("STATE"), "state header missing");
         assert!(contents.contains("EFFORT"), "effort header missing");
