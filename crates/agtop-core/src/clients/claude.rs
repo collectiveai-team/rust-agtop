@@ -249,7 +249,6 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-
 #[derive(Debug, Default)]
 struct ClaudeDisplayWindow {
     current_action: Option<String>,
@@ -380,7 +379,6 @@ fn compact_preview(text: &str) -> String {
         single_line
     }
 }
-
 
 fn latest_tool_action_from_message(message: &serde_json::Value) -> Option<String> {
     let content = message.get("content").and_then(|c| c.as_array())?;
@@ -1322,7 +1320,11 @@ mod tests {
                 "timestamp": "2026-04-26T10:00:01Z"
             }),
         ];
-        let action = current_action_from_records(&records);
+        let mut window = ClaudeDisplayWindow::default();
+        for record in &records {
+            window.ingest(record);
+        }
+        let (action, _) = window.finish();
         assert_eq!(action.as_deref(), Some("Bash: cargo test"));
     }
 
@@ -1370,8 +1372,8 @@ mod tests {
             &transcript,
             &[
                 r#"{"type":"user","timestamp":"2026-04-26T10:00:00Z","message":{"role":"user","content":"please run tests"}}"#,
-                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","model":"claude-sonnet-4","content":[{"type":"text","text":"I will run cargo test"}],"usage":{"input_tokens":100,"output_tokens":20},"stop_reason":"end_turn"}}"#,
-                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:02Z","requestId":"req-2","message":{"id":"msg-2","role":"assistant","model":"claude-sonnet-4","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cargo test"}}],"usage":{"input_tokens":30,"output_tokens":5},"stop_reason":"tool_use"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"I will run cargo test"}],"usage":{"input_tokens":100,"output_tokens":20},"stop_reason":"end_turn"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:02Z","requestId":"req-2","message":{"id":"msg-2","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cargo test"}}],"usage":{"input_tokens":30,"output_tokens":5},"stop_reason":"tool_use"}}"#,
             ],
         );
         let summary = SessionSummary::new(
@@ -1380,7 +1382,7 @@ mod tests {
             "02742fb3-d98e-4fa2-8184-2fddd7ee544d".to_string(),
             None,
             None,
-            Some("claude-sonnet-4".to_string()),
+            Some("claude-sonnet-4-5".to_string()),
             None,
             transcript,
             None,
@@ -1407,6 +1409,7 @@ mod tests {
 
     #[test]
     fn current_action_from_records_returns_none_for_empty() {
-        assert_eq!(current_action_from_records(&[]), None);
+        let (action, _) = ClaudeDisplayWindow::default().finish();
+        assert_eq!(action, None);
     }
 }

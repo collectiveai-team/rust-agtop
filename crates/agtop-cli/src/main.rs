@@ -101,8 +101,17 @@ enum Commands {
     Quota(quota_cmd::QuotaArgs),
 }
 
+const RAYON_WORKER_THREADS: usize = 2;
+
+fn configure_rayon_threads() {
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(RAYON_WORKER_THREADS)
+        .build_global();
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    configure_rayon_threads();
 
     // Dispatch subcommands first (they bypass the session analysis pipeline).
     if let Some(cmd) = cli.command {
@@ -459,6 +468,11 @@ mod client_parse_tests {
             Cli::command().get_version(),
             Some(version::display_version())
         );
+    }
+
+    #[test]
+    fn rayon_threads_are_memory_bounded_for_cli() {
+        assert_eq!(RAYON_WORKER_THREADS, 2);
     }
 }
 
