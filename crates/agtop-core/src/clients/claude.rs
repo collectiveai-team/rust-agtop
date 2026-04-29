@@ -262,6 +262,34 @@ fn recent_messages_from_records(records: &[serde_json::Value]) -> Vec<SessionMes
     turns
 }
 
+#[derive(Debug, Default)]
+struct ClaudeDisplayWindow {
+    current_action: Option<String>,
+    recent_messages: Vec<SessionMessageTurn>,
+}
+
+impl ClaudeDisplayWindow {
+    fn ingest(&mut self, record: &serde_json::Value) {
+        if let Some(turn) = recent_message_from_record(record) {
+            self.recent_messages.push(turn);
+            if self.recent_messages.len() > 20 {
+                self.recent_messages.remove(0);
+            }
+        }
+
+        let Some(message) = record.get("message") else {
+            return;
+        };
+        if message.get("role").and_then(|r| r.as_str()) == Some("assistant") {
+            self.current_action = latest_tool_action_from_message(message);
+        }
+    }
+
+    fn finish(self) -> (Option<String>, Vec<SessionMessageTurn>) {
+        (self.current_action, self.recent_messages)
+    }
+}
+
 fn recent_message_from_record(record: &serde_json::Value) -> Option<SessionMessageTurn> {
     let message = record.get("message")?;
     let role = match message.get("role").and_then(|x| x.as_str())? {
@@ -361,13 +389,8 @@ fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> 
         let Some(msg) = rec.get("message") else {
             continue;
         };
-        let Some(content) = msg.get("content").and_then(|c| c.as_array()) else {
-            continue;
-        };
-        for block in content.iter().rev() {
-            if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                return Some(tool_label_from_block(block));
-            }
+        if let Some(action) = latest_tool_action_from_message(msg) {
+            return Some(action);
         }
         // Stop scanning at the first assistant message (the latest turn).
         if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
@@ -375,6 +398,15 @@ fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> 
         }
     }
     None
+}
+
+fn latest_tool_action_from_message(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content").and_then(|c| c.as_array())?;
+    content
+        .iter()
+        .rev()
+        .find(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .map(tool_label_from_block)
 }
 
 fn parser_state_from_claude_record(v: &serde_json::Value) -> Option<(ParserState, String)> {
@@ -614,11 +646,11 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
 
-    // Collect records once for current_action and recent message extraction.
-    let mut all_records: Vec<serde_json::Value> = Vec::new();
+    let mut display_window = ClaudeDisplayWindow::default();
     let _ = for_each_jsonl(path, |v| {
-        all_records.push(v.clone());
+        display_window.ingest(v);
     });
+    let (current_action, recent_messages) = display_window.finish();
 
     // Helper to merge a FileTotals' context peak into our running max.
     let mut merge_context = |ft: &FileTotals| {
@@ -695,8 +727,8 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         match_confidence: None,
         process_metrics: None,
         session_state: None,
-        current_action: current_action_from_records(&all_records),
-        recent_messages: recent_messages_from_records(&all_records),
+        current_action,
+        recent_messages,
     })
 }
 
@@ -1310,6 +1342,39 @@ mod tests {
         ];
         let action = current_action_from_records(&records);
         assert_eq!(action.as_deref(), Some("Bash: cargo test"));
+    }
+
+    #[test]
+    fn display_window_keeps_only_recent_messages_and_latest_action() {
+        let mut window = ClaudeDisplayWindow::default();
+
+        for i in 0..25 {
+            window.ingest(&serde_json::json!({
+                "type": "user",
+                "message": {"role": "user", "content": format!("message {i}")},
+                "timestamp": "2026-04-26T10:00:00Z"
+            }));
+        }
+        window.ingest(&serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "Bash",
+                    "input": {"command": "cargo test"}
+                }]
+            },
+            "timestamp": "2026-04-26T10:00:01Z"
+        }));
+
+        let (current_action, recent_messages) = window.finish();
+
+        assert_eq!(current_action.as_deref(), Some("Bash: cargo test"));
+        assert_eq!(recent_messages.len(), 20);
+        assert_eq!(recent_messages[0].preview, "message 6");
+        assert_eq!(recent_messages[19].tools, vec!["Bash: cargo test"]);
     }
 
     #[test]
