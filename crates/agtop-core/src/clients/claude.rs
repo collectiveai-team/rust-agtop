@@ -249,18 +249,6 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
-fn recent_messages_from_records(records: &[serde_json::Value]) -> Vec<SessionMessageTurn> {
-    let mut turns = Vec::new();
-    for record in records {
-        if let Some(turn) = recent_message_from_record(record) {
-            turns.push(turn);
-            if turns.len() > 20 {
-                turns.remove(0);
-            }
-        }
-    }
-    turns
-}
 
 #[derive(Debug, Default)]
 struct ClaudeDisplayWindow {
@@ -382,23 +370,6 @@ fn compact_preview(text: &str) -> String {
     }
 }
 
-/// Extract the current action (latest tool call) from a set of JSONL records.
-/// Returns a human-readable label like "Bash: cargo test" or "Write: src/main.rs".
-fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
-    for rec in records.iter().rev() {
-        let Some(msg) = rec.get("message") else {
-            continue;
-        };
-        if let Some(action) = latest_tool_action_from_message(msg) {
-            return Some(action);
-        }
-        // Stop scanning at the first assistant message (the latest turn).
-        if msg.get("role").and_then(|r| r.as_str()) == Some("assistant") {
-            return None;
-        }
-    }
-    None
-}
 
 fn latest_tool_action_from_message(message: &serde_json::Value) -> Option<String> {
     let content = message.get("content").and_then(|c| c.as_array())?;
