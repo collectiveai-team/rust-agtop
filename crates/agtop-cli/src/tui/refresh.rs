@@ -23,6 +23,8 @@ use agtop_core::pricing::Plan;
 use agtop_core::quota::ProviderResult;
 
 const QUOTA_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
+const INITIAL_ANALYSIS_CONCURRENCY: usize = 2;
+const REFRESH_MAX_BLOCKING_THREADS: usize = 2;
 use agtop_core::session::SessionAnalysis;
 use agtop_core::{discover_all, plan_usage_all_from_summaries, Client, ClientKind};
 use chrono::{DateTime, Utc};
@@ -216,6 +218,7 @@ pub fn spawn(
     // trigger channel).
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(1)
+        .max_blocking_threads(REFRESH_MAX_BLOCKING_THREADS)
         .enable_time()
         .thread_name("agtop-refresh")
         .build()?;
@@ -737,13 +740,13 @@ async fn run_streaming_initial_load(
     });
 
     // ── Phase 2: stream cache misses with bounded concurrency ──
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(INITIAL_ANALYSIS_CONCURRENCY));
     let done_counter = std::sync::Arc::new(AtomicUsize::new(0));
     let total = miss_count;
 
     let mut handles = Vec::with_capacity(misses.len());
     for summary in misses {
-        // Acquire-then-spawn ensures we never have more than 8 in-flight
+        // Acquire-then-spawn ensures we never have too many in-flight
         // analysers. The permit moves into the spawned task and releases
         // on drop when the task finishes.
         let permit = match semaphore.clone().acquire_owned().await {
@@ -826,6 +829,16 @@ mod tests {
     // `#[serial]` from the `serial_test` crate without adding a dependency.
     static QUOTA_LOOP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[test]
+    fn initial_analysis_concurrency_is_memory_bounded() {
+        assert_eq!(INITIAL_ANALYSIS_CONCURRENCY, 2);
+    }
+
+    #[test]
+    fn refresh_blocking_threads_are_memory_bounded() {
+        assert_eq!(REFRESH_MAX_BLOCKING_THREADS, 2);
+    }
+
     /// Smoke test: the worker should publish *something* within a short
     /// window. We use an empty client list to keep the test hermetic
     /// — a real `default_clients()` run can take multiple seconds
@@ -842,9 +855,14 @@ mod tests {
                 .copied()
                 .collect::<HashSet<_>>(),
         ));
-        let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50), false)
-                .expect("spawn worker");
+        let mut handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(50),
+            false,
+        )
+        .expect("spawn worker");
 
         // Poll up to ~5s for a non-loading message.
         let start = std::time::Instant::now();
@@ -944,9 +962,14 @@ mod tests {
         let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled: Arc<RwLock<HashSet<ClientKind>>> = Arc::new(RwLock::new(HashSet::new()));
 
-        let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_millis(50), false)
-                .expect("spawn worker");
+        let mut handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_millis(50),
+            false,
+        )
+        .expect("spawn worker");
 
         // Poll for up to 2s. With zero clients + empty enabled set, we
         // should still get an initial Snapshot message (an empty one).
@@ -1120,8 +1143,14 @@ mod tests {
         let clients: Vec<Arc<dyn Client>> = Vec::new();
         let enabled = Arc::new(RwLock::new(HashSet::new()));
         // Long interval → any extra snapshot must come from a manual trigger.
-        let mut handle =
-            spawn(clients, enabled, Plan::Retail, Duration::from_secs(120), false).expect("spawn");
+        let mut handle = spawn(
+            clients,
+            enabled,
+            Plan::Retail,
+            Duration::from_secs(120),
+            false,
+        )
+        .expect("spawn");
 
         handle.send_quota_cmd(QuotaCmd::Start);
 

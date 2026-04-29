@@ -24,6 +24,7 @@ dependencies = [
  "insta",
  "ratatui",
  "ratatui-image",
+ "rayon",
  "resvg",
  "rusqlite",
  "rustc-hash",
