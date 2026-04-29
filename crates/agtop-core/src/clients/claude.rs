@@ -21,7 +21,8 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionMessageRole,
+    SessionMessageTurn, SessionSummary, TokenTotals,
 };
 
 /// Upper bound on how many recent transcripts we scan for synthetic
@@ -248,6 +249,111 @@ fn extract_message_text(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn recent_messages_from_records(records: &[serde_json::Value]) -> Vec<SessionMessageTurn> {
+    let mut turns = Vec::new();
+    for record in records {
+        if let Some(turn) = recent_message_from_record(record) {
+            turns.push(turn);
+            if turns.len() > 20 {
+                turns.remove(0);
+            }
+        }
+    }
+    turns
+}
+
+fn recent_message_from_record(record: &serde_json::Value) -> Option<SessionMessageTurn> {
+    let message = record.get("message")?;
+    let role = match message.get("role").and_then(|x| x.as_str())? {
+        "user" => SessionMessageRole::User,
+        "assistant" => SessionMessageRole::Agent,
+        "tool" => SessionMessageRole::Tool,
+        _ => return None,
+    };
+    let preview = claude_message_preview(message).unwrap_or_default();
+    let tools = claude_message_tools(message);
+    if preview.is_empty() && tools.is_empty() {
+        return None;
+    }
+    Some(SessionMessageTurn {
+        role,
+        preview,
+        current_tool: !tools.is_empty(),
+        tools,
+    })
+}
+
+fn claude_message_preview(message: &serde_json::Value) -> Option<String> {
+    let content = message.get("content")?;
+    if let Some(text) = content.as_str() {
+        return Some(compact_preview(text));
+    }
+    let arr = content.as_array()?;
+    let mut out = String::new();
+    for part in arr {
+        let text = match part.get("type").and_then(|x| x.as_str()) {
+            Some("text") => part.get("text").and_then(|x| x.as_str()),
+            Some("tool_result") => part.get("content").and_then(|x| x.as_str()),
+            _ => None,
+        };
+        if let Some(text) = text {
+            if !out.is_empty() {
+                out.push(' ');
+            }
+            out.push_str(text);
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(compact_preview(&out))
+    }
+}
+
+fn claude_message_tools(message: &serde_json::Value) -> Vec<String> {
+    let Some(content) = message.get("content").and_then(|x| x.as_array()) else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter(|block| block.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+        .map(tool_label_from_block)
+        .collect()
+}
+
+fn tool_label_from_block(block: &serde_json::Value) -> String {
+    let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+    let arg = block
+        .get("input")
+        .and_then(|i| {
+            i.get("command")
+                .or_else(|| i.get("file_path"))
+                .or_else(|| i.get("description"))
+        })
+        .and_then(|v| v.as_str())
+        .map(|s| {
+            let mut s = s.to_string();
+            if s.len() > 40 {
+                s.truncate(40);
+                s.push('…');
+            }
+            s
+        });
+    match arg {
+        Some(arg) => format!("{tool}: {arg}"),
+        None => tool.to_string(),
+    }
+}
+
+fn compact_preview(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() > 160 {
+        format!("{}…", single_line.chars().take(159).collect::<String>())
+    } else {
+        single_line
+    }
+}
+
 /// Extract the current action (latest tool call) from a set of JSONL records.
 /// Returns a human-readable label like "Bash: cargo test" or "Write: src/main.rs".
 fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
@@ -260,27 +366,7 @@ fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> 
         };
         for block in content.iter().rev() {
             if block.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
-                let tool = block.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
-                let input = block.get("input");
-                let arg = input
-                    .and_then(|i| {
-                        i.get("command")
-                            .or_else(|| i.get("file_path"))
-                            .or_else(|| i.get("description"))
-                    })
-                    .and_then(|v| v.as_str())
-                    .map(|s| {
-                        let mut s = s.to_string();
-                        if s.len() > 40 {
-                            s.truncate(40);
-                            s.push('…');
-                        }
-                        s
-                    });
-                return Some(match arg {
-                    Some(a) => format!("{tool}: {a}"),
-                    None => tool.to_string(),
-                });
+                return Some(tool_label_from_block(block));
             }
         }
         // Stop scanning at the first assistant message (the latest turn).
@@ -528,17 +614,11 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
 
-    // Collect records for current_action extraction (only for running/waiting sessions).
+    // Collect records once for current_action and recent message extraction.
     let mut all_records: Vec<serde_json::Value> = Vec::new();
-    let should_extract_action = matches!(
-        summary.parser_state,
-        ParserState::Running | ParserState::Waiting(_) | ParserState::Unknown
-    );
-    if should_extract_action {
-        let _ = for_each_jsonl(path, |v| {
-            all_records.push(v.clone());
-        });
-    }
+    let _ = for_each_jsonl(path, |v| {
+        all_records.push(v.clone());
+    });
 
     // Helper to merge a FileTotals' context peak into our running max.
     let mut merge_context = |ft: &FileTotals| {
@@ -616,7 +696,7 @@ fn analyze_claude_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAn
         process_metrics: None,
         session_state: None,
         current_action: current_action_from_records(&all_records),
-        recent_messages: Vec::new(),
+        recent_messages: recent_messages_from_records(&all_records),
     })
 }
 
@@ -1230,6 +1310,52 @@ mod tests {
         ];
         let action = current_action_from_records(&records);
         assert_eq!(action.as_deref(), Some("Bash: cargo test"));
+    }
+
+    #[test]
+    fn analyze_claude_file_includes_recent_messages() {
+        let td = TestDir::new();
+        let transcript = td
+            .path()
+            .join("proj")
+            .join("02742fb3-d98e-4fa2-8184-2fddd7ee544d.jsonl");
+        write_jsonl(
+            &transcript,
+            &[
+                r#"{"type":"user","timestamp":"2026-04-26T10:00:00Z","message":{"role":"user","content":"please run tests"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","model":"claude-sonnet-4","content":[{"type":"text","text":"I will run cargo test"}],"usage":{"input_tokens":100,"output_tokens":20},"stop_reason":"end_turn"}}"#,
+                r#"{"type":"assistant","timestamp":"2026-04-26T10:00:02Z","requestId":"req-2","message":{"id":"msg-2","role":"assistant","model":"claude-sonnet-4","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"cargo test"}}],"usage":{"input_tokens":30,"output_tokens":5},"stop_reason":"tool_use"}}"#,
+            ],
+        );
+        let summary = SessionSummary::new(
+            ClientKind::Claude,
+            None,
+            "02742fb3-d98e-4fa2-8184-2fddd7ee544d".to_string(),
+            None,
+            None,
+            Some("claude-sonnet-4".to_string()),
+            None,
+            transcript,
+            None,
+            None,
+            None,
+        );
+
+        let analysis = analyze_claude_file(&summary, Plan::Retail).unwrap();
+
+        assert_eq!(analysis.recent_messages.len(), 3);
+        assert_eq!(
+            analysis.recent_messages[0].role,
+            crate::session::SessionMessageRole::User
+        );
+        assert_eq!(analysis.recent_messages[0].preview, "please run tests");
+        assert_eq!(
+            analysis.recent_messages[1].role,
+            crate::session::SessionMessageRole::Agent
+        );
+        assert_eq!(analysis.recent_messages[1].preview, "I will run cargo test");
+        assert_eq!(analysis.recent_messages[2].tools, vec!["Bash: cargo test"]);
+        assert!(analysis.recent_messages[2].current_tool);
     }
 
     #[test]

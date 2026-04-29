@@ -13,7 +13,7 @@ use std::sync::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agtop_core::clients::codex::CodexClient;
-use agtop_core::session::ParserState;
+use agtop_core::session::{ParserState, SessionMessageRole};
 use agtop_core::{Client, ClientKind, Plan, SessionSummary};
 
 // ---------------------------------------------------------------------------
@@ -173,6 +173,72 @@ fn write_codex_metadata_fixture(dir: &std::path::Path) -> PathBuf {
     path
 }
 
+fn write_codex_recent_messages_fixture(dir: &std::path::Path) -> PathBuf {
+    let path = dir.join("rollout-2026-04-17T10-00-00-recent.jsonl");
+    let records = [
+        serde_json::json!({
+            "type": "session_meta",
+            "timestamp": "2026-04-17T10:00:00Z",
+            "payload": {
+                "session_id": "recent-messages-session",
+                "cwd": "/tmp/test-project",
+                "model": "codex-mini-latest"
+            }
+        }),
+        serde_json::json!({
+            "type": "turn_context",
+            "timestamp": "2026-04-17T10:00:01Z",
+            "payload": { "model": "codex-mini-latest" }
+        }),
+        serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-04-17T10:00:02Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{ "type": "input_text", "text": "please inspect the repo" }]
+            }
+        }),
+        serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-04-17T10:00:03Z",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "I will inspect it now" }]
+            }
+        }),
+        serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-04-17T10:00:04Z",
+            "payload": { "type": "function_call", "name": "bash" }
+        }),
+        serde_json::json!({
+            "type": "event_msg",
+            "timestamp": "2026-04-17T10:00:10Z",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 100,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 50,
+                        "reasoning_output_tokens": 0
+                    }
+                }
+            }
+        }),
+    ];
+
+    let mut content = String::new();
+    for record in records {
+        content.push_str(&serde_json::to_string(&record).unwrap());
+        content.push('\n');
+    }
+    fs::write(&path, content).expect("write recent messages fixture");
+    path
+}
+
 #[test]
 fn codex_fixture_extracts_effort_and_waiting_state() {
     let tmp = TmpDir::new("metadata");
@@ -277,6 +343,48 @@ fn codex_fixture_tool_call_count() {
         Some(2),
         "two function_call items → tool_call_count = 2"
     );
+}
+
+#[test]
+fn codex_fixture_includes_recent_messages() {
+    let tmp = TmpDir::new("recent-messages");
+    let fixture_path = write_codex_recent_messages_fixture(tmp.0.as_path());
+
+    let summary = SessionSummary::new(
+        ClientKind::Codex,
+        None,
+        "recent-messages-session".into(),
+        None,
+        None,
+        Some("codex-mini-latest".into()),
+        Some("/tmp/test-project".into()),
+        fixture_path,
+        None,
+        None,
+        None,
+    );
+
+    let client = CodexClient {
+        sessions_root: tmp.0.clone(),
+        auth_path: tmp.0.join("auth.json"),
+        discover_cache: Mutex::default(),
+    };
+
+    let analysis = client
+        .analyze(&summary, Plan::Retail)
+        .expect("analyze should succeed");
+
+    assert_eq!(analysis.recent_messages.len(), 3);
+    assert_eq!(analysis.recent_messages[0].role, SessionMessageRole::User);
+    assert_eq!(
+        analysis.recent_messages[0].preview,
+        "please inspect the repo"
+    );
+    assert_eq!(analysis.recent_messages[1].role, SessionMessageRole::Agent);
+    assert_eq!(analysis.recent_messages[1].preview, "I will inspect it now");
+    assert_eq!(analysis.recent_messages[2].role, SessionMessageRole::Agent);
+    assert_eq!(analysis.recent_messages[2].tools, vec!["bash"]);
+    assert!(analysis.recent_messages[2].current_tool);
 }
 
 #[test]

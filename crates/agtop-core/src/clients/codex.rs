@@ -24,8 +24,8 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::{Error, Result};
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionSummary, TokenTotals,
-    WaitReason,
+    ClientKind, ParserState, PlanUsage, PlanWindow, SessionAnalysis, SessionMessageRole,
+    SessionMessageTurn, SessionSummary, TokenTotals, WaitReason,
 };
 
 /// Number of most-recently-modified rollout files to scan when looking
@@ -362,6 +362,67 @@ fn message_text_from_payload(payload: &serde_json::Value) -> Option<String> {
                 .and_then(|m| m.get("content"))
                 .and_then(text_from_codex_content)
         })
+}
+
+fn recent_message_from_codex_response_item(
+    payload: &serde_json::Value,
+) -> Option<SessionMessageTurn> {
+    match payload.get("type").and_then(|x| x.as_str()) {
+        Some("message") => {
+            let role = match payload.get("role").and_then(|x| x.as_str())? {
+                "user" => SessionMessageRole::User,
+                "assistant" => SessionMessageRole::Agent,
+                "tool" => SessionMessageRole::Tool,
+                _ => return None,
+            };
+            Some(SessionMessageTurn {
+                role,
+                preview: compact_preview(&message_text_from_payload(payload)?),
+                tools: Vec::new(),
+                current_tool: false,
+            })
+        }
+        Some("function_call") | Some("custom_tool_call") => {
+            let tool = payload
+                .get("name")
+                .and_then(|x| x.as_str())
+                .unwrap_or_else(|| {
+                    payload
+                        .get("type")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("tool")
+                });
+            Some(SessionMessageTurn {
+                role: SessionMessageRole::Agent,
+                preview: String::new(),
+                tools: vec![tool.to_string()],
+                current_tool: true,
+            })
+        }
+        Some("function_call_output") | Some("custom_tool_call_output") => {
+            let preview = payload
+                .get("output")
+                .or_else(|| payload.get("content"))
+                .and_then(text_from_codex_content)
+                .unwrap_or_default();
+            Some(SessionMessageTurn {
+                role: SessionMessageRole::Tool,
+                preview: compact_preview(&preview),
+                tools: Vec::new(),
+                current_tool: false,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn compact_preview(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() > 160 {
+        format!("{}…", single_line.chars().take(159).collect::<String>())
+    } else {
+        single_line
+    }
 }
 
 fn parser_state_from_codex_message(payload: &serde_json::Value) -> Option<(ParserState, String)> {
@@ -754,6 +815,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
     let mut context_used_pct: Option<f64> = None;
     let mut context_used_tokens: Option<u64> = None;
     let mut context_window: Option<u64> = None;
+    let mut recent_messages: Vec<SessionMessageTurn> = Vec::new();
 
     for_each_jsonl(path, |v| {
         if let Some(ts) = v
@@ -775,6 +837,14 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         let payload = v.get("payload");
 
         if ty == "response_item" {
+            if let Some(p) = payload {
+                if let Some(turn) = recent_message_from_codex_response_item(p) {
+                    recent_messages.push(turn);
+                    if recent_messages.len() > 20 {
+                        recent_messages.remove(0);
+                    }
+                }
+            }
             if let Some(kind) = payload.and_then(|p| p.get("type")).and_then(|x| x.as_str()) {
                 if matches!(kind, "function_call" | "custom_tool_call") {
                     tool_call_count += 1;
@@ -888,7 +958,7 @@ fn analyze_codex_file(summary: &SessionSummary, plan: Plan) -> Result<SessionAna
         process_metrics: None,
         session_state: None,
         current_action: None,
-        recent_messages: Vec::new(),
+        recent_messages,
     })
 }
 // ---------------------------------------------------------------------------

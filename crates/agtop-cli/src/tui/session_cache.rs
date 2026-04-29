@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OpenFlags};
 
 /// Bump this when `SessionAnalysis` or nested types change in a breaking way.
-pub const CACHE_VERSION: u32 = 1;
+pub const CACHE_VERSION: u32 = 3;
 
 /// Identifies a specific version of a session for cache lookup.
 #[derive(Debug, Clone)]
@@ -140,8 +140,10 @@ impl SessionCache {
         };
         for id in ids {
             if !live_ids.contains(&id) {
-                self.conn
-                    .execute("DELETE FROM session_cache WHERE session_id = ?1", params![id])?;
+                self.conn.execute(
+                    "DELETE FROM session_cache WHERE session_id = ?1",
+                    params![id],
+                )?;
                 deleted += 1;
             }
         }
@@ -150,8 +152,8 @@ impl SessionCache {
 }
 
 fn cache_db_path() -> anyhow::Result<std::path::PathBuf> {
-    let base = dirs::cache_dir()
-        .ok_or_else(|| anyhow::anyhow!("cannot determine cache directory"))?;
+    let base =
+        dirs::cache_dir().ok_or_else(|| anyhow::anyhow!("cannot determine cache directory"))?;
     Ok(base.join("agtop").join("session-cache.db"))
 }
 
@@ -167,17 +169,17 @@ mod tests {
     fn minimal_analysis(session_id: &str) -> SessionAnalysis {
         let last_active = Some(Utc::now());
         let summary = SessionSummary::new(
-            ClientKind::Claude,                // client
-            None,                              // subscription
-            session_id.to_string(),            // session_id
-            last_active,                       // started_at
-            last_active,                       // last_active
-            None,                              // model
-            None,                              // cwd
-            PathBuf::from("/tmp/fake.jsonl"),  // data_path
-            None,                              // state_detail
-            None,                              // model_effort
-            None,                              // model_effort_detail
+            ClientKind::Claude,               // client
+            None,                             // subscription
+            session_id.to_string(),           // session_id
+            last_active,                      // started_at
+            last_active,                      // last_active
+            None,                             // model
+            None,                             // cwd
+            PathBuf::from("/tmp/fake.jsonl"), // data_path
+            None,                             // state_detail
+            None,                             // model_effort
+            None,                             // model_effort_detail
         );
         SessionAnalysis::new(
             summary,
@@ -229,6 +231,39 @@ mod tests {
         let key = CacheKey {
             client: ClientKind::Claude,
             session_id: "ses_skip".to_string(),
+            last_active: a.summary.last_active,
+        };
+        assert!(cache.lookup(&key).is_none());
+    }
+
+    #[test]
+    fn lookup_ignores_legacy_rows_without_recent_messages() {
+        let cache = SessionCache::open_in_memory(false).unwrap();
+        let mut a = minimal_analysis("ses_legacy_opencode");
+        a.summary.client = ClientKind::OpenCode;
+
+        let last_active_str = a.summary.last_active.unwrap().to_rfc3339();
+        let mut json = serde_json::to_value(&a).unwrap();
+        json.as_object_mut().unwrap().remove("recent_messages");
+        cache
+            .conn
+            .execute(
+                "INSERT OR REPLACE INTO session_cache
+                 (client, session_id, last_active, cache_version, data)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    ClientKind::OpenCode.as_str(),
+                    a.summary.session_id,
+                    last_active_str,
+                    2,
+                    serde_json::to_string(&json).unwrap(),
+                ],
+            )
+            .unwrap();
+
+        let key = CacheKey {
+            client: ClientKind::OpenCode,
+            session_id: "ses_legacy_opencode".to_string(),
             last_active: a.summary.last_active,
         };
         assert!(cache.lookup(&key).is_none());

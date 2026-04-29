@@ -542,3 +542,99 @@ fn opencode_sqlite_analysis_includes_recent_messages() {
     assert_eq!(analysis.recent_messages[1].tools, vec!["tool-calls"]);
     assert!(analysis.recent_messages[1].current_tool);
 }
+
+#[test]
+fn opencode_sqlite_recent_messages_read_part_table_content() {
+    let tmp = TmpDir::new("sqlite-recent-message-parts");
+    let db_path = init_db(&tmp.0);
+    insert_session(&tmp.0, "ses_parts", None, "/tmp/recent-parts", 1000, 4000);
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute(
+        "CREATE TABLE part (
+             id           TEXT PRIMARY KEY,
+             message_id   TEXT NOT NULL,
+             session_id   TEXT NOT NULL,
+             time_created INTEGER,
+             data         TEXT NOT NULL
+         )",
+        [],
+    )
+    .unwrap();
+
+    for (id, created, data) in [
+        (
+            "m1",
+            1000i64,
+            serde_json::json!({"role":"user","time":{"created":1000}}),
+        ),
+        (
+            "m2",
+            2000i64,
+            serde_json::json!({"role":"assistant","tokens":{"input":1000,"output":200},"finish":"tool-calls"}),
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO message(id, session_id, time_created, data) VALUES(?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                id,
+                "ses_parts",
+                created,
+                serde_json::to_string(&data).unwrap()
+            ],
+        )
+        .unwrap();
+    }
+
+    for (id, message_id, created, data) in [
+        (
+            "p1",
+            "m1",
+            1000i64,
+            serde_json::json!({"type":"text","text":"please inspect part rows"}),
+        ),
+        (
+            "p2",
+            "m2",
+            2000i64,
+            serde_json::json!({"type":"text","text":"I will inspect the part table"}),
+        ),
+        (
+            "p3",
+            "m2",
+            2001i64,
+            serde_json::json!({"type":"tool","tool":"bash","state":{"status":"running"}}),
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO part(id, message_id, session_id, time_created, data)
+             VALUES(?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                id,
+                message_id,
+                "ses_parts",
+                created,
+                serde_json::to_string(&data).unwrap()
+            ],
+        )
+        .unwrap();
+    }
+
+    let client = OpenCodeClient {
+        storage_root: tmp.0.clone(),
+        discover_cache: Mutex::default(),
+    };
+    let summary = make_summary_with_id(db_path, "ses_parts");
+    let analysis = client.analyze(&summary, Plan::Retail).unwrap();
+
+    assert_eq!(analysis.recent_messages.len(), 2);
+    assert_eq!(
+        analysis.recent_messages[0].preview,
+        "please inspect part rows"
+    );
+    assert_eq!(
+        analysis.recent_messages[1].preview,
+        "I will inspect the part table"
+    );
+    assert_eq!(analysis.recent_messages[1].tools, vec!["bash"]);
+    assert!(analysis.recent_messages[1].current_tool);
+}

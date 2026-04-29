@@ -1221,15 +1221,17 @@ fn recent_messages_sqlite(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Vec<SessionMessageTurn> {
-    let rows: Vec<String> = match conn
+    let rows: Vec<(String, String)> = match conn
         .prepare(
-            "SELECT data FROM message \
+            "SELECT id, data FROM message \
              WHERE session_id = ?1 \
              ORDER BY time_created DESC LIMIT 20",
         )
         .and_then(|mut stmt| {
-            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))
-                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+            stmt.query_map(rusqlite::params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map(|rows| rows.filter_map(|r| r.ok()).collect())
         }) {
         Ok(rows) => rows,
         Err(_) => return Vec::new(),
@@ -1238,13 +1240,38 @@ fn recent_messages_sqlite(
     let mut turns: Vec<SessionMessageTurn> = rows
         .into_iter()
         .rev()
-        .filter_map(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
-        .filter_map(|value| message_turn_from_opencode_value(&value))
+        .filter_map(|(message_id, data)| {
+            let value = serde_json::from_str::<serde_json::Value>(&data).ok()?;
+            message_turn_from_opencode_value(&value).or_else(|| {
+                let parts = message_parts_sqlite(conn, &message_id);
+                message_turn_from_opencode_parts(&value, &parts)
+            })
+        })
         .collect();
     if turns.len() > 20 {
         turns.drain(0..turns.len() - 20);
     }
     turns
+}
+
+fn message_parts_sqlite(conn: &rusqlite::Connection, message_id: &str) -> Vec<serde_json::Value> {
+    let rows: Vec<String> = match conn
+        .prepare(
+            "SELECT data FROM part \
+             WHERE message_id = ?1 \
+             ORDER BY time_created ASC, id ASC",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(rusqlite::params![message_id], |row| row.get::<_, String>(0))
+                .map(|rows| rows.filter_map(|r| r.ok()).collect())
+        }) {
+        Ok(rows) => rows,
+        Err(_) => return Vec::new(),
+    };
+
+    rows.into_iter()
+        .filter_map(|data| serde_json::from_str::<serde_json::Value>(&data).ok())
+        .collect()
 }
 
 fn message_turn_from_opencode_value(value: &serde_json::Value) -> Option<SessionMessageTurn> {
@@ -1261,6 +1288,55 @@ fn message_turn_from_opencode_value(value: &serde_json::Value) -> Option<Session
         tools.push("tool-calls".to_string());
         current_tool = true;
     }
+    Some(SessionMessageTurn {
+        role,
+        preview,
+        tools,
+        current_tool,
+    })
+}
+
+fn message_turn_from_opencode_parts(
+    message: &serde_json::Value,
+    parts: &[serde_json::Value],
+) -> Option<SessionMessageTurn> {
+    let role = match message.get("role").and_then(|x| x.as_str())? {
+        "user" => SessionMessageRole::User,
+        "assistant" => SessionMessageRole::Agent,
+        "tool" => SessionMessageRole::Tool,
+        _ => return None,
+    };
+
+    let preview = parts
+        .iter()
+        .find_map(|part| part.get("text").and_then(|x| x.as_str()))
+        .map(compact_preview)
+        .or_else(|| {
+            parts
+                .iter()
+                .find_map(|part| part.get("tool").and_then(|x| x.as_str()))
+                .map(|tool| format!("tool call: {tool}"))
+        })?;
+
+    let mut current_tool = message.get("finish").and_then(|x| x.as_str()) == Some("tool-calls");
+    let tools = parts
+        .iter()
+        .filter(|part| part.get("type").and_then(|x| x.as_str()) == Some("tool"))
+        .filter_map(|part| {
+            if part
+                .get("state")
+                .and_then(|state| state.get("status"))
+                .and_then(|status| status.as_str())
+                == Some("running")
+            {
+                current_tool = true;
+            }
+            part.get("tool")
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        })
+        .collect();
+
     Some(SessionMessageTurn {
         role,
         preview,

@@ -121,6 +121,7 @@ pub fn apply_analyses(
     }
     sessions.rows = flat_rows;
     sessions.apply_sort();
+    ensure_selection(sessions);
 
     // --- Header counts ---
     let active = normalized
@@ -217,6 +218,7 @@ pub fn apply_session_added(
         sessions.rows.push(new_row);
         sessions.apply_sort();
     }
+    ensure_selection(sessions);
 
     // Recompute header counts from current depth-0 rows.
     let depth0_iter = || sessions.rows.iter().filter(|r| r.depth == 0);
@@ -234,13 +236,18 @@ pub fn apply_session_added(
         .count();
 
     // Recompute today count.
-    let depth0_analyses: Vec<SessionAnalysis> =
-        depth0_iter().map(|r| r.analysis.clone()).collect();
+    let depth0_analyses: Vec<SessionAnalysis> = depth0_iter().map(|r| r.analysis.clone()).collect();
     header.sessions_today = count_today(&depth0_analyses);
 
     // Recompute aggregation from current depth-0 rows.
     aggregation.sessions = depth0_analyses;
     aggregation.recompute();
+}
+
+fn ensure_selection(sessions: &mut SessionsTable) {
+    if sessions.state.selected().is_none() && !sessions.rows.is_empty() {
+        sessions.state.select(Some(0));
+    }
 }
 
 /// Count sessions whose `started_at` is on or after local midnight today.
@@ -1029,6 +1036,62 @@ mod tests {
     }
 
     #[test]
+    fn first_refresh_selects_first_session_for_info_drawer() {
+        use crate::tui::screens::dashboard::DashboardState;
+        use agtop_core::session::{
+            ClientKind, CostBreakdown, SessionAnalysis, SessionSummary, TokenTotals,
+        };
+
+        let summary = SessionSummary::new(
+            ClientKind::OpenCode,
+            None,
+            "ses_first".into(),
+            None,
+            Some(chrono::Utc::now()),
+            None,
+            None,
+            std::path::PathBuf::new(),
+            None,
+            None,
+            None,
+        );
+        let analysis = SessionAnalysis::new(
+            summary,
+            TokenTotals::default(),
+            CostBreakdown::default(),
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        let mut dashboard = DashboardState::default();
+        let mut aggregation = AggregationState::default();
+        apply_analyses(
+            &[analysis],
+            &mut dashboard.header,
+            &mut dashboard.sessions,
+            &mut dashboard.quota,
+            &mut aggregation,
+            2,
+        );
+        dashboard.sync_info_selection();
+
+        assert_eq!(dashboard.sessions.state.selected(), Some(0));
+        assert_eq!(
+            dashboard.info.selected_row.as_ref().map(|row| row
+                .analysis
+                .summary
+                .session_id
+                .as_str()),
+            Some("ses_first")
+        );
+    }
+
+    #[test]
     fn apply_session_added_inserts_new_row() {
         use agtop_core::session::{ClientKind, CostBreakdown, SessionSummary, TokenTotals};
         use chrono::Utc;
@@ -1106,9 +1169,25 @@ mod tests {
         let mut quota = QuotaPanel::default();
         let mut aggregation = AggregationState::default();
 
-        apply_session_added(mk("ses_dup"), &mut header, &mut sessions, &mut quota, &mut aggregation);
-        apply_session_added(mk("ses_dup"), &mut header, &mut sessions, &mut quota, &mut aggregation);
+        apply_session_added(
+            mk("ses_dup"),
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+        );
+        apply_session_added(
+            mk("ses_dup"),
+            &mut header,
+            &mut sessions,
+            &mut quota,
+            &mut aggregation,
+        );
 
-        assert_eq!(sessions.rows.len(), 1, "duplicate session_id should replace, not add");
+        assert_eq!(
+            sessions.rows.len(),
+            1,
+            "duplicate session_id should replace, not add"
+        );
     }
 }

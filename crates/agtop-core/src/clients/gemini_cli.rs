@@ -18,8 +18,8 @@ use crate::clients::util::{dir_exists, for_each_jsonl, mtime, parse_ts, Discover
 use crate::error::Result;
 use crate::pricing::{self, Plan, PlanMode};
 use crate::session::{
-    ClientKind, CostBreakdown, ErrorReason, ParserState, SessionAnalysis, SessionSummary,
-    TokenTotals,
+    ClientKind, CostBreakdown, ErrorReason, ParserState, SessionAnalysis, SessionMessageRole,
+    SessionMessageTurn, SessionSummary, TokenTotals,
 };
 
 #[derive(Debug)]
@@ -251,7 +251,7 @@ impl Client for GeminiCliClient {
             process_metrics: None,
             session_state: None,
             current_action: None,
-            recent_messages: Vec::new(),
+            recent_messages: analysis.recent_messages,
         })
     }
 }
@@ -616,6 +616,52 @@ fn gemini_content_text(content: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn recent_message_from_gemini_message(message: &serde_json::Value) -> Option<SessionMessageTurn> {
+    let role = match message.get("type").and_then(|x| x.as_str())? {
+        "user" => SessionMessageRole::User,
+        "gemini" | "assistant" | "model" => SessionMessageRole::Agent,
+        "tool" => SessionMessageRole::Tool,
+        _ => return None,
+    };
+    let preview = message
+        .get("content")
+        .and_then(gemini_content_text)
+        .map(|text| compact_preview(&text))
+        .unwrap_or_default();
+    let tools = gemini_tool_calls(message)
+        .map(|calls| {
+            calls
+                .iter()
+                .filter_map(|call| {
+                    call.get("name")
+                        .or_else(|| call.get("functionName"))
+                        .or_else(|| call.get("function_name"))
+                        .and_then(|x| x.as_str())
+                        .map(str::to_string)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if preview.is_empty() && tools.is_empty() {
+        return None;
+    }
+    Some(SessionMessageTurn {
+        role,
+        preview,
+        current_tool: !tools.is_empty(),
+        tools,
+    })
+}
+
+fn compact_preview(text: &str) -> String {
+    let single_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() > 160 {
+        format!("{}…", single_line.chars().take(159).collect::<String>())
+    } else {
+        single_line
+    }
+}
+
 fn summarize_title(text: &str) -> String {
     const MAX_TITLE_CHARS: usize = 80;
     let mut title = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -635,6 +681,7 @@ struct GeminiAnalysis {
     context_used_pct: Option<f64>,
     context_used_tokens: Option<u64>,
     context_window: Option<u64>,
+    recent_messages: Vec<SessionMessageTurn>,
 }
 
 impl GeminiAnalysis {
@@ -656,6 +703,7 @@ impl GeminiAnalysis {
             self.context_used_tokens = session.context_used_tokens;
             self.context_window = session.context_window;
         }
+        self.recent_messages = session.recent_messages;
         self
     }
 
@@ -800,6 +848,13 @@ fn extract_analysis_from_session_file(
 
 impl GeminiAnalysis {
     fn add_session_message(&mut self, message: &serde_json::Value) {
+        if let Some(turn) = recent_message_from_gemini_message(message) {
+            self.recent_messages.push(turn);
+            if self.recent_messages.len() > 20 {
+                self.recent_messages.remove(0);
+            }
+        }
+
         match message.get("type").and_then(|x| x.as_str()) {
             Some("user") => increment_opt(&mut self.user_turns),
             Some("gemini" | "assistant" | "model") => {
@@ -1178,6 +1233,22 @@ mod tests {
         assert_eq!(analysis.tool_call_count, Some(2));
         assert_eq!(analysis.agent_turns, Some(2));
         assert_eq!(analysis.user_turns, Some(2));
+        assert_eq!(analysis.recent_messages.len(), 3);
+        assert_eq!(
+            analysis.recent_messages[0].role,
+            crate::session::SessionMessageRole::User
+        );
+        assert_eq!(analysis.recent_messages[0].preview, "Build it");
+        assert_eq!(
+            analysis.recent_messages[1].role,
+            crate::session::SessionMessageRole::Agent
+        );
+        assert_eq!(
+            analysis.recent_messages[1].tools,
+            vec!["read_file", "shell"]
+        );
+        assert!(analysis.recent_messages[1].current_tool);
+        assert_eq!(analysis.recent_messages[2].preview, "Continue");
         assert_eq!(analysis.duration_secs, Some(60));
         assert_eq!(analysis.context_window, Some(1_048_576));
         assert_eq!(analysis.context_used_tokens, Some(1550));
