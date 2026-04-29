@@ -100,10 +100,8 @@ pub fn render(
     // them proportionally; our old manual cursor arithmetic did not).
     header_cols.clear();
 
-    // `"▶ "` is 2 terminal columns wide (▶ = 1 col, space = 1 col).
-    // HighlightSpacing::WhenSelected (ratatui default) reserves the symbol
-    // width only when a row is selected.
-    let selection_width: u16 = if app.selected_idx().is_some() { 2 } else { 0 };
+    // No highlight_symbol is used; selection is indicated by row_highlight_style alone.
+    let selection_width: u16 = 0;
 
     // table_area (inner) dimensions, matching ratatui's block.inner_if_some(area).
     let table_inner_x = area.x + 1;
@@ -177,8 +175,7 @@ for (i, &col_id) in visible.iter().enumerate() {
     let table = Table::new(rows, widths.clone())
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title))
-        .row_highlight_style(th::SELECTED)
-        .highlight_symbol("▶ ");
+        .row_highlight_style(th::SELECTED);
 
     frame.render_stateful_widget(table, area, state);
 

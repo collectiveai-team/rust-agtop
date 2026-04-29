@@ -178,8 +178,7 @@ impl SessionsTable {
                 Style::default()
                     .bg(theme.bg_selection)
                     .fg(theme.fg_emphasis),
-            )
-            .highlight_symbol("▶ ");
+            );
         let mut state = self.state.clone();
         frame.render_stateful_widget(table, area, &mut state);
         *self.state.offset_mut() = state.offset();
@@ -212,6 +211,14 @@ impl SessionsTable {
         // State dot — reads SessionState directly via state_style.
         // For depth=0 rows with children, show collapse toggle before dot.
         let dot_span = state_dot::render(&state, &self.pulse, self.animations_enabled, theme);
+        // Layout for the first cell (width=5):
+        //   depth-0 with children:  [▶/▼][space][dot][space][space]  — toggle at col 0, dot at col 2
+        //   depth-0 no children:    [space][space][dot][space][space] — pad at col 0, dot at col 2
+        //   depth-1 child:          [glyph: └──/├──][space][dot]     — glyph at col 0, dot at col 4
+        //
+        // depth-0 rows always keep the dot at column 2 (after 2-char prefix).
+        // depth-1 rows use a 4-char glyph so the dot sits at col 4 — intentionally
+        // indented further to visually indicate hierarchy.
         let first_cell = if row.depth == 0 && !row.analysis.children.is_empty() {
             let toggle = if self.collapsed.contains(&row.analysis.summary.session_id) {
                 Span::raw("▶ ")
@@ -230,7 +237,9 @@ impl SessionsTable {
             };
             Cell::from(Line::from(vec![glyph, dot_span]))
         } else {
-            Cell::from(Line::from(vec![dot_span]))
+            // depth-0 with no children: pad 2 spaces so the dot aligns with
+            // the dot in parent rows (which follow a 2-char toggle glyph).
+            Cell::from(Line::from(vec![Span::raw("  "), dot_span]))
         };
         cells.push(first_cell);
 
