@@ -73,7 +73,10 @@ fn render_row1(frame: &mut Frame<'_>, area: Rect, m: &HeaderModel, theme: &Theme
         Style::default().fg(ratatui::style::Color::Rgb(r, g, b))
     });
 
-    let progress_len = progress_text.as_ref().map(|s| s.chars().count()).unwrap_or(0);
+    let progress_len = progress_text
+        .as_ref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
     let total_chars = left.chars().count()
         + spark.chars().count()
         + cpu_pct.chars().count()
@@ -210,7 +213,11 @@ mod tests {
         term.draw(|f| render(f, Rect::new(0, 0, 140, 3), &model, &theme))
             .unwrap();
         let buffer = term.backend().buffer();
-        let dump: String = buffer.content().iter().map(|c| c.symbol().to_string()).collect();
+        let dump: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().to_string())
+            .collect();
         assert!(
             dump.contains("analyzing 7/42"),
             "buffer should contain 'analyzing 7/42', got:\n{dump}"

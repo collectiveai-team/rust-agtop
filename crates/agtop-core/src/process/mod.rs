@@ -391,7 +391,7 @@ mod lifecycle_tests {
         assert!(analyses[0].children[0].pid.is_none());
     }
 
-    fn candidate_with_disk(pid: u32, path: &str, read: u64, written: u64) -> Candidate {
+    fn candidate_with_disk(pid: u32, _path: &str, read: u64, written: u64) -> Candidate {
         Candidate {
             pid,
             parent_pid: Some(1),

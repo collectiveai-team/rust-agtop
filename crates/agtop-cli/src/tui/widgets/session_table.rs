@@ -124,20 +124,20 @@ pub fn render(
         .spacing(1)
         .split(columns_area);
 
-for (i, &col_id) in visible.iter().enumerate() {
-    if let Some(sc) = col_id.sort_col() {
-        let r = col_rects[i];
-        let abs_start = table_inner_x + r.x;
-        let abs_end = abs_start + r.width;
-        // Include the 1-cell spacing gap after the column so that
-        // clicks on header text that overflows into the spacing cell
-        // still match the correct column. The last column has no
-        // trailing gap, but its text never overflows right.
-        let is_last = i == visible.len() - 1;
-        let extended_end = if is_last { abs_end } else { abs_end + 1 };
-        header_cols.push((abs_start, extended_end, sc));
+    for (i, &col_id) in visible.iter().enumerate() {
+        if let Some(sc) = col_id.sort_col() {
+            let r = col_rects[i];
+            let abs_start = table_inner_x + r.x;
+            let abs_end = abs_start + r.width;
+            // Include the 1-cell spacing gap after the column so that
+            // clicks on header text that overflows into the spacing cell
+            // still match the correct column. The last column has no
+            // trailing gap, but its text never overflows right.
+            let is_last = i == visible.len() - 1;
+            let extended_end = if is_last { abs_end } else { abs_end + 1 };
+            header_cols.push((abs_start, extended_end, sc));
+        }
     }
-}
     // ─────────────────────────────────────────────────────────────────────
 
     let title = format!(

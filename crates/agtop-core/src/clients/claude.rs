@@ -280,6 +280,7 @@ impl ClaudeDisplayWindow {
 /// Return the current action string from the last assistant tool-use block
 /// found across `records`. Returns `None` if no tool-use block is present.
 #[cfg(test)]
+#[allow(dead_code)]
 fn current_action_from_records(records: &[serde_json::Value]) -> Option<String> {
     let mut window = ClaudeDisplayWindow::default();
     for record in records {

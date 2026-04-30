@@ -756,10 +756,7 @@ fn visible_columns_for_width(area_width: u16) -> (Vec<ColumnId>, bool) {
     let mut show_activity = true;
 
     /// Compute the minimum total width needed for the current active set.
-    fn min_total(
-        active: &std::collections::HashSet<ColumnId>,
-        show_activity: bool,
-    ) -> u16 {
+    fn min_total(active: &std::collections::HashSet<ColumnId>, show_activity: bool) -> u16 {
         let has_client = active.contains(&ColumnId::Client);
         let act_slot = if has_client && show_activity { 1u16 } else { 0 };
         let n_slots = 1u16 + active.len() as u16 + act_slot; // state-dot + cols + activity
@@ -788,7 +785,11 @@ fn visible_columns_for_width(area_width: u16) -> (Vec<ColumnId>, bool) {
     }
     // If still doesn't fit after all drops, render best-effort.
 
-    let cols = full.iter().copied().filter(|c| active.contains(c)).collect();
+    let cols = full
+        .iter()
+        .copied()
+        .filter(|c| active.contains(c))
+        .collect();
     (cols, show_activity)
 }
 

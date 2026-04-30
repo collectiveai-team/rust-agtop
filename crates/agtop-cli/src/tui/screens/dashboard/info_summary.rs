@@ -219,7 +219,12 @@ fn render_status(frame: &mut Frame<'_>, area: Rect, m: &SummaryModel<'_>, theme:
         m.analysis.context_window,
     ) {
         (Some(pct), Some(used), Some(win)) => {
-            format!("{:.0}%  {} / {}", pct, human_tokens(used), human_tokens(win))
+            format!(
+                "{:.0}%  {} / {}",
+                pct,
+                human_tokens(used),
+                human_tokens(win)
+            )
         }
         (Some(pct), _, _) => format!("{:.0}%", pct),
         _ => "—".to_string(),
@@ -381,18 +386,9 @@ fn render_messages(
     let mut message_lines: Vec<Line<'static>> = Vec::new();
     for t in turns {
         let (role_label, label_style) = match t.role {
-            Role::User => (
-                "  user │ ",
-                Style::default().fg(theme.accent_primary),
-            ),
-            Role::Agent => (
-                " agent │ ",
-                Style::default().fg(theme.status_success),
-            ),
-            Role::Tool => (
-                "  tool │ ",
-                Style::default().fg(theme.fg_muted),
-            ),
+            Role::User => ("  user │ ", Style::default().fg(theme.accent_primary)),
+            Role::Agent => (" agent │ ", Style::default().fg(theme.status_success)),
+            Role::Tool => ("  tool │ ", Style::default().fg(theme.fg_muted)),
         };
         let text_style = Style::default().fg(theme.fg_default);
         let wrapped = wrap_text_lines(

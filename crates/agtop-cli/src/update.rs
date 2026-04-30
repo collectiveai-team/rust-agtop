@@ -27,24 +27,24 @@ pub enum PromptMode {
 /// [`agtop_opts`].
 pub struct UpdateOpts {
     pub current_version: &'static str,
-    pub repo_owner:      &'static str,
-    pub repo_name:       &'static str,
-    pub bin_name:        &'static str,
+    pub repo_owner: &'static str,
+    pub repo_name: &'static str,
+    pub bin_name: &'static str,
 }
 
 /// Coordinates for the production `agtop` binary on GitHub.
 pub fn agtop_opts() -> UpdateOpts {
     UpdateOpts {
         current_version: crate::version::DISPLAY_VERSION,
-        repo_owner:      "collectiveai-team",
-        repo_name:       "rust-agtop",
-        bin_name:        "agtop",
+        repo_owner: "collectiveai-team",
+        repo_name: "rust-agtop",
+        bin_name: "agtop",
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedCheck {
-    checked_at:     DateTime<Utc>,
+    checked_at: DateTime<Utc>,
     latest_version: String,
 }
 
@@ -96,8 +96,8 @@ struct ReleaseInfo {
 }
 
 fn parse_release_payload(body: &str) -> Result<ReleaseInfo> {
-    let info: ReleaseInfo = serde_json::from_str(body)
-        .map_err(|e| anyhow::anyhow!("malformed release JSON: {e}"))?;
+    let info: ReleaseInfo =
+        serde_json::from_str(body).map_err(|e| anyhow::anyhow!("malformed release JSON: {e}"))?;
     if info.tag_name.is_empty() {
         anyhow::bail!("release JSON missing tag_name");
     }
@@ -140,8 +140,8 @@ fn fetch_latest_release(opts: &UpdateOpts) -> Result<ReleaseInfo> {
     if body.len() > MAX_BYTES {
         anyhow::bail!("GitHub API body unexpectedly large: {} bytes", body.len());
     }
-    let body = String::from_utf8(body)
-        .map_err(|e| anyhow::anyhow!("GitHub API body not UTF-8: {e}"))?;
+    let body =
+        String::from_utf8(body).map_err(|e| anyhow::anyhow!("GitHub API body not UTF-8: {e}"))?;
     parse_release_payload(&body)
 }
 
@@ -162,22 +162,20 @@ pub fn check_and_maybe_prompt(mode: PromptMode, opts: &UpdateOpts) -> Result<()>
             );
             c.latest_version
         }
-        _ => {
-            match fetch_latest_release(opts) {
-                Ok(info) => {
-                    let entry = CachedCheck {
-                        checked_at:     now,
-                        latest_version: info.tag_name.clone(),
-                    };
-                    save_cache(&entry);
-                    info.tag_name
-                }
-                Err(e) => {
-                    tracing::debug!("update check: fetch failed: {e}");
-                    return Ok(());
-                }
+        _ => match fetch_latest_release(opts) {
+            Ok(info) => {
+                let entry = CachedCheck {
+                    checked_at: now,
+                    latest_version: info.tag_name.clone(),
+                };
+                save_cache(&entry);
+                info.tag_name
             }
-        }
+            Err(e) => {
+                tracing::debug!("update check: fetch failed: {e}");
+                return Ok(());
+            }
+        },
     };
 
     if !is_newer(opts.current_version, &latest_version) {
@@ -214,9 +212,7 @@ pub fn check_and_maybe_prompt(mode: PromptMode, opts: &UpdateOpts) -> Result<()>
     }
 
     run_self_update(opts, &latest_version)?;
-    println!(
-        "Updated agtop to {latest_version}. Re-run agtop to start the new version."
-    );
+    println!("Updated agtop to {latest_version}. Re-run agtop to start the new version.");
     std::process::exit(0);
 }
 
@@ -234,11 +230,12 @@ fn prompt_yes_no(question: &str) -> bool {
 }
 
 fn run_self_update(opts: &UpdateOpts, latest_version: &str) -> Result<()> {
-    let target = current_target_triple()
-        .ok_or_else(|| anyhow::anyhow!(
+    let target = current_target_triple().ok_or_else(|| {
+        anyhow::anyhow!(
             "no published binary for target {}; please reinstall manually",
             self_update::get_target(),
-        ))?;
+        )
+    })?;
     let asset = asset_name_for_target(opts.bin_name, target)
         .expect("target triple was just validated by current_target_triple()");
 
@@ -374,8 +371,7 @@ mod tests {
     #[test]
     fn parses_tag_name_from_fixture() {
         let payload = include_str!("../tests/fixtures/github_latest_release.json");
-        let parsed: ReleaseInfo = parse_release_payload(payload)
-            .expect("fixture must parse");
+        let parsed: ReleaseInfo = parse_release_payload(payload).expect("fixture must parse");
         assert!(
             parsed.tag_name.starts_with("v") || !parsed.tag_name.is_empty(),
             "got tag_name = {:?}",
@@ -402,7 +398,7 @@ mod tests {
     fn cache_is_fresh_within_24h() {
         let now = Utc::now();
         let entry = CachedCheck {
-            checked_at:     now - Duration::hours(23),
+            checked_at: now - Duration::hours(23),
             latest_version: "0.6.0".to_owned(),
         };
         assert!(entry.is_fresh(now));
@@ -412,7 +408,7 @@ mod tests {
     fn cache_is_stale_after_24h() {
         let now = Utc::now();
         let entry = CachedCheck {
-            checked_at:     now - Duration::hours(25),
+            checked_at: now - Duration::hours(25),
             latest_version: "0.6.0".to_owned(),
         };
         assert!(!entry.is_fresh(now));
@@ -422,7 +418,7 @@ mod tests {
     fn cache_in_future_is_stale() {
         let now = Utc::now();
         let entry = CachedCheck {
-            checked_at:     now + Duration::hours(1),
+            checked_at: now + Duration::hours(1),
             latest_version: "0.6.0".to_owned(),
         };
         assert!(!entry.is_fresh(now));
@@ -431,15 +427,12 @@ mod tests {
     #[test]
     fn cache_roundtrips_through_json() {
         let entry = CachedCheck {
-            checked_at:     Utc::now(),
+            checked_at: Utc::now(),
             latest_version: "v0.6.0".to_owned(),
         };
         let json = serde_json::to_string(&entry).unwrap();
         let back: CachedCheck = serde_json::from_str(&json).unwrap();
         assert_eq!(back.latest_version, entry.latest_version);
-        assert_eq!(
-            back.checked_at.timestamp(),
-            entry.checked_at.timestamp()
-        );
+        assert_eq!(back.checked_at.timestamp(), entry.checked_at.timestamp());
     }
 }

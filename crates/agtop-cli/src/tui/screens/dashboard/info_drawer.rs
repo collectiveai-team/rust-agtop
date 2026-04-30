@@ -287,7 +287,6 @@ impl InfoDrawer {
             }
         }
 
-
         let AppEvent::Key(KeyEvent {
             code, modifiers, ..
         }) = event
