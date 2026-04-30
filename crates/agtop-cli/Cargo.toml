@@ -58,6 +58,8 @@ ratatui-image = { version = "8", default-features = false, features = ["crosster
 # Image decoding (SVG → raster) for provider logos from models.dev.
 image = "0.25"
 resvg = { version = "0.44", default-features = false }
+self_update = { version = "0.44", default-features = false, features = ["ureq", "rustls"] }
+semver = "1"
 
 [dev-dependencies]
 insta = { version = "1", features = ["yaml"] }
