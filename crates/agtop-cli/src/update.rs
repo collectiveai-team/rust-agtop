@@ -150,8 +150,112 @@ fn fetch_latest_release(opts: &UpdateOpts) -> Result<ReleaseInfo> {
 /// Returns `Ok(())` in every "user did not update" path, including all
 /// network failures. Returns `Err(_)` only when the user explicitly
 /// confirmed the update and the actual self-replace failed.
-pub fn check_and_maybe_prompt(_mode: PromptMode, _opts: &UpdateOpts) -> Result<()> {
-    // Filled in by Tasks 3..7.
+pub fn check_and_maybe_prompt(mode: PromptMode, opts: &UpdateOpts) -> Result<()> {
+    let now = Utc::now();
+
+    let latest_version: String = match load_cache() {
+        Some(c) if c.is_fresh(now) => {
+            tracing::debug!(
+                "update check: using cached latest_version={} (age={:?})",
+                c.latest_version,
+                now.signed_duration_since(c.checked_at),
+            );
+            c.latest_version
+        }
+        _ => {
+            match fetch_latest_release(opts) {
+                Ok(info) => {
+                    let entry = CachedCheck {
+                        checked_at:     now,
+                        latest_version: info.tag_name.clone(),
+                    };
+                    save_cache(&entry);
+                    info.tag_name
+                }
+                Err(e) => {
+                    tracing::debug!("update check: fetch failed: {e}");
+                    return Ok(());
+                }
+            }
+        }
+    };
+
+    if !is_newer(opts.current_version, &latest_version) {
+        tracing::debug!(
+            "update check: current={} latest={} -> up to date",
+            opts.current_version,
+            latest_version,
+        );
+        return Ok(());
+    }
+
+    let confirmed = match mode {
+        PromptMode::Banner => {
+            eprintln!(
+                "agtop: {latest_version} is available (current: v{current}). \
+                 Run agtop interactively to upgrade, or set \
+                 AGTOP_NO_UPDATE_CHECK=1 to silence this notice.",
+                current = opts.current_version,
+            );
+            false
+        }
+        PromptMode::Interactive => {
+            println!(
+                "A new agtop release is available: {latest_version} \
+                 (current: v{current}).",
+                current = opts.current_version,
+            );
+            prompt_yes_no("Update now? [y/N] ")
+        }
+    };
+
+    if !confirmed {
+        return Ok(());
+    }
+
+    run_self_update(opts, &latest_version)?;
+    println!(
+        "Updated agtop to {latest_version}. Re-run agtop to start the new version."
+    );
+    std::process::exit(0);
+}
+
+fn prompt_yes_no(question: &str) -> bool {
+    use std::io::{stdin, stdout, Write};
+    print!("{question}");
+    if stdout().flush().is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    if stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn run_self_update(opts: &UpdateOpts, latest_version: &str) -> Result<()> {
+    let target = current_target_triple()
+        .ok_or_else(|| anyhow::anyhow!(
+            "no published binary for target {}; please reinstall manually",
+            self_update::get_target(),
+        ))?;
+    let asset = asset_name_for_target(opts.bin_name, target)
+        .expect("target triple was just validated by current_target_triple()");
+
+    let _ = latest_version;
+    self_update::backends::github::Update::configure()
+        .repo_owner(opts.repo_owner)
+        .repo_name(opts.repo_name)
+        .bin_name(opts.bin_name)
+        .target(target)
+        .identifier(&asset)
+        .current_version(opts.current_version)
+        .show_download_progress(true)
+        .no_confirm(true)
+        .build()
+        .map_err(|e| anyhow::anyhow!("self_update build failed: {e}"))?
+        .update()
+        .map_err(|e| anyhow::anyhow!("self_update apply failed: {e}"))?;
     Ok(())
 }
 
