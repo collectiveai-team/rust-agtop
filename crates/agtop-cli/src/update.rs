@@ -48,3 +48,54 @@ pub fn check_and_maybe_prompt(_mode: PromptMode, _opts: &UpdateOpts) -> Result<(
     // Filled in by Tasks 3..7.
     Ok(())
 }
+
+fn is_newer(current: &str, latest: &str) -> bool {
+    let strip = |s: &str| s.strip_prefix('v').unwrap_or(s).to_owned();
+    let current = match semver::Version::parse(&strip(current)) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    let latest = match semver::Version::parse(&strip(latest)) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    latest > current
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_newer_basic() {
+        assert!(is_newer("0.4.2", "0.5.0"));
+        assert!(is_newer("0.5.0", "0.5.1"));
+        assert!(is_newer("0.5.0", "1.0.0"));
+    }
+
+    #[test]
+    fn is_newer_same_or_older_returns_false() {
+        assert!(!is_newer("0.5.0", "0.5.0"));
+        assert!(!is_newer("0.5.0", "0.4.9"));
+        assert!(!is_newer("1.0.0", "0.99.99"));
+    }
+
+    #[test]
+    fn is_newer_strips_v_prefix() {
+        assert!(is_newer("0.5.0", "v0.6.0"));
+        assert!(is_newer("v0.5.0", "v0.6.0"));
+        assert!(is_newer("v0.5.0", "0.6.0"));
+    }
+
+    #[test]
+    fn is_newer_handles_prerelease() {
+        assert!(is_newer("0.5.0-rc1", "0.5.0"));
+        assert!(!is_newer("0.5.0", "0.5.0-rc1"));
+    }
+
+    #[test]
+    fn is_newer_returns_false_on_unparseable() {
+        assert!(!is_newer("not-a-version", "0.5.0"));
+        assert!(!is_newer("0.5.0", "garbage"));
+    }
+}
