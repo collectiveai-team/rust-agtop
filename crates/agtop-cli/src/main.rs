@@ -116,6 +116,21 @@ fn configure_rayon_threads() {
         .build_global();
 }
 
+fn update_check_disabled_by_env() -> bool {
+    let yes = |s: &str| matches!(std::env::var(s).as_deref(), Ok("1") | Ok("true"));
+    yes("AGTOP_NO_UPDATE_CHECK") || yes("CI") || yes("GITHUB_ACTIONS")
+}
+
+fn stdin_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+}
+
+fn stdout_is_tty() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     configure_rayon_threads();
@@ -129,6 +144,26 @@ fn main() -> Result<()> {
 
     // TUI mode = bare `agtop` with no --list / --json / --watch.
     let tui_mode = !cli.json && !cli.list && !cli.watch;
+
+    // GitHub release check (best-effort; never blocks startup on
+    // failure). Skipped under any of:
+    //   - --no-update-check
+    //   - AGTOP_NO_UPDATE_CHECK=1
+    //   - CI=true / GITHUB_ACTIONS=true (auto-detected CI env)
+    //
+    // PromptMode::Interactive only when stdout AND stdin are real TTYs;
+    // we don't want to block a piped agtop invocation on stdin.
+    if !cli.no_update_check && !update_check_disabled_by_env() {
+        let mode = if tui_mode && stdin_is_tty() && stdout_is_tty() {
+            update::PromptMode::Interactive
+        } else {
+            update::PromptMode::Banner
+        };
+        if let Err(e) = update::check_and_maybe_prompt(mode, &update::agtop_opts()) {
+            eprintln!("agtop: update failed: {e:#}");
+        }
+    }
+
     init_logging(cli.verbose, tui_mode, cli.log_file.as_deref());
 
     let plan = Plan::parse(&cli.plan)
