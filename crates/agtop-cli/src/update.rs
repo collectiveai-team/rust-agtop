@@ -8,6 +8,9 @@
 //! self-update (after the user said "y") ARE surfaced to the user.
 
 use anyhow::Result;
+use chrono::{DateTime, Duration, Utc};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Where the y/N prompt is displayed (interactive) versus a one-line
 /// stderr notice (banner). Picked by `main` based on flags + tty.
@@ -36,6 +39,54 @@ pub fn agtop_opts() -> UpdateOpts {
         repo_owner:      "collectiveai-team",
         repo_name:       "rust-agtop",
         bin_name:        "agtop",
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedCheck {
+    checked_at:     DateTime<Utc>,
+    latest_version: String,
+}
+
+impl CachedCheck {
+    const TTL: Duration = Duration::hours(24);
+
+    fn is_fresh(&self, now: DateTime<Utc>) -> bool {
+        let age = now.signed_duration_since(self.checked_at);
+        age >= Duration::zero() && age <= Self::TTL
+    }
+}
+
+fn cache_path() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("agtop").join("update-check.json"))
+}
+
+fn load_cache() -> Option<CachedCheck> {
+    let path = cache_path()?;
+    let bytes = std::fs::read(&path).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn save_cache(entry: &CachedCheck) {
+    let Some(path) = cache_path() else {
+        tracing::debug!("update check: no cache_dir, skipping cache save");
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            tracing::debug!("update check: mkdir {} failed: {e}", parent.display());
+            return;
+        }
+    }
+    let json = match serde_json::to_vec(entry) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::debug!("update check: serialize failed: {e}");
+            return;
+        }
+    };
+    if let Err(e) = std::fs::write(&path, json) {
+        tracing::debug!("update check: write {} failed: {e}", path.display());
     }
 }
 
@@ -158,6 +209,53 @@ mod tests {
         assert_eq!(
             asset_name_for_target("agtop", "armv7-unknown-linux-gnueabihf"),
             None,
+        );
+    }
+
+    use chrono::{Duration, Utc};
+
+    #[test]
+    fn cache_is_fresh_within_24h() {
+        let now = Utc::now();
+        let entry = CachedCheck {
+            checked_at:     now - Duration::hours(23),
+            latest_version: "0.6.0".to_owned(),
+        };
+        assert!(entry.is_fresh(now));
+    }
+
+    #[test]
+    fn cache_is_stale_after_24h() {
+        let now = Utc::now();
+        let entry = CachedCheck {
+            checked_at:     now - Duration::hours(25),
+            latest_version: "0.6.0".to_owned(),
+        };
+        assert!(!entry.is_fresh(now));
+    }
+
+    #[test]
+    fn cache_in_future_is_stale() {
+        let now = Utc::now();
+        let entry = CachedCheck {
+            checked_at:     now + Duration::hours(1),
+            latest_version: "0.6.0".to_owned(),
+        };
+        assert!(!entry.is_fresh(now));
+    }
+
+    #[test]
+    fn cache_roundtrips_through_json() {
+        let entry = CachedCheck {
+            checked_at:     Utc::now(),
+            latest_version: "v0.6.0".to_owned(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: CachedCheck = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.latest_version, entry.latest_version);
+        assert_eq!(
+            back.checked_at.timestamp(),
+            entry.checked_at.timestamp()
         );
     }
 }
