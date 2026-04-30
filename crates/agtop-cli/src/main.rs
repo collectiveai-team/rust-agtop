@@ -6,6 +6,7 @@
 mod fmt;
 mod quota_cmd;
 mod tui;
+mod update;
 mod version;
 
 use anyhow::{Context, Result};
@@ -64,6 +65,12 @@ struct Cli {
     /// Also activated by setting `AGTOP_NO_CACHE=1`.
     #[arg(long, default_value_t = false)]
     no_cache: bool,
+
+    /// Skip the GitHub release check on startup. Also activated by
+    /// `AGTOP_NO_UPDATE_CHECK=1` and any of the standard CI env vars
+    /// (`CI`, `GITHUB_ACTIONS`).
+    #[arg(long, default_value_t = false)]
+    no_update_check: bool,
 
     /// Start directly in the btop-style dashboard view.
     #[arg(short = 'D', long)]
