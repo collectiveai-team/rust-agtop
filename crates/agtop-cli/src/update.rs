@@ -90,6 +90,61 @@ fn save_cache(entry: &CachedCheck) {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ReleaseInfo {
+    tag_name: String,
+}
+
+fn parse_release_payload(body: &str) -> Result<ReleaseInfo> {
+    let info: ReleaseInfo = serde_json::from_str(body)
+        .map_err(|e| anyhow::anyhow!("malformed release JSON: {e}"))?;
+    if info.tag_name.is_empty() {
+        anyhow::bail!("release JSON missing tag_name");
+    }
+    Ok(info)
+}
+
+const GITHUB_API_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn fetch_latest_release(opts: &UpdateOpts) -> Result<ReleaseInfo> {
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/releases/latest",
+        opts.repo_owner, opts.repo_name,
+    );
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(GITHUB_API_TIMEOUT))
+        .user_agent(concat!("rust-agtop/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .new_agent();
+
+    let mut resp = agent
+        .get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .call()
+        .map_err(|e| anyhow::anyhow!("GitHub API request failed: {e}"))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        anyhow::bail!("GitHub API returned HTTP {status}");
+    }
+
+    const MAX_BYTES: usize = 256 * 1024;
+    let mut body = Vec::with_capacity(64 * 1024);
+    use std::io::Read;
+    resp.body_mut()
+        .as_reader()
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(|e| anyhow::anyhow!("read GitHub API body: {e}"))?;
+    if body.len() > MAX_BYTES {
+        anyhow::bail!("GitHub API body unexpectedly large: {} bytes", body.len());
+    }
+    let body = String::from_utf8(body)
+        .map_err(|e| anyhow::anyhow!("GitHub API body not UTF-8: {e}"))?;
+    parse_release_payload(&body)
+}
+
 /// Top-level entry point. See module docs.
 ///
 /// Returns `Ok(())` in every "user did not update" path, including all
@@ -210,6 +265,31 @@ mod tests {
             asset_name_for_target("agtop", "armv7-unknown-linux-gnueabihf"),
             None,
         );
+    }
+
+    #[test]
+    fn parses_tag_name_from_fixture() {
+        let payload = include_str!("../tests/fixtures/github_latest_release.json");
+        let parsed: ReleaseInfo = parse_release_payload(payload)
+            .expect("fixture must parse");
+        assert!(
+            parsed.tag_name.starts_with("v") || !parsed.tag_name.is_empty(),
+            "got tag_name = {:?}",
+            parsed.tag_name,
+        );
+    }
+
+    #[test]
+    fn rejects_non_object_payload() {
+        assert!(parse_release_payload("\"not-an-object\"").is_err());
+        assert!(parse_release_payload("[]").is_err());
+        assert!(parse_release_payload("not even json").is_err());
+    }
+
+    #[test]
+    fn rejects_missing_tag_name() {
+        assert!(parse_release_payload("{}").is_err());
+        assert!(parse_release_payload(r#"{"name":"v0.6.0"}"#).is_err());
     }
 
     use chrono::{Duration, Utc};
