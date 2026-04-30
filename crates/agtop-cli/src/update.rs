@@ -62,6 +62,25 @@ fn is_newer(current: &str, latest: &str) -> bool {
     latest > current
 }
 
+const SUPPORTED_TARGETS: &[&str] = &[
+    "x86_64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+];
+
+fn current_target_triple() -> Option<&'static str> {
+    let live = self_update::get_target();
+    SUPPORTED_TARGETS.iter().copied().find(|t| *t == live)
+}
+
+fn asset_name_for_target(bin_name: &str, target: &str) -> Option<String> {
+    if SUPPORTED_TARGETS.contains(&target) {
+        Some(format!("{bin_name}-{target}"))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +116,48 @@ mod tests {
     fn is_newer_returns_false_on_unparseable() {
         assert!(!is_newer("not-a-version", "0.5.0"));
         assert!(!is_newer("0.5.0", "garbage"));
+    }
+
+    #[test]
+    fn target_triple_is_known() {
+        let t = current_target_triple();
+        match t {
+            Some("x86_64-unknown-linux-gnu")
+            | Some("x86_64-apple-darwin")
+            | Some("aarch64-apple-darwin") => {}
+            Some(other) => panic!("unexpected target triple: {other}"),
+            None => {
+                #[cfg(any(
+                    all(target_os = "linux", target_arch = "x86_64"),
+                    all(target_os = "macos", target_arch = "x86_64"),
+                    all(target_os = "macos", target_arch = "aarch64"),
+                ))]
+                panic!("supported platform returned None");
+            }
+        }
+    }
+
+    #[test]
+    fn asset_name_for_known_triple() {
+        assert_eq!(
+            asset_name_for_target("agtop", "x86_64-unknown-linux-gnu"),
+            Some("agtop-x86_64-unknown-linux-gnu".to_owned()),
+        );
+        assert_eq!(
+            asset_name_for_target("agtop", "aarch64-apple-darwin"),
+            Some("agtop-aarch64-apple-darwin".to_owned()),
+        );
+    }
+
+    #[test]
+    fn asset_name_for_unknown_triple_is_none() {
+        assert_eq!(
+            asset_name_for_target("agtop", "x86_64-pc-windows-msvc"),
+            None,
+        );
+        assert_eq!(
+            asset_name_for_target("agtop", "armv7-unknown-linux-gnueabihf"),
+            None,
+        );
     }
 }
