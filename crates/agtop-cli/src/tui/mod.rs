@@ -248,6 +248,18 @@ fn event_loop<B: ratatui::backend::Backend + std::io::Write>(
             }
         }
 
+        while let Some(msg) = handle.try_recv_quota() {
+            match msg {
+                RefreshMsg::QuotaSnapshot { results, .. } => app.apply_quota_results(results),
+                RefreshMsg::QuotaError { message, .. } => app.set_quota_error(message),
+                RefreshMsg::Snapshot { .. }
+                | RefreshMsg::Error { .. }
+                | RefreshMsg::SessionAdded(_)
+                | RefreshMsg::AnalysisProgress { .. }
+                | RefreshMsg::AnalysisComplete => {}
+            }
+        }
+
         // 2. Render and capture geometry for mouse hit-testing.
         terminal.draw(|f| render(f, app, &mut table_state, &mut layout))?;
         // Keep scroll offset in sync after every draw so clicks are mapped
@@ -861,6 +873,20 @@ pub fn run_v2(
                         // Streaming variants are delivered via `stream_rx` below;
                         // the watch channel only ever carries the legacy variants.
                     }
+                }
+            }
+
+            while let Some(msg) = handle.try_recv_quota() {
+                match msg {
+                    refresh::RefreshMsg::QuotaSnapshot { results, .. } => {
+                        app.dashboard.quota.apply_results(&results);
+                    }
+                    refresh::RefreshMsg::QuotaError { .. } => {}
+                    refresh::RefreshMsg::Snapshot { .. }
+                    | refresh::RefreshMsg::Error { .. }
+                    | refresh::RefreshMsg::SessionAdded(_)
+                    | refresh::RefreshMsg::AnalysisProgress { .. }
+                    | refresh::RefreshMsg::AnalysisComplete => {}
                 }
             }
 

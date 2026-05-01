@@ -100,6 +100,7 @@ pub enum QuotaCmd {
 /// to complete before tearing down).
 pub struct RefreshHandle {
     rx: watch::Receiver<RefreshMsg>,
+    quota_rx: watch::Receiver<RefreshMsg>,
     manual_tx: watch::Sender<u64>,
     quota_trigger_tx: watch::Sender<QuotaCmd>,
     /// Streaming messages from the Phase 2 pipeline (added by Task 2).
@@ -133,6 +134,17 @@ impl RefreshHandle {
             // `borrow_and_update` marks the value seen so the next
             // `has_changed` returns false until the sender posts again.
             let msg = self.rx.borrow_and_update().clone();
+            Some(msg)
+        } else {
+            None
+        }
+    }
+
+    /// Non-blocking peek at the latest quota message. Quota updates use a
+    /// separate watch channel so session refreshes cannot overwrite them.
+    pub fn try_recv_quota(&mut self) -> Option<RefreshMsg> {
+        if self.quota_rx.has_changed().unwrap_or(false) {
+            let msg = self.quota_rx.borrow_and_update().clone();
             Some(msg)
         } else {
             None
@@ -231,6 +243,10 @@ pub fn spawn(
         message: "loading…".into(),
     };
     let (tx, rx) = watch::channel(initial);
+    let (quota_tx, quota_rx) = watch::channel(RefreshMsg::QuotaError {
+        generation: 0,
+        message: "quota loading…".into(),
+    });
     let (manual_tx, manual_rx) = watch::channel::<u64>(0);
     let (quota_trigger_tx, quota_trigger_rx) = watch::channel(QuotaCmd::Stop);
     // Streaming channel for Phase 1 + Phase 2 messages (Task 2).
@@ -248,9 +264,9 @@ pub fn spawn(
     let shutdown_worker = Arc::clone(&shutdown);
     let enabled_worker = Arc::clone(&enabled);
 
-    // Clone tx before it is captured by the session-loop spawn below.
-    // The quota loop uses this clone to publish QuotaSnapshot / QuotaError.
-    let tx_quota = tx.clone();
+    // Quota messages are separate from session snapshots so neither loop can
+    // overwrite the other's latest watch value.
+    let tx_quota = quota_tx;
 
     // Spawn the worker on the runtime. We use `spawn_blocking` for the
     // CPU/IO-bound `analyze_all` so timers keep ticking.
@@ -502,6 +518,7 @@ pub fn spawn(
         rx,
         manual_tx,
         quota_trigger_tx,
+        quota_rx,
         stream_rx,
         shutdown,
         _runtime: runtime,
@@ -1157,7 +1174,7 @@ mod tests {
         // Consume initial snapshot.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv_quota() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -1168,7 +1185,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         let mut got_second = false;
         while std::time::Instant::now() < deadline {
-            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv_quota() {
                 got_second = true;
                 break;
             }
@@ -1205,7 +1222,7 @@ mod tests {
         let start = std::time::Instant::now();
         let mut got = false;
         while start.elapsed() < Duration::from_secs(15) {
-            if let Some(msg) = handle.try_recv() {
+            if let Some(msg) = handle.try_recv_quota() {
                 if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
                     got = true;
                     break;
@@ -1240,7 +1257,7 @@ mod tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
         let mut saw_first = false;
         while std::time::Instant::now() < deadline {
-            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv() {
+            if let Some(RefreshMsg::QuotaSnapshot { .. }) = handle.try_recv_quota() {
                 saw_first = true;
                 break;
             }
@@ -1253,7 +1270,7 @@ mod tests {
         // for the case where a fetch was already in-flight when Stop arrived.
         std::thread::sleep(Duration::from_millis(2000));
         let mut extra = 0;
-        while let Some(msg) = handle.try_recv() {
+        while let Some(msg) = handle.try_recv_quota() {
             if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
                 extra += 1;
             }
@@ -1261,7 +1278,7 @@ mod tests {
 
         // Wait another interval to confirm no further publishing occurs.
         std::thread::sleep(Duration::from_millis(2000));
-        while let Some(msg) = handle.try_recv() {
+        while let Some(msg) = handle.try_recv_quota() {
             if matches!(msg, RefreshMsg::QuotaSnapshot { .. }) {
                 extra += 1;
             }
