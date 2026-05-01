@@ -190,7 +190,7 @@ pub fn check_and_maybe_prompt(mode: PromptMode, opts: &UpdateOpts) -> Result<()>
     let confirmed = match mode {
         PromptMode::Banner => {
             eprintln!(
-                "agtop: {latest_version} is available (current: v{current}). \
+                "agtop: {latest_version} is available (current: {current}). \
                  Run agtop interactively to upgrade, or set \
                  AGTOP_NO_UPDATE_CHECK=1 to silence this notice.",
                 current = opts.current_version,
@@ -200,7 +200,7 @@ pub fn check_and_maybe_prompt(mode: PromptMode, opts: &UpdateOpts) -> Result<()>
         PromptMode::Interactive => {
             println!(
                 "A new agtop release is available: {latest_version} \
-                 (current: v{current}).",
+                 (current: {current}).",
                 current = opts.current_version,
             );
             prompt_yes_no("Update now? [y/N] ")
