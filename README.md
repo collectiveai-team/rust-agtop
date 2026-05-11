@@ -223,6 +223,29 @@ prek install
 
 The hooks run `cargo fmt --check`, `cargo clippy` (warnings as errors), and `cargo doc` (warnings as errors) — matching the CI pipeline exactly.
 
+Also run the one-time hook setup to enable the pre-push version guard:
+
+```sh
+./scripts/setup-hooks.sh
+```
+
+This installs a pre-push hook that blocks pushing a `v*.*.*` tag whose version doesn't match `Cargo.toml`.
+
+## Release
+
+Releases are managed via GitHub Actions. To cut a new release:
+
+1. Go to **Actions → Bump Version and Release → Run workflow**
+2. Enter the new version (e.g. `0.6.0`, without the `v` prefix)
+3. Click **Run workflow**
+
+The workflow will:
+- Update `version` in `Cargo.toml` on `main`
+- Commit `chore: release v0.6.0` to `main`
+- Push tag `v0.6.0`, which triggers the release build workflow that produces binaries for Linux x86_64, macOS Intel, and macOS Apple Silicon
+
+The release CI also validates that the tag matches `Cargo.toml` before building, so a mismatched manual tag push will fail loudly before any artifact is produced.
+
 ## License
 
 GPL-2.0-only, matching the upstream project.
