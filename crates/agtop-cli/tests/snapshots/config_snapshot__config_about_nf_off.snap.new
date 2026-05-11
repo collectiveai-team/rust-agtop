@@ -1,5 +1,6 @@
 ---
 source: crates/agtop-cli/tests/config_snapshot.rs
+assertion_line: 28
 expression: buffer_to_text(&buf)
 ---
  / Search:
