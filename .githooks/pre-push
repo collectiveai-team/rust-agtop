@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# .githooks/pre-push
+# Runs before `git push`. Reads remote/url and ref list from stdin.
+# Blocks push of any v*.*.* tag whose version doesn't match Cargo.toml.
+
+set -euo pipefail
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+
+while read local_ref local_sha remote_ref remote_sha; do
+  # Only care about tag refs
+  if [[ "$local_ref" == refs/tags/v* ]]; then
+    TAG="${local_ref#refs/tags/}"
+    echo "pre-push: validating tag $TAG against Cargo.toml..."
+    "$REPO_ROOT/scripts/check-version.sh" "$TAG"
+  fi
+done
+
+exit 0
