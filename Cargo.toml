@@ -3,12 +3,12 @@ resolver = "2"
 members = ["crates/agtop-core", "crates/agtop-cli"]
 
 [workspace.package]
-version = "0.5.6"
+version = "0.5.7"
 edition = "2021"
 license = "MIT"
 authors = ["jedzill4"]
 repository = "https://github.com/collectiveai-team/rust-agtop"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [workspace.dependencies]
 agtop-core = { path = "crates/agtop-core" }
