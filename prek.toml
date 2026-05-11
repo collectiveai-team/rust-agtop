@@ -26,3 +26,11 @@ entry = "cargo doc --no-deps --all-features --quiet"
 files = '\\.rs$'
 pass_filenames = false
 env = { RUSTDOCFLAGS = "-D warnings" }
+
+[[repos.hooks]]
+id = "check-version"
+name = "check version tag matches Cargo.toml"
+language = "system"
+entry = "scripts/check-version.sh"
+pass_filenames = false
+always_run = true
