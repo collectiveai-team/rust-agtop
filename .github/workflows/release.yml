@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate tag matches Cargo.toml version
+        run: bash scripts/check-version.sh "${GITHUB_REF_NAME}"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
